@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Never commit keys or config with secrets
+.mcp-secure-proxy/
+*.key.pem
