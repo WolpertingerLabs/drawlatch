@@ -83,6 +83,25 @@ describe('HandshakeInitiator', () => {
     expect(init1.nonceI).not.toBe(init2.nonceI);
     expect(init1.ephemeralPubKey).not.toBe(init2.ephemeralPubKey);
   });
+
+  it('should reject a reply signed by a different responder', () => {
+    const initiatorKeys = generateKeyBundle();
+    const realResponderKeys = generateKeyBundle();
+    const imposterKeys = generateKeyBundle();
+    const realResponderPub = extractPublicKeys(realResponderKeys);
+    const initiatorPub = extractPublicKeys(initiatorKeys);
+
+    // Initiator expects the real responder
+    const initiator = new HandshakeInitiator(initiatorKeys, realResponderPub);
+    const init = initiator.createInit();
+
+    // But the imposter responds instead
+    const imposter = new HandshakeResponder(imposterKeys, [initiatorPub]);
+    const { reply } = imposter.processInit(init);
+
+    // Initiator should reject — reply is signed by imposter, not the expected responder
+    expect(() => initiator.processReply(reply)).toThrow('responder signature invalid');
+  });
 });
 
 describe('HandshakeResponder', () => {
