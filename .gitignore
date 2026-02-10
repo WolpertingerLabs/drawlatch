@@ -6,3 +6,7 @@ coverage/
 # Never commit keys or config with secrets
 .mcp-secure-proxy/
 *.key.pem
+
+# Environment files with secrets
+.env*
+!.env.example

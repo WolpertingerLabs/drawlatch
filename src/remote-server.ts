@@ -461,11 +461,30 @@ function main(): void {
   const config = loadConfig();
   const app = createApp();
 
-  app.listen(config.remote.port, config.remote.host, () => {
+  const server = app.listen(config.remote.port, config.remote.host, () => {
     console.log(
       `[remote] Secure remote server listening on ${config.remote.host}:${config.remote.port}`,
     );
   });
+
+  // Graceful shutdown: close the server when the process receives SIGTERM or SIGINT.
+  // Docker sends SIGTERM on `docker stop`; dumb-init forwards it correctly.
+  const shutdown = () => {
+    console.log('[remote] Shutting down gracefully...');
+    server.close(() => {
+      console.log('[remote] Server closed.');
+      process.exit(0);
+    });
+
+    // Force exit after 10 seconds if connections don't drain
+    setTimeout(() => {
+      console.error('[remote] Forced shutdown after timeout.');
+      process.exit(1);
+    }, 10_000).unref();
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 // Only run when executed directly (not when imported by tests)

@@ -9,8 +9,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-/** Base directory for all config and keys */
-export const CONFIG_DIR = path.join(os.homedir(), '.mcp-secure-proxy');
+/** Base directory for all config and keys.
+ *  Override with MCP_CONFIG_DIR env var for Docker or custom deployments. */
+export const CONFIG_DIR = process.env.MCP_CONFIG_DIR || path.join(os.homedir(), '.mcp-secure-proxy');
 export const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 export const KEYS_DIR = path.join(CONFIG_DIR, 'keys');
 export const LOCAL_KEYS_DIR = path.join(KEYS_DIR, 'local');
