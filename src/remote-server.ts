@@ -457,7 +457,6 @@ function main(): void {
   });
 
   // Graceful shutdown: close the server when the process receives SIGTERM or SIGINT.
-  // Docker sends SIGTERM on `docker stop`; dumb-init forwards it correctly.
   const shutdown = () => {
     console.log('[remote] Shutting down gracefully...');
     server.close(() => {
