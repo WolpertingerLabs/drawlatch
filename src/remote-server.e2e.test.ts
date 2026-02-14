@@ -246,24 +246,6 @@ describe('Encrypted requests', () => {
     expect(names).toContain('API_KEY');
   });
 
-  it('should get a secret by name', async () => {
-    const response = await sendToolRequest(channel, 'get_secret', { name: 'TEST_SECRET' });
-    expect(response.success).toBe(true);
-    expect(response.result).toBe('hello-from-the-vault');
-  });
-
-  it('should get a different secret', async () => {
-    const response = await sendToolRequest(channel, 'get_secret', { name: 'API_KEY' });
-    expect(response.success).toBe(true);
-    expect(response.result).toBe('sk-test-1234567890');
-  });
-
-  it('should return an error for unknown secrets', async () => {
-    const response = await sendToolRequest(channel, 'get_secret', { name: 'DOES_NOT_EXIST' });
-    expect(response.success).toBe(false);
-    expect(response.error).toContain('Secret not found');
-  });
-
   it('should return an error for unknown tools', async () => {
     const response = await sendToolRequest(channel, 'nonexistent_tool', {});
     expect(response.success).toBe(false);
@@ -847,12 +829,12 @@ describe('loadAuthorizedPeers via createApp', () => {
       });
       expect(finishResp.ok).toBe(true);
 
-      // Verify we can get a secret
+      // Verify we can list secrets (confirms the session is usable)
       const request: ProxyRequest = {
         type: 'proxy_request',
         id: crypto.randomUUID(),
-        toolName: 'get_secret',
-        toolInput: { name: 'TEST' },
+        toolName: 'list_secrets',
+        toolInput: {},
         timestamp: Date.now(),
       };
       const encrypted = channel.encryptJSON(request);
@@ -867,7 +849,7 @@ describe('loadAuthorizedPeers via createApp', () => {
       expect(resp.ok).toBe(true);
       const decrypted = channel.decryptJSON<ProxyResponse>(Buffer.from(await resp.arrayBuffer()));
       expect(decrypted.success).toBe(true);
-      expect(decrypted.result).toBe('loaded-from-disk');
+      expect(decrypted.result).toContain('TEST');
     } finally {
       await new Promise<void>((resolve) => {
         diskServer.close(() => resolve());

@@ -227,17 +227,6 @@ const toolHandlers: Record<string, ToolHandler> = {
   },
 
   /**
-   * Return a secret value by name.
-   */
-  get_secret(input) {
-    const { name } = input as { name: string };
-    if (!(name in secrets)) {
-      throw new Error(`Secret not found: ${name}`);
-    }
-    return Promise.resolve(secrets[name]);
-  },
-
-  /**
    * List available secret names (not values).
    */
   list_secrets() {
