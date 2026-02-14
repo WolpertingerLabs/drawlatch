@@ -6,7 +6,7 @@
  *   1. Generating keypairs for both local and remote sides
  *   2. Exchanging public keys (copying pub keys to peer directories)
  *   3. Configuring secrets on the remote server
- *   4. Generating the Claude Code MCP server config snippet
+ *   4. Printing the `claude mcp add` command to register the MCP server
  *   5. Writing the config file
  *
  * Usage:
@@ -75,7 +75,7 @@ This will:
   1. Generate keypairs for the MCP proxy (local) and remote server
   2. Exchange public keys between both sides
   3. Create a default config file
-  4. Print the Claude Code MCP server configuration
+  4. Print the \`claude mcp add\` command to register the MCP server
 `);
 
   ensureDir(CONFIG_DIR);
@@ -178,16 +178,16 @@ This will:
   saveConfig(config);
   console.log(`\n  ✓ Config saved to ${CONFIG_PATH}`);
 
-  // Step 5: Print Claude Code config
-  console.log('\n─── Step 5: Claude Code MCP Configuration ───\n');
+  // Step 5: Print claude mcp add command
+  console.log('\n─── Step 5: Register MCP Server with Claude Code ───\n');
   printClaudeConfig();
 
   rl.close();
   console.log('\n✓ Setup complete!\n');
   console.log('Next steps:');
-  console.log('  1. Add secrets to the config: edit ~/.mcp-secure-proxy/config.json');
+  console.log(`  1. Add secrets to the config: edit ${CONFIG_PATH}`);
   console.log('  2. Start the remote server: npm run dev:remote');
-  console.log('  3. Add the MCP config snippet to your Claude Code settings');
+  console.log('  3. Run the `claude mcp add` command printed above');
   console.log('  4. Restart Claude Code\n');
 }
 
@@ -200,35 +200,30 @@ function printClaudeConfig(): void {
   // For compiled version
   const compiledPath = mcpServerPath.replace('/src/', '/dist/').replace('.ts', '.js');
 
-  console.log('  Add this to your ~/.claude.json under mcpServers:\n');
+  // Absolute path to the config dir so the MCP proxy can find keys regardless of cwd
+  const configDir = path.resolve(CONFIG_DIR);
+
+  console.log('  Run one of the following commands to register the MCP server:\n');
   console.log('  For development (tsx):');
   console.log(
-    JSON.stringify(
-      {
-        'secure-proxy': {
-          type: 'stdio',
-          command: 'npx',
-          args: ['tsx', mcpServerPath],
-        },
-      },
-      null,
-      4,
-    ),
+    `    claude mcp add --transport stdio --scope local \\`,
+  );
+  console.log(
+    `      --env MCP_CONFIG_DIR=${configDir} \\`,
+  );
+  console.log(
+    `      secure-proxy -- npx tsx ${mcpServerPath}`,
   );
 
   console.log('\n  For production (compiled):');
   console.log(
-    JSON.stringify(
-      {
-        'secure-proxy': {
-          type: 'stdio',
-          command: 'node',
-          args: [compiledPath],
-        },
-      },
-      null,
-      4,
-    ),
+    `    claude mcp add --transport stdio --scope local \\`,
+  );
+  console.log(
+    `      --env MCP_CONFIG_DIR=${configDir} \\`,
+  );
+  console.log(
+    `      secure-proxy -- node ${compiledPath}`,
   );
 }
 
@@ -282,7 +277,7 @@ switch (command) {
 Usage:
   setup init            Full interactive setup (default)
   setup exchange        Exchange public keys between local and remote
-  setup claude-config   Print Claude Code MCP server configuration
+  setup claude-config   Print the \`claude mcp add\` command
 `);
     break;
 

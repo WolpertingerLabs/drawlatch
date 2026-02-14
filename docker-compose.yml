@@ -17,13 +17,13 @@ services:
     env_file:
       - .env
 
-    # Mount config and keys read-only. The host path should point to your
-    # ~/.mcp-secure-proxy directory (or wherever you ran `npm run setup`).
+    # Mount config and keys read-only. The host path defaults to the repo-local
+    # .mcp-secure-proxy directory (created by `npm run setup`).
     # IMPORTANT: config.json must have "host": "0.0.0.0" in the remote section
     # so Docker port forwarding works. The 127.0.0.1 in ports: above is what
     # restricts external access.
     volumes:
-      - ${MCP_CONFIG_DIR:-~/.mcp-secure-proxy}:/config:ro
+      - ${MCP_CONFIG_DIR:-./.mcp-secure-proxy}:/config:ro
 
     # Immutable container filesystem
     read_only: true

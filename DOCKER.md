@@ -15,7 +15,7 @@ Run the secrets-holding remote server in a hardened Docker container while the M
 npm run setup
 
 # 2. Set the remote server host to 0.0.0.0 for Docker
-#    Edit ~/.mcp-secure-proxy/config.json and set:
+#    Edit .mcp-secure-proxy/config.json and set:
 #    "remote": { "host": "0.0.0.0", ... }
 
 # 3. Create your .env file with actual secret values
@@ -83,7 +83,7 @@ The container runs as UID `1001` (user `mcpproxy`). The mounted config and key f
 
 **Option A:** Set ownership on the host:
 ```bash
-chown -R 1001:1001 ~/.mcp-secure-proxy/
+chown -R 1001:1001 .mcp-secure-proxy/
 ```
 
 **Option B:** Override the container user to match your host UID:
@@ -129,7 +129,7 @@ docker compose up -d --build
 
 ## Custom Config Directory
 
-If your config is not in `~/.mcp-secure-proxy/`, set `MCP_CONFIG_DIR`:
+If your config is not in `.mcp-secure-proxy/`, set `MCP_CONFIG_DIR`:
 
 ```bash
 MCP_CONFIG_DIR=/path/to/config docker compose up -d
