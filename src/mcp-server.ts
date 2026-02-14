@@ -183,39 +183,6 @@ server.tool(
 );
 
 /**
- * Fetch a secret value by name. The secret is resolved on the remote server
- * and returned encrypted. Useful when you need a secret as a standalone value
- * rather than injected into an HTTP request.
- */
-// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
-server.tool(
-  'get_secret',
-  'Retrieve a secret value by name from the secure remote store. The value is encrypted in transit and never stored locally.',
-  {
-    name: z.string().describe('The secret name to retrieve'),
-  },
-  async ({ name }) => {
-    try {
-      const result = await sendEncryptedRequest('get_secret', { name });
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: typeof result === 'string' ? result : JSON.stringify(result),
-          },
-        ],
-      };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return {
-        content: [{ type: 'text' as const, text: `Error: ${message}` }],
-        isError: true,
-      };
-    }
-  },
-);
-
-/**
  * List available secret names (not values) from the remote store.
  */
 // eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
