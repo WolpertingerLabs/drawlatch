@@ -13,6 +13,7 @@
  *   - Rate-limits requests per session
  */
 
+import 'dotenv/config';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
