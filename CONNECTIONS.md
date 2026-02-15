@@ -23,8 +23,14 @@ Connection routes are loaded at startup and appended **after** your manual route
 | `github` | [GitHub REST API](https://docs.github.com/en/rest) | `GITHUB_TOKEN` | Bearer token header |
 | `stripe` | [Stripe Payments API](https://docs.stripe.com/api) | `STRIPE_SECRET_KEY` | Bearer token header |
 | `trello` | [Trello Boards API](https://developer.atlassian.com/cloud/trello/rest/) | `TRELLO_API_KEY`, `TRELLO_TOKEN` | Query parameters (see note) |
+| `hex` | [Hex API](https://learn.hex.tech/docs/api/api-overview) | `HEX_TOKEN` | Bearer token header |
+| `devin` | [Devin AI API](https://docs.devin.ai/api-reference/overview) | `DEVIN_API_KEY` | Bearer token header |
+| `slack` | [Slack Web API](https://docs.slack.dev/apis/web-api) | `SLACK_BOT_TOKEN` | Bearer token header |
+| `linear` | [Linear GraphQL API](https://developers.linear.app/docs/graphql/working-with-the-graphql-api) | `LINEAR_API_KEY` | API key header (see note) |
 
 > **Trello note:** The Trello API uses query parameter authentication rather than headers. Include `?key=${TRELLO_API_KEY}&token=${TRELLO_TOKEN}` in your request URLs — the `${VAR}` placeholders are resolved automatically from the route's secrets.
+
+> **Linear note:** Linear is a GraphQL-only API. All requests should be POST requests to `https://api.linear.app/graphql` with a JSON body containing your GraphQL query. The connection uses the `Authorization: <API_KEY>` format (no "Bearer" prefix) which is correct for Linear personal API keys. If you use OAuth tokens instead, override with a custom route that includes the "Bearer" prefix.
 
 ## Example: Connections with environment variables
 

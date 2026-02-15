@@ -127,11 +127,56 @@ describe('bundled connection templates', () => {
     expect(route.docsUrl).toBeTruthy();
   });
 
+  it('should load hex connection template', () => {
+    const route = loadConnection('hex');
+
+    expect(route.name).toBe('Hex API');
+    expect(route.allowedEndpoints).toEqual(['https://app.hex.tech/api/**']);
+    expect(route.secrets).toHaveProperty('HEX_TOKEN');
+    expect(route.headers).toHaveProperty('Authorization');
+    expect(route.docsUrl).toBeTruthy();
+  });
+
+  it('should load devin connection template', () => {
+    const route = loadConnection('devin');
+
+    expect(route.name).toBe('Devin API');
+    expect(route.allowedEndpoints).toEqual(['https://api.devin.ai/**']);
+    expect(route.secrets).toHaveProperty('DEVIN_API_KEY');
+    expect(route.headers).toHaveProperty('Authorization');
+    expect(route.docsUrl).toBeTruthy();
+  });
+
+  it('should load slack connection template', () => {
+    const route = loadConnection('slack');
+
+    expect(route.name).toBe('Slack API');
+    expect(route.allowedEndpoints).toEqual(['https://slack.com/api/**']);
+    expect(route.secrets).toHaveProperty('SLACK_BOT_TOKEN');
+    expect(route.headers).toHaveProperty('Authorization');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.openApiUrl).toBeTruthy();
+  });
+
+  it('should load linear connection template', () => {
+    const route = loadConnection('linear');
+
+    expect(route.name).toBe('Linear API');
+    expect(route.allowedEndpoints).toEqual(['https://api.linear.app/**']);
+    expect(route.secrets).toHaveProperty('LINEAR_API_KEY');
+    expect(route.headers).toHaveProperty('Authorization');
+    expect(route.docsUrl).toBeTruthy();
+  });
+
   it('should list all bundled connections', () => {
     const available = listAvailableConnections();
 
     expect(available).toContain('github');
     expect(available).toContain('stripe');
     expect(available).toContain('trello');
+    expect(available).toContain('hex');
+    expect(available).toContain('devin');
+    expect(available).toContain('slack');
+    expect(available).toContain('linear');
   });
 });
