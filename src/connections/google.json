@@ -1,0 +1,28 @@
+{
+  "name": "Google APIs",
+  "description": "Google APIs — Sheets, Docs, Drive, Calendar, Gmail, and more. Auth is handled automatically via the GOOGLE_API_TOKEN environment variable (OAuth2 access token or service account token). Multiple Google API domains are allowlisted.",
+  "docsUrl": "https://developers.google.com/apis-explorer",
+  "headers": {
+    "Authorization": "Bearer ${GOOGLE_API_TOKEN}"
+  },
+  "secrets": {
+    "GOOGLE_API_TOKEN": "${GOOGLE_API_TOKEN}"
+  },
+  "allowedEndpoints": [
+    "https://www.googleapis.com/**",
+    "https://sheets.googleapis.com/**",
+    "https://docs.googleapis.com/**",
+    "https://drive.googleapis.com/**",
+    "https://calendar-json.googleapis.com/**",
+    "https://gmail.googleapis.com/**",
+    "https://slides.googleapis.com/**",
+    "https://people.googleapis.com/**",
+    "https://tasks.googleapis.com/**",
+    "https://admin.googleapis.com/**",
+    "https://chat.googleapis.com/**",
+    "https://forms.googleapis.com/**",
+    "https://youtube.googleapis.com/**",
+    "https://youtubeanalytics.googleapis.com/**",
+    "https://cloudresourcemanager.googleapis.com/**"
+  ]
+}

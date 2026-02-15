@@ -95,6 +95,41 @@ describe('listAvailableConnections', () => {
 });
 
 describe('bundled connection templates', () => {
+  it('should load anthropic connection template', () => {
+    const route = loadConnection('anthropic');
+
+    expect(route.name).toBe('Anthropic API');
+    expect(route.allowedEndpoints).toEqual(['https://api.anthropic.com/**']);
+    expect(route.secrets).toHaveProperty('ANTHROPIC_API_KEY');
+    expect(route.headers).toHaveProperty('x-api-key');
+    expect(route.headers).toHaveProperty('anthropic-version');
+    expect(route.docsUrl).toBeTruthy();
+  });
+
+  it('should load discord-bot connection template', () => {
+    const route = loadConnection('discord-bot');
+
+    expect(route.name).toBe('Discord Bot API');
+    expect(route.allowedEndpoints).toEqual(['https://discord.com/api/v10/**']);
+    expect(route.secrets).toHaveProperty('DISCORD_BOT_TOKEN');
+    expect(route.headers).toHaveProperty('Authorization');
+    expect(route.headers?.Authorization).toContain('Bot');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.openApiUrl).toBeTruthy();
+  });
+
+  it('should load discord-oauth connection template', () => {
+    const route = loadConnection('discord-oauth');
+
+    expect(route.name).toBe('Discord OAuth2 API');
+    expect(route.allowedEndpoints).toEqual(['https://discord.com/api/v10/**']);
+    expect(route.secrets).toHaveProperty('DISCORD_OAUTH_TOKEN');
+    expect(route.headers).toHaveProperty('Authorization');
+    expect(route.headers?.Authorization).toContain('Bearer');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.openApiUrl).toBeTruthy();
+  });
+
   it('should load github connection template', () => {
     const route = loadConnection('github');
 
@@ -104,6 +139,18 @@ describe('bundled connection templates', () => {
     expect(route.headers).toHaveProperty('Authorization');
     expect(route.docsUrl).toBeTruthy();
     expect(route.openApiUrl).toBeTruthy();
+  });
+
+  it('should load google connection template', () => {
+    const route = loadConnection('google');
+
+    expect(route.name).toBe('Google APIs');
+    expect(route.allowedEndpoints).toContain('https://www.googleapis.com/**');
+    expect(route.allowedEndpoints).toContain('https://sheets.googleapis.com/**');
+    expect(route.allowedEndpoints).toContain('https://drive.googleapis.com/**');
+    expect(route.secrets).toHaveProperty('GOOGLE_API_TOKEN');
+    expect(route.headers).toHaveProperty('Authorization');
+    expect(route.docsUrl).toBeTruthy();
   });
 
   it('should load stripe connection template', () => {
@@ -168,15 +215,55 @@ describe('bundled connection templates', () => {
     expect(route.docsUrl).toBeTruthy();
   });
 
+  it('should load notion connection template', () => {
+    const route = loadConnection('notion');
+
+    expect(route.name).toBe('Notion API');
+    expect(route.allowedEndpoints).toEqual(['https://api.notion.com/**']);
+    expect(route.secrets).toHaveProperty('NOTION_API_KEY');
+    expect(route.headers).toHaveProperty('Authorization');
+    expect(route.headers).toHaveProperty('Notion-Version');
+    expect(route.docsUrl).toBeTruthy();
+  });
+
+  it('should load openai connection template', () => {
+    const route = loadConnection('openai');
+
+    expect(route.name).toBe('OpenAI API');
+    expect(route.allowedEndpoints).toEqual(['https://api.openai.com/**']);
+    expect(route.secrets).toHaveProperty('OPENAI_API_KEY');
+    expect(route.headers).toHaveProperty('Authorization');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.openApiUrl).toBeTruthy();
+  });
+
+  it('should load openrouter connection template', () => {
+    const route = loadConnection('openrouter');
+
+    expect(route.name).toBe('OpenRouter API');
+    expect(route.allowedEndpoints).toEqual(['https://openrouter.ai/api/**']);
+    expect(route.secrets).toHaveProperty('OPENROUTER_API_KEY');
+    expect(route.headers).toHaveProperty('Authorization');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.openApiUrl).toBeTruthy();
+  });
+
   it('should list all bundled connections', () => {
     const available = listAvailableConnections();
 
+    expect(available).toContain('anthropic');
+    expect(available).toContain('devin');
+    expect(available).toContain('discord-bot');
+    expect(available).toContain('discord-oauth');
     expect(available).toContain('github');
+    expect(available).toContain('google');
+    expect(available).toContain('hex');
+    expect(available).toContain('linear');
+    expect(available).toContain('notion');
+    expect(available).toContain('openai');
+    expect(available).toContain('openrouter');
+    expect(available).toContain('slack');
     expect(available).toContain('stripe');
     expect(available).toContain('trello');
-    expect(available).toContain('hex');
-    expect(available).toContain('devin');
-    expect(available).toContain('slack');
-    expect(available).toContain('linear');
   });
 });
