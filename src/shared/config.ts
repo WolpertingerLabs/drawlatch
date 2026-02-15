@@ -52,6 +52,10 @@ export interface Route {
   /** URL linking to API documentation for the service behind this route.
    *  Optional — helps the agent find usage instructions. */
   docsUrl?: string;
+  /** URL to an OpenAPI / Swagger spec (JSON or YAML) for this route's API.
+   *  Optional — when present, get_route_docs will fetch this instead of docsUrl
+   *  for more structured, agent-friendly documentation. */
+  openApiUrl?: string;
   /** Headers to inject automatically into outgoing requests for this route.
    *  These MUST NOT conflict with client-provided headers (request is rejected on conflict).
    *  Values may contain ${VAR} placeholders resolved against this route's secrets. */
@@ -72,6 +76,8 @@ export interface ResolvedRoute {
   description?: string;
   /** Link to API documentation for the service behind this route (carried from config) */
   docsUrl?: string;
+  /** URL to an OpenAPI / Swagger spec for this route's API (carried from config) */
+  openApiUrl?: string;
   headers: Record<string, string>;
   secrets: Record<string, string>;
   allowedEndpoints: string[];
@@ -233,6 +239,7 @@ export function resolveRoutes(routes: Route[]): ResolvedRoute[] {
       ...(route.name !== undefined && { name: route.name }),
       ...(route.description !== undefined && { description: route.description }),
       ...(route.docsUrl !== undefined && { docsUrl: route.docsUrl }),
+      ...(route.openApiUrl !== undefined && { openApiUrl: route.openApiUrl }),
       headers: resolvedHeaders,
       secrets: resolvedSecrets,
       allowedEndpoints: route.allowedEndpoints,

@@ -155,6 +155,10 @@ This will:
         rl,
         '  API docs URL (empty to skip)',
       );
+      const routeOpenApiUrl = await ask(
+        rl,
+        '  OpenAPI spec URL (empty to skip)',
+      );
 
       // Headers
       const headers: Record<string, string> = {};
@@ -194,6 +198,7 @@ This will:
       if (routeName) route.name = routeName;
       if (routeDescription) route.description = routeDescription;
       if (routeDocsUrl) route.docsUrl = routeDocsUrl;
+      if (routeOpenApiUrl) route.openApiUrl = routeOpenApiUrl;
       if (Object.keys(headers).length > 0) route.headers = headers;
       if (Object.keys(secrets).length > 0) route.secrets = secrets;
 

@@ -290,6 +290,7 @@ const toolHandlers: Record<string, ToolHandler> = {
       if (route.name) info.name = route.name;
       if (route.description) info.description = route.description;
       if (route.docsUrl) info.docsUrl = route.docsUrl;
+      if (route.openApiUrl) info.openApiUrl = route.openApiUrl;
 
       info.allowedEndpoints = route.allowedEndpoints;
       info.secretNames = Object.keys(route.secrets);
@@ -299,6 +300,58 @@ const toolHandlers: Record<string, ToolHandler> = {
     });
 
     return Promise.resolve(routes);
+  },
+
+  /**
+   * Fetch documentation for a specific route.
+   * Prefers openApiUrl if set, otherwise falls back to docsUrl.
+   * This is a workaround for agents that cannot access external URLs directly.
+   */
+  async get_route_docs(input) {
+    const { routeIndex } = input as { routeIndex: number };
+
+    if (typeof routeIndex !== 'number' || routeIndex < 0 || routeIndex >= resolvedRoutes.length) {
+      throw new Error(
+        `Invalid route index: ${routeIndex}. Must be 0–${resolvedRoutes.length - 1}.`,
+      );
+    }
+
+    const route = resolvedRoutes[routeIndex];
+    const url = route.openApiUrl ?? route.docsUrl;
+
+    if (!url) {
+      throw new Error(
+        `Route ${routeIndex} has no docsUrl or openApiUrl configured.`,
+      );
+    }
+
+    const resp = await fetch(url, {
+      headers: { Accept: 'application/json, application/yaml, text/yaml, text/html, text/plain' },
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!resp.ok) {
+      throw new Error(
+        `Failed to fetch docs from ${url}: ${resp.status} ${resp.statusText}`,
+      );
+    }
+
+    const contentType = resp.headers.get('content-type') ?? '';
+    let body: unknown;
+
+    if (contentType.includes('application/json')) {
+      body = await resp.json();
+    } else {
+      body = await resp.text();
+    }
+
+    return {
+      routeIndex,
+      source: route.openApiUrl ? 'openapi' : 'docs',
+      url,
+      contentType,
+      body,
+    };
   },
 };
 
