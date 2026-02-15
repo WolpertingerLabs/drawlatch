@@ -15,9 +15,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import crypto from 'node:crypto';
 
-import { loadConfig } from '../shared/config.js';
+import { loadProxyConfig } from '../shared/config.js';
 import { loadKeyBundle, loadPublicKeys, EncryptedChannel } from '../shared/crypto/index.js';
-import { HandshakeInitiator, type ProxyRequest, type ProxyResponse } from '../shared/protocol/index.js';
+import {
+  HandshakeInitiator,
+  type ProxyRequest,
+  type ProxyResponse,
+} from '../shared/protocol/index.js';
 
 // ── State ──────────────────────────────────────────────────────────────────
 
@@ -27,11 +31,11 @@ let remoteUrl: string;
 // ── Handshake ──────────────────────────────────────────────────────────────
 
 async function establishChannel(): Promise<EncryptedChannel> {
-  const config = loadConfig();
-  remoteUrl = config.proxy.remoteUrl;
+  const config = loadProxyConfig();
+  remoteUrl = config.remoteUrl;
 
-  const ownKeys = loadKeyBundle(config.proxy.localKeysDir);
-  const remotePub = loadPublicKeys(config.proxy.remotePublicKeysDir);
+  const ownKeys = loadKeyBundle(config.localKeysDir);
+  const remotePub = loadPublicKeys(config.remotePublicKeysDir);
 
   const initiator = new HandshakeInitiator(ownKeys, remotePub);
 
@@ -41,7 +45,7 @@ async function establishChannel(): Promise<EncryptedChannel> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(initMsg),
-    signal: AbortSignal.timeout(config.proxy.connectTimeout),
+    signal: AbortSignal.timeout(config.connectTimeout),
   });
 
   if (!initResp.ok) {
@@ -64,7 +68,7 @@ async function establishChannel(): Promise<EncryptedChannel> {
       'X-Session-Id': sessionKeys.sessionId,
     },
     body: JSON.stringify(finishMsg),
-    signal: AbortSignal.timeout(config.proxy.connectTimeout),
+    signal: AbortSignal.timeout(config.connectTimeout),
   });
 
   if (!finishResp.ok) {
@@ -87,7 +91,7 @@ async function sendEncryptedRequest(
   toolInput: Record<string, unknown>,
 ): Promise<unknown> {
   const ch = await getChannel();
-  const config = loadConfig();
+  const config = loadProxyConfig();
 
   const request: ProxyRequest = {
     type: 'proxy_request',
@@ -107,7 +111,7 @@ async function sendEncryptedRequest(
       'X-Session-Id': ch.sessionId,
     },
     body: new Uint8Array(encrypted),
-    signal: AbortSignal.timeout(config.proxy.requestTimeout),
+    signal: AbortSignal.timeout(config.requestTimeout),
   });
 
   if (!resp.ok) {

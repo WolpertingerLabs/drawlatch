@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createApp } from './server.js';
-import type { Config } from '../shared/config.js';
+import type { RemoteServerConfig } from '../shared/config.js';
 import {
   generateKeyBundle,
   extractPublicKeys,
@@ -55,27 +55,18 @@ beforeAll(async () => {
   serverPub = extractPublicKeys(serverKeys);
 
   // Build a config that uses our in-memory keys directly
-  const config: Config = {
-    proxy: {
-      remoteUrl: '', // not used server-side
-      localKeysDir: '',
-      remotePublicKeysDir: '',
-      connectTimeout: 10_000,
-      requestTimeout: 30_000,
-    },
-    remote: {
-      host: '127.0.0.1',
-      port: 0, // not used — we listen on a random port
-      localKeysDir: '',
-      authorizedPeersDir: '',
-      routes: [
-        {
-          secrets: testSecrets, // literal values, no env var resolution needed
-          allowedEndpoints: [], // empty = matches nothing (we use a different server for http_request tests)
-        },
-      ],
-      rateLimitPerMinute: 60,
-    },
+  const config: RemoteServerConfig = {
+    host: '127.0.0.1',
+    port: 0, // not used — we listen on a random port
+    localKeysDir: '',
+    authorizedPeersDir: '',
+    routes: [
+      {
+        secrets: testSecrets, // literal values, no env var resolution needed
+        allowedEndpoints: [], // empty = matches nothing (we use a different server for http_request tests)
+      },
+    ],
+    rateLimitPerMinute: 60,
   };
 
   const app = createApp({
@@ -353,27 +344,18 @@ describe('Rate limiting', () => {
   let rateLimitedUrl: string;
 
   beforeAll(async () => {
-    const config: Config = {
-      proxy: {
-        remoteUrl: '',
-        localKeysDir: '',
-        remotePublicKeysDir: '',
-        connectTimeout: 10_000,
-        requestTimeout: 30_000,
-      },
-      remote: {
-        host: '127.0.0.1',
-        port: 0,
-        localKeysDir: '',
-        authorizedPeersDir: '',
-        routes: [
-          {
-            secrets: { SECRET: 'value' },
-            allowedEndpoints: [],
-          },
-        ],
-        rateLimitPerMinute: 3, // Very low limit for testing
-      },
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      localKeysDir: '',
+      authorizedPeersDir: '',
+      routes: [
+        {
+          secrets: { SECRET: 'value' },
+          allowedEndpoints: [],
+        },
+      ],
+      rateLimitPerMinute: 3, // Very low limit for testing
     };
 
     const app = createApp({
@@ -513,27 +495,18 @@ describe('http_request tool', () => {
     });
 
     // Create the MCP server with route-based config
-    const config: Config = {
-      proxy: {
-        remoteUrl: '',
-        localKeysDir: '',
-        remotePublicKeysDir: '',
-        connectTimeout: 10_000,
-        requestTimeout: 30_000,
-      },
-      remote: {
-        host: '127.0.0.1',
-        port: 0,
-        localKeysDir: '',
-        authorizedPeersDir: '',
-        routes: [
-          {
-            secrets: { MY_TOKEN: 'Bearer secret-jwt-token', BODY_SECRET: 'super-secret-body' },
-            allowedEndpoints: [`${targetUrl}/**`],
-          },
-        ],
-        rateLimitPerMinute: 60,
-      },
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      localKeysDir: '',
+      authorizedPeersDir: '',
+      routes: [
+        {
+          secrets: { MY_TOKEN: 'Bearer secret-jwt-token', BODY_SECRET: 'super-secret-body' },
+          allowedEndpoints: [`${targetUrl}/**`],
+        },
+      ],
+      rateLimitPerMinute: 60,
     };
 
     const app = createApp({
@@ -753,33 +726,24 @@ describe('Route isolation', () => {
     ]);
 
     // Create a server with two routes pointing to different targets
-    const config: Config = {
-      proxy: {
-        remoteUrl: '',
-        localKeysDir: '',
-        remotePublicKeysDir: '',
-        connectTimeout: 10_000,
-        requestTimeout: 30_000,
-      },
-      remote: {
-        host: '127.0.0.1',
-        port: 0,
-        localKeysDir: '',
-        authorizedPeersDir: '',
-        routes: [
-          {
-            headers: { Authorization: 'Bearer route-a-token' },
-            secrets: { TOKEN_A: 'secret-a-value' },
-            allowedEndpoints: [`${targetUrlA}/**`],
-          },
-          {
-            headers: { Authorization: 'Bearer route-b-token' },
-            secrets: { TOKEN_B: 'secret-b-value' },
-            allowedEndpoints: [`${targetUrlB}/**`],
-          },
-        ],
-        rateLimitPerMinute: 60,
-      },
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      localKeysDir: '',
+      authorizedPeersDir: '',
+      routes: [
+        {
+          headers: { Authorization: 'Bearer route-a-token' },
+          secrets: { TOKEN_A: 'secret-a-value' },
+          allowedEndpoints: [`${targetUrlA}/**`],
+        },
+        {
+          headers: { Authorization: 'Bearer route-b-token' },
+          secrets: { TOKEN_B: 'secret-b-value' },
+          allowedEndpoints: [`${targetUrlB}/**`],
+        },
+      ],
+      rateLimitPerMinute: 60,
     };
 
     const app = createApp({
@@ -1025,27 +989,18 @@ describe('loadAuthorizedPeers via createApp', () => {
   });
 
   it('should load peers from disk and allow authorized handshakes', async () => {
-    const config: Config = {
-      proxy: {
-        remoteUrl: '',
-        localKeysDir: '',
-        remotePublicKeysDir: '',
-        connectTimeout: 10_000,
-        requestTimeout: 30_000,
-      },
-      remote: {
-        host: '127.0.0.1',
-        port: 0,
-        localKeysDir: tmpKeysDir,
-        authorizedPeersDir: peersDir,
-        routes: [
-          {
-            secrets: { TEST: 'loaded-from-disk' },
-            allowedEndpoints: [],
-          },
-        ],
-        rateLimitPerMinute: 60,
-      },
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      localKeysDir: tmpKeysDir,
+      authorizedPeersDir: peersDir,
+      routes: [
+        {
+          secrets: { TEST: 'loaded-from-disk' },
+          allowedEndpoints: [],
+        },
+      ],
+      rateLimitPerMinute: 60,
     };
 
     // Only pass config — let createApp load keys and peers from disk
@@ -1112,22 +1067,13 @@ describe('loadAuthorizedPeers via createApp', () => {
   });
 
   it('should handle non-existent peers directory gracefully', () => {
-    const config: Config = {
-      proxy: {
-        remoteUrl: '',
-        localKeysDir: '',
-        remotePublicKeysDir: '',
-        connectTimeout: 10_000,
-        requestTimeout: 30_000,
-      },
-      remote: {
-        host: '127.0.0.1',
-        port: 0,
-        localKeysDir: '',
-        authorizedPeersDir: '/tmp/nonexistent-peers-dir-xyz-' + crypto.randomUUID(),
-        routes: [],
-        rateLimitPerMinute: 60,
-      },
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      localKeysDir: '',
+      authorizedPeersDir: '/tmp/nonexistent-peers-dir-xyz-' + crypto.randomUUID(),
+      routes: [],
+      rateLimitPerMinute: 60,
     };
 
     // Should not throw — loadAuthorizedPeers returns empty array if dir doesn't exist

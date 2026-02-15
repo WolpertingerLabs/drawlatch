@@ -1,19 +1,27 @@
 /**
- * Configuration schema and loading for both MCP proxy and remote server.
+ * Configuration schema and loading for MCP proxy and remote server.
  *
- * Config file: ~/.mcp-secure-proxy/config.json
- * Keys directory: ~/.mcp-secure-proxy/keys/
+ * Config files:
+ *   - proxy.config.json  — MCP proxy (local) settings
+ *   - remote.config.json — Remote server settings
+ *
+ * Each loader falls back to a legacy combined config.json (if present)
+ * for backward compatibility, then to built-in defaults.
+ *
+ * Keys directory: .mcp-secure-proxy/keys/
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 
 /** Base directory for all config and keys.
  *  Defaults to .mcp-secure-proxy/ in the current working directory (repo-local).
  *  Override with MCP_CONFIG_DIR env var for custom deployments. */
-export const CONFIG_DIR = process.env.MCP_CONFIG_DIR || path.join(process.cwd(), '.mcp-secure-proxy');
+export const CONFIG_DIR =
+  process.env.MCP_CONFIG_DIR ?? path.join(process.cwd(), '.mcp-secure-proxy');
 export const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
+export const PROXY_CONFIG_PATH = path.join(CONFIG_DIR, 'proxy.config.json');
+export const REMOTE_CONFIG_PATH = path.join(CONFIG_DIR, 'remote.config.json');
 export const KEYS_DIR = path.join(CONFIG_DIR, 'keys');
 export const LOCAL_KEYS_DIR = path.join(KEYS_DIR, 'local');
 export const REMOTE_KEYS_DIR = path.join(KEYS_DIR, 'remote');
@@ -70,48 +78,96 @@ export interface RemoteServerConfig {
   rateLimitPerMinute: number;
 }
 
-/** Full config file */
-export interface Config {
-  proxy: ProxyConfig;
-  remote: RemoteServerConfig;
-}
+// ── Defaults ─────────────────────────────────────────────────────────────────
 
-function defaults(): Config {
+function proxyDefaults(): ProxyConfig {
   return {
-    proxy: {
-      remoteUrl: 'http://localhost:9999',
-      localKeysDir: LOCAL_KEYS_DIR,
-      remotePublicKeysDir: path.join(PEER_KEYS_DIR, 'remote-server'),
-      connectTimeout: 10_000,
-      requestTimeout: 30_000,
-    },
-    remote: {
-      host: '127.0.0.1',
-      port: 9999,
-      localKeysDir: REMOTE_KEYS_DIR,
-      authorizedPeersDir: path.join(PEER_KEYS_DIR, 'authorized-clients'),
-      routes: [],
-      rateLimitPerMinute: 60,
-    },
+    remoteUrl: 'http://localhost:9999',
+    localKeysDir: LOCAL_KEYS_DIR,
+    remotePublicKeysDir: path.join(PEER_KEYS_DIR, 'remote-server'),
+    connectTimeout: 10_000,
+    requestTimeout: 30_000,
   };
 }
 
-export function loadConfig(): Config {
-  const def = defaults();
-  if (!fs.existsSync(CONFIG_PATH)) {
-    return def;
+function remoteDefaults(): RemoteServerConfig {
+  return {
+    host: '127.0.0.1',
+    port: 9999,
+    localKeysDir: REMOTE_KEYS_DIR,
+    authorizedPeersDir: path.join(PEER_KEYS_DIR, 'authorized-clients'),
+    routes: [],
+    rateLimitPerMinute: 60,
+  };
+}
+
+// ── Split config loading (preferred) ─────────────────────────────────────────
+
+/**
+ * Load the MCP proxy (local) config.
+ *
+ * Resolution order:
+ *   1. proxy.config.json (flat ProxyConfig)
+ *   2. config.json → .proxy section (legacy combined format)
+ *   3. Built-in defaults
+ */
+export function loadProxyConfig(): ProxyConfig {
+  const def = proxyDefaults();
+
+  // Try dedicated proxy config file first
+  if (fs.existsSync(PROXY_CONFIG_PATH)) {
+    const raw = JSON.parse(fs.readFileSync(PROXY_CONFIG_PATH, 'utf-8'));
+    return { ...def, ...raw };
   }
-  const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-  return {
-    proxy: { ...def.proxy, ...raw.proxy },
-    remote: { ...def.remote, ...raw.remote },
-  };
+
+  // Fall back to combined config.json
+  if (fs.existsSync(CONFIG_PATH)) {
+    const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    if (raw.proxy) return { ...def, ...raw.proxy };
+  }
+
+  return def;
 }
 
-export function saveConfig(config: Config): void {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+/**
+ * Load the remote server config.
+ *
+ * Resolution order:
+ *   1. remote.config.json (flat RemoteServerConfig)
+ *   2. config.json → .remote section (legacy combined format)
+ *   3. Built-in defaults
+ */
+export function loadRemoteConfig(): RemoteServerConfig {
+  const def = remoteDefaults();
+
+  // Try dedicated remote config file first
+  if (fs.existsSync(REMOTE_CONFIG_PATH)) {
+    const raw = JSON.parse(fs.readFileSync(REMOTE_CONFIG_PATH, 'utf-8'));
+    return { ...def, ...raw };
+  }
+
+  // Fall back to combined config.json
+  if (fs.existsSync(CONFIG_PATH)) {
+    const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    if (raw.remote) return { ...def, ...raw.remote };
+  }
+
+  return def;
 }
+
+// ── Split config saving ─────────────────────────────────────────────────────
+
+export function saveProxyConfig(config: ProxyConfig): void {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(PROXY_CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+}
+
+export function saveRemoteConfig(config: RemoteServerConfig): void {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(REMOTE_CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+}
+
+// ── Secret / placeholder resolution ──────────────────────────────────────────
 
 /**
  * Replace ${VAR} placeholders in a string with values from a secrets map.

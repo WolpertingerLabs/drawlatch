@@ -18,9 +18,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import {
-  loadConfig,
+  loadRemoteConfig,
   resolveRoutes,
   resolvePlaceholders,
+  type RemoteServerConfig,
   type ResolvedRoute,
 } from '../shared/config.js';
 import {
@@ -297,7 +298,7 @@ const toolHandlers: Record<string, ToolHandler> = {
 /** Options for creating the app — allows dependency injection for tests */
 export interface CreateAppOptions {
   /** Override config instead of loading from disk */
-  config?: import('../shared/config.js').Config;
+  config?: RemoteServerConfig;
   /** Override key bundle instead of loading from disk */
   ownKeys?: import('../shared/crypto/index.js').KeyBundle;
   /** Override authorized peers instead of loading from disk */
@@ -313,13 +314,12 @@ export function createApp(options: CreateAppOptions = {}) {
   // Raw buffer for encrypted request endpoint
   app.use('/request', express.raw({ type: 'application/octet-stream', limit: '10mb' }));
 
-  const config = options.config ?? loadConfig();
-  const ownKeys = options.ownKeys ?? loadKeyBundle(config.remote.localKeysDir);
-  const authorizedPeers =
-    options.authorizedPeers ?? loadAuthorizedPeers(config.remote.authorizedPeersDir);
+  const config = options.config ?? loadRemoteConfig();
+  const ownKeys = options.ownKeys ?? loadKeyBundle(config.localKeysDir);
+  const authorizedPeers = options.authorizedPeers ?? loadAuthorizedPeers(config.authorizedPeersDir);
 
-  resolvedRoutes = resolveRoutes(config.remote.routes);
-  rateLimitPerMinute = config.remote.rateLimitPerMinute;
+  resolvedRoutes = resolveRoutes(config.routes);
+  rateLimitPerMinute = config.rateLimitPerMinute;
 
   console.log(`[remote] Loaded ${resolvedRoutes.length} route(s)`);
   for (const [i, route] of resolvedRoutes.entries()) {
@@ -510,13 +510,11 @@ export function createApp(options: CreateAppOptions = {}) {
 // ── Start ──────────────────────────────────────────────────────────────────
 
 function main(): void {
-  const config = loadConfig();
+  const config = loadRemoteConfig();
   const app = createApp();
 
-  const server = app.listen(config.remote.port, config.remote.host, () => {
-    console.log(
-      `[remote] Secure remote server listening on ${config.remote.host}:${config.remote.port}`,
-    );
+  const server = app.listen(config.port, config.host, () => {
+    console.log(`[remote] Secure remote server listening on ${config.host}:${config.port}`);
   });
 
   // Graceful shutdown: close the server when the process receives SIGTERM or SIGINT.

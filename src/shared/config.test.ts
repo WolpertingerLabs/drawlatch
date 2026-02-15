@@ -4,10 +4,14 @@ import {
   resolveSecrets,
   resolvePlaceholders,
   resolveRoutes,
-  loadConfig,
-  saveConfig,
+  loadProxyConfig,
+  loadRemoteConfig,
+  saveProxyConfig,
+  saveRemoteConfig,
   CONFIG_DIR,
   CONFIG_PATH,
+  PROXY_CONFIG_PATH,
+  REMOTE_CONFIG_PATH,
 } from './config.js';
 
 describe('resolvePlaceholders', () => {
@@ -265,143 +269,195 @@ describe('resolveRoutes', () => {
   });
 });
 
-describe('loadConfig', () => {
-  it('should return defaults when config file does not exist', () => {
-    // loadConfig reads CONFIG_PATH which is ~/.mcp-secure-proxy/config.json
-    // Mock fs.existsSync to return false for CONFIG_PATH
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
-
-    const config = loadConfig();
-
-    expect(config.proxy.remoteUrl).toBe('http://localhost:9999');
-    expect(config.proxy.connectTimeout).toBe(10_000);
-    expect(config.proxy.requestTimeout).toBe(30_000);
-    expect(config.remote.host).toBe('127.0.0.1');
-    expect(config.remote.port).toBe(9999);
-    expect(config.remote.routes).toEqual([]);
-    expect(config.remote.rateLimitPerMinute).toBe(60);
-
-    existsSpy.mockRestore();
-  });
-
-  it('should merge file config with defaults', () => {
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
-      JSON.stringify({
-        proxy: { remoteUrl: 'https://custom.example.com:8443' },
-        remote: {
-          port: 7777,
-          routes: [
-            {
-              secrets: { KEY: 'value' },
-              allowedEndpoints: ['https://api.example.com/**'],
-            },
-          ],
-        },
-      }),
-    );
-
-    const config = loadConfig();
-
-    // Overridden values
-    expect(config.proxy.remoteUrl).toBe('https://custom.example.com:8443');
-    expect(config.remote.port).toBe(7777);
-    expect(config.remote.routes).toHaveLength(1);
-    expect(config.remote.routes[0].secrets).toEqual({ KEY: 'value' });
-    expect(config.remote.routes[0].allowedEndpoints).toEqual(['https://api.example.com/**']);
-
-    // Default values still present
-    expect(config.proxy.connectTimeout).toBe(10_000);
-    expect(config.remote.host).toBe('127.0.0.1');
-
-    existsSpy.mockRestore();
-    readSpy.mockRestore();
-  });
-
-  it('should handle partial config (only proxy section)', () => {
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
-      JSON.stringify({
-        proxy: { connectTimeout: 5000 },
-      }),
-    );
-
-    const config = loadConfig();
-
-    expect(config.proxy.connectTimeout).toBe(5000);
-    expect(config.proxy.remoteUrl).toBe('http://localhost:9999');
-    // remote section should be all defaults
-    expect(config.remote.port).toBe(9999);
-    expect(config.remote.routes).toEqual([]);
-
-    existsSpy.mockRestore();
-    readSpy.mockRestore();
-  });
-
-  it('should load config with multiple routes', () => {
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
-      JSON.stringify({
-        remote: {
-          routes: [
-            {
-              headers: { Authorization: 'Bearer token-a' },
-              secrets: { KEY_A: 'val-a' },
-              allowedEndpoints: ['https://api.a.com/**'],
-            },
-            {
-              headers: { Authorization: 'Bearer token-b' },
-              allowedEndpoints: ['https://api.b.com/**'],
-            },
-          ],
-        },
-      }),
-    );
-
-    const config = loadConfig();
-
-    expect(config.remote.routes).toHaveLength(2);
-    expect(config.remote.routes[0].headers).toEqual({ Authorization: 'Bearer token-a' });
-    expect(config.remote.routes[0].secrets).toEqual({ KEY_A: 'val-a' });
-    expect(config.remote.routes[1].headers).toEqual({ Authorization: 'Bearer token-b' });
-    expect(config.remote.routes[1].secrets).toBeUndefined();
-
-    existsSpy.mockRestore();
-    readSpy.mockRestore();
-  });
-});
-
-describe('saveConfig', () => {
-  it('should create config directory and write file', () => {
-    const mkdirSpy = vi.spyOn(fs, 'mkdirSync').mockReturnValue(undefined);
-    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined);
-
-    const config = loadConfig();
-
-    // Mock existsSync for the loadConfig call above (returns defaults)
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
-
-    saveConfig(config);
-
-    expect(mkdirSpy).toHaveBeenCalledWith(CONFIG_DIR, { recursive: true, mode: 0o700 });
-    expect(writeSpy).toHaveBeenCalledWith(CONFIG_PATH, expect.any(String), { mode: 0o600 });
-
-    // Verify the written content is valid JSON
-    const writtenContent = writeSpy.mock.calls[0][1] as string;
-    const parsed = JSON.parse(writtenContent);
-    expect(parsed.proxy).toBeDefined();
-    expect(parsed.remote).toBeDefined();
-    expect(parsed.remote.routes).toBeDefined();
-
-    mkdirSpy.mockRestore();
-    writeSpy.mockRestore();
-    existsSpy.mockRestore();
-  });
-});
-
 describe('config exports', () => {
   it('should export expected path constants', () => {
     expect(CONFIG_DIR).toContain('.mcp-secure-proxy');
     expect(CONFIG_PATH).toContain('config.json');
+  });
+
+  it('should export split config path constants', () => {
+    expect(PROXY_CONFIG_PATH).toContain('proxy.config.json');
+    expect(REMOTE_CONFIG_PATH).toContain('remote.config.json');
+  });
+});
+
+describe('loadProxyConfig', () => {
+  it('should return defaults when no config files exist', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    const config = loadProxyConfig();
+
+    expect(config.remoteUrl).toBe('http://localhost:9999');
+    expect(config.connectTimeout).toBe(10_000);
+    expect(config.requestTimeout).toBe(30_000);
+
+    existsSpy.mockRestore();
+  });
+
+  it('should read from proxy.config.json when it exists', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      return String(p) === PROXY_CONFIG_PATH;
+    });
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        remoteUrl: 'https://custom-proxy.example.com:8443',
+        connectTimeout: 5000,
+      }),
+    );
+
+    const config = loadProxyConfig();
+
+    expect(config.remoteUrl).toBe('https://custom-proxy.example.com:8443');
+    expect(config.connectTimeout).toBe(5000);
+    // Default values still present
+    expect(config.requestTimeout).toBe(30_000);
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
+  it('should fall back to config.json when proxy.config.json does not exist', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      // proxy.config.json does not exist, but config.json does
+      return String(p) === CONFIG_PATH;
+    });
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        proxy: { remoteUrl: 'https://legacy.example.com:9999' },
+        remote: { port: 7777 },
+      }),
+    );
+
+    const config = loadProxyConfig();
+
+    expect(config.remoteUrl).toBe('https://legacy.example.com:9999');
+    // Defaults for unspecified fields
+    expect(config.connectTimeout).toBe(10_000);
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+});
+
+describe('loadRemoteConfig', () => {
+  it('should return defaults when no config files exist', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    const config = loadRemoteConfig();
+
+    expect(config.host).toBe('127.0.0.1');
+    expect(config.port).toBe(9999);
+    expect(config.routes).toEqual([]);
+    expect(config.rateLimitPerMinute).toBe(60);
+
+    existsSpy.mockRestore();
+  });
+
+  it('should read from remote.config.json when it exists', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      return String(p) === REMOTE_CONFIG_PATH;
+    });
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        host: '0.0.0.0',
+        port: 8080,
+        routes: [
+          {
+            secrets: { KEY: 'value' },
+            allowedEndpoints: ['https://api.example.com/**'],
+          },
+        ],
+      }),
+    );
+
+    const config = loadRemoteConfig();
+
+    expect(config.host).toBe('0.0.0.0');
+    expect(config.port).toBe(8080);
+    expect(config.routes).toHaveLength(1);
+    // Default values still present
+    expect(config.rateLimitPerMinute).toBe(60);
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
+  it('should fall back to config.json when remote.config.json does not exist', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      // remote.config.json does not exist, but config.json does
+      return String(p) === CONFIG_PATH;
+    });
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        proxy: { remoteUrl: 'https://legacy.example.com:9999' },
+        remote: { port: 7777, rateLimitPerMinute: 120 },
+      }),
+    );
+
+    const config = loadRemoteConfig();
+
+    expect(config.port).toBe(7777);
+    expect(config.rateLimitPerMinute).toBe(120);
+    // Defaults for unspecified fields
+    expect(config.host).toBe('127.0.0.1');
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+});
+
+describe('saveProxyConfig', () => {
+  it('should create config directory and write proxy config file', () => {
+    const mkdirSpy = vi.spyOn(fs, 'mkdirSync').mockReturnValue(undefined);
+    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined);
+
+    saveProxyConfig({
+      remoteUrl: 'http://localhost:9999',
+      localKeysDir: '/path/to/keys',
+      remotePublicKeysDir: '/path/to/remote-pub',
+      connectTimeout: 10_000,
+      requestTimeout: 30_000,
+    });
+
+    expect(mkdirSpy).toHaveBeenCalledWith(CONFIG_DIR, { recursive: true, mode: 0o700 });
+    expect(writeSpy).toHaveBeenCalledWith(PROXY_CONFIG_PATH, expect.any(String), { mode: 0o600 });
+
+    // Verify written content is valid JSON with flat structure (no .proxy wrapper)
+    const writtenContent = writeSpy.mock.calls[0][1] as string;
+    const parsed = JSON.parse(writtenContent);
+    expect(parsed.remoteUrl).toBe('http://localhost:9999');
+    expect(parsed.proxy).toBeUndefined(); // Should be flat, not nested
+
+    mkdirSpy.mockRestore();
+    writeSpy.mockRestore();
+  });
+});
+
+describe('saveRemoteConfig', () => {
+  it('should create config directory and write remote config file', () => {
+    const mkdirSpy = vi.spyOn(fs, 'mkdirSync').mockReturnValue(undefined);
+    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined);
+
+    saveRemoteConfig({
+      host: '127.0.0.1',
+      port: 9999,
+      localKeysDir: '/path/to/keys',
+      authorizedPeersDir: '/path/to/peers',
+      routes: [],
+      rateLimitPerMinute: 60,
+    });
+
+    expect(mkdirSpy).toHaveBeenCalledWith(CONFIG_DIR, { recursive: true, mode: 0o700 });
+    expect(writeSpy).toHaveBeenCalledWith(REMOTE_CONFIG_PATH, expect.any(String), { mode: 0o600 });
+
+    // Verify written content is valid JSON with flat structure (no .remote wrapper)
+    const writtenContent = writeSpy.mock.calls[0][1] as string;
+    const parsed = JSON.parse(writtenContent);
+    expect(parsed.host).toBe('127.0.0.1');
+    expect(parsed.port).toBe(9999);
+    expect(parsed.remote).toBeUndefined(); // Should be flat, not nested
+
+    mkdirSpy.mockRestore();
+    writeSpy.mockRestore();
   });
 });
