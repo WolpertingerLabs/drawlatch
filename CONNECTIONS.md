@@ -26,6 +26,7 @@ Connection routes are loaded at startup and appended **after** your manual route
 | `discord-oauth` | [Discord OAuth2 API](https://discord.com/developers/docs/topics/oauth2)                     | `DISCORD_OAUTH_TOKEN`            | Bearer token header (see note)   |
 | `github`      | [GitHub REST API](https://docs.github.com/en/rest)                                            | `GITHUB_TOKEN`                   | Bearer token header              |
 | `google`      | [Google APIs](https://developers.google.com/apis-explorer)                                    | `GOOGLE_API_TOKEN`               | Bearer token header (see note)   |
+| `google-ai`   | [Google AI Gemini API](https://ai.google.dev/api)                                             | `GOOGLE_AI_API_KEY`              | x-goog-api-key header (see note) |
 | `hex`         | [Hex API](https://learn.hex.tech/docs/api/api-overview)                                       | `HEX_TOKEN`                      | Bearer token header              |
 | `linear`      | [Linear GraphQL API](https://developers.linear.app/docs/graphql/working-with-the-graphql-api) | `LINEAR_API_KEY`                 | API key header (see note)        |
 | `notion`      | [Notion API](https://developers.notion.com/reference)                                         | `NOTION_API_KEY`                 | Bearer token header (see note)   |
@@ -39,7 +40,9 @@ Connection routes are loaded at startup and appended **after** your manual route
 
 > **Discord note:** Discord has two connection types. `discord-bot` uses the `Bot` authorization prefix for bot tokens, which have full access to most API routes (guilds, channels, messages, etc.). `discord-oauth` uses a standard `Bearer` token obtained via OAuth2, which provides user-scoped access limited to the authorized scopes (identity, guilds list, email, etc.). Both target the same v10 API base URL.
 
-> **Google APIs note:** Google spans many subdomains (sheets.googleapis.com, drive.googleapis.com, etc.). The connection allowlists the most common Google Workspace and Cloud API domains. If you need additional subdomains, add a custom route with the same `GOOGLE_API_TOKEN` secret.
+> **Google AI note:** The Google AI (Gemini) API uses a custom `x-goog-api-key` header instead of the standard `Authorization: Bearer` pattern. This is separate from the `google` connection — use `google` for Workspace APIs (Sheets, Drive, etc.) and `google-ai` for Gemini LLM endpoints. The endpoint is not version-pinned (`generativelanguage.googleapis.com/**`) to allow access to both `v1` and `v1beta` paths.
+
+> **Google APIs note:** Google Workspace APIs span many subdomains (sheets.googleapis.com, drive.googleapis.com, etc.). The `google` connection allowlists the most common domains. If you need additional subdomains, add a custom route with the same `GOOGLE_API_TOKEN` secret. For Google AI / Gemini, use the `google-ai` connection instead.
 
 > **Linear note:** Linear is a GraphQL-only API. All requests should be POST requests to `https://api.linear.app/graphql` with a JSON body containing your GraphQL query. The connection uses the `Authorization: <API_KEY>` format (no "Bearer" prefix) which is correct for Linear personal API keys. If you use OAuth tokens instead, override with a custom route that includes the "Bearer" prefix.
 

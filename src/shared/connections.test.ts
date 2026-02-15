@@ -153,6 +153,16 @@ describe('bundled connection templates', () => {
     expect(route.docsUrl).toBeTruthy();
   });
 
+  it('should load google-ai connection template', () => {
+    const route = loadConnection('google-ai');
+
+    expect(route.name).toBe('Google AI (Gemini) API');
+    expect(route.allowedEndpoints).toEqual(['https://generativelanguage.googleapis.com/**']);
+    expect(route.secrets).toHaveProperty('GOOGLE_AI_API_KEY');
+    expect(route.headers).toHaveProperty('x-goog-api-key');
+    expect(route.docsUrl).toBeTruthy();
+  });
+
   it('should load stripe connection template', () => {
     const route = loadConnection('stripe');
 
@@ -257,6 +267,7 @@ describe('bundled connection templates', () => {
     expect(available).toContain('discord-oauth');
     expect(available).toContain('github');
     expect(available).toContain('google');
+    expect(available).toContain('google-ai');
     expect(available).toContain('hex');
     expect(available).toContain('linear');
     expect(available).toContain('notion');
