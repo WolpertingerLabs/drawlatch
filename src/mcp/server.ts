@@ -15,9 +15,9 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import crypto from 'node:crypto';
 
-import { loadConfig } from './config.js';
-import { loadKeyBundle, loadPublicKeys, EncryptedChannel } from './crypto/index.js';
-import { HandshakeInitiator, type ProxyRequest, type ProxyResponse } from './protocol/index.js';
+import { loadConfig } from '../shared/config.js';
+import { loadKeyBundle, loadPublicKeys, EncryptedChannel } from '../shared/crypto/index.js';
+import { HandshakeInitiator, type ProxyRequest, type ProxyResponse } from '../shared/protocol/index.js';
 
 // ── State ──────────────────────────────────────────────────────────────────
 

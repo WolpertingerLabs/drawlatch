@@ -18,8 +18,8 @@ import {
   loadKeyBundle,
   fingerprint,
   extractPublicKeys,
-} from '../crypto/index.js';
-import { LOCAL_KEYS_DIR, REMOTE_KEYS_DIR, CONFIG_DIR } from '../config.js';
+} from '../shared/crypto/index.js';
+import { LOCAL_KEYS_DIR, REMOTE_KEYS_DIR, CONFIG_DIR } from '../shared/config.js';
 import fs from 'node:fs';
 import path from 'node:path';
 

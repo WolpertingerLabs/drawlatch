@@ -17,20 +17,20 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { loadConfig, resolveSecrets } from './config.js';
+import { loadConfig, resolveSecrets } from '../shared/config.js';
 import {
   loadKeyBundle,
   loadPublicKeys,
   EncryptedChannel,
   type PublicKeyBundle,
-} from './crypto/index.js';
+} from '../shared/crypto/index.js';
 import {
   HandshakeResponder,
   type HandshakeInit,
   type HandshakeFinish,
   type ProxyRequest,
   type ProxyResponse,
-} from './protocol/index.js';
+} from '../shared/protocol/index.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -239,9 +239,9 @@ const toolHandlers: Record<string, ToolHandler> = {
 /** Options for creating the app — allows dependency injection for tests */
 export interface CreateAppOptions {
   /** Override config instead of loading from disk */
-  config?: import('./config.js').Config;
+  config?: import('../shared/config.js').Config;
   /** Override key bundle instead of loading from disk */
-  ownKeys?: import('./crypto/index.js').KeyBundle;
+  ownKeys?: import('../shared/crypto/index.js').KeyBundle;
   /** Override authorized peers instead of loading from disk */
   authorizedPeers?: PublicKeyBundle[];
 }
@@ -477,7 +477,7 @@ function main(): void {
 
 // Only run when executed directly (not when imported by tests)
 const isDirectRun =
-  process.argv[1]?.endsWith('remote-server.ts') || process.argv[1]?.endsWith('remote-server.js');
+  process.argv[1]?.endsWith('remote/server.ts') || process.argv[1]?.endsWith('remote/server.js');
 
 if (isDirectRun) {
   try {

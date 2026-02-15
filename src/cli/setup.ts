@@ -26,7 +26,7 @@ import {
   extractPublicKeys,
   fingerprint,
   loadKeyBundle,
-} from '../crypto/index.js';
+} from '../shared/crypto/index.js';
 import {
   CONFIG_DIR,
   CONFIG_PATH,
@@ -35,7 +35,7 @@ import {
   PEER_KEYS_DIR,
   saveConfig,
   type Config,
-} from '../config.js';
+} from '../shared/config.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -194,7 +194,7 @@ This will:
 function printClaudeConfig(): void {
   const mcpServerPath = path.resolve(
     path.dirname(new URL(import.meta.url).pathname),
-    '../mcp-server.ts',
+    '../mcp/server.ts',
   );
 
   // For compiled version
