@@ -32,6 +32,7 @@ import {
   type RemoteServerConfig,
   type Route,
 } from '../shared/config.js';
+import { listAvailableConnections } from '../shared/connections.js';
 import { createReadline, ask, ensureDir, copyPublicKeys } from './helpers.js';
 
 // ── Main ───────────────────────────────────────────────────────────────────
@@ -48,8 +49,10 @@ async function main(): Promise<void> {
 This will:
   1. Generate a keypair for the remote server
   2. Optionally import the MCP proxy client's public keys
-  3. Configure server binding, routes, secrets, and headers
-  4. Write remote.config.json
+  3. Configure server binding
+  4. Select pre-built connection templates (optional)
+  5. Configure custom routes, secrets, and headers
+  6. Write remote.config.json
 `);
 
     ensureDir(CONFIG_DIR);
@@ -104,14 +107,50 @@ This will:
     console.log('\n─── Step 3: Server Configuration ───\n');
 
     console.log('  Bind host controls which network interface the server listens on.');
-    console.log('    0.0.0.0     — accept connections from any network (typical for remote servers)');
+    console.log(
+      '    0.0.0.0     — accept connections from any network (typical for remote servers)',
+    );
     console.log('    127.0.0.1   — local connections only (use if behind a reverse proxy)\n');
 
     const host = await ask(rl, '  Host to bind', '0.0.0.0');
     const port = await ask(rl, '  Port to listen on', '9999');
 
-    // Step 4: Route configuration
-    console.log('\n─── Step 4: Route Configuration ───\n');
+    // Step 4: Connection templates
+    console.log('\n─── Step 4: Connection Templates (optional) ───\n');
+    const available = listAvailableConnections();
+    const connections: string[] = [];
+
+    if (available.length > 0) {
+      console.log('  Pre-built connection templates provide ready-made route configurations');
+      console.log('  for popular APIs (auth headers, endpoint patterns, docs links).\n');
+      console.log('  Available connections:');
+      for (const conn of available) {
+        console.log(`    - ${conn}`);
+      }
+      console.log('');
+
+      const useConnections = await ask(rl, '  Use connection templates? (y/n)', 'y');
+      if (useConnections.toLowerCase() === 'y') {
+        for (const conn of available) {
+          const use = await ask(rl, `    Enable "${conn}"? (y/n)`, 'n');
+          if (use.toLowerCase() === 'y') {
+            connections.push(conn);
+          }
+        }
+
+        if (connections.length > 0) {
+          console.log(`\n  ✓ Selected connections: ${connections.join(', ')}`);
+          console.log('  Remember to set the required environment variables on the remote server.');
+        } else {
+          console.log('\n  No connections selected.');
+        }
+      }
+    } else {
+      console.log('  No connection templates found.');
+    }
+
+    // Step 5: Route configuration
+    console.log('\n─── Step 5: Custom Route Configuration ───\n');
     console.log('  Configure routes (each route scopes secrets and headers to endpoint patterns).');
     console.log('  Enter endpoint patterns first, then headers and secrets for each route.');
     console.log('  Press Enter with empty pattern to finish adding routes.\n');
@@ -124,10 +163,7 @@ This will:
       console.log(`\n  ── Route ${routeIndex} ──`);
 
       // Route metadata (optional)
-      const routeName = await ask(
-        rl,
-        '  Route name (e.g., "GitHub API", empty to skip)',
-      );
+      const routeName = await ask(rl, '  Route name (e.g., "GitHub API", empty to skip)');
 
       // Endpoint patterns (required)
       const endpointPatterns: string[] = [];
@@ -147,18 +183,9 @@ This will:
         break;
       }
 
-      const routeDescription = await ask(
-        rl,
-        '  Description (empty to skip)',
-      );
-      const routeDocsUrl = await ask(
-        rl,
-        '  API docs URL (empty to skip)',
-      );
-      const routeOpenApiUrl = await ask(
-        rl,
-        '  OpenAPI spec URL (empty to skip)',
-      );
+      const routeDescription = await ask(rl, '  Description (empty to skip)');
+      const routeDocsUrl = await ask(rl, '  API docs URL (empty to skip)');
+      const routeOpenApiUrl = await ask(rl, '  OpenAPI spec URL (empty to skip)');
 
       // Headers
       const headers: Record<string, string> = {};
@@ -216,6 +243,7 @@ This will:
       port: parseInt(port, 10),
       localKeysDir: REMOTE_KEYS_DIR,
       authorizedPeersDir: path.join(PEER_KEYS_DIR, 'authorized-clients'),
+      ...(connections.length > 0 && { connections }),
       routes,
       rateLimitPerMinute: 60,
     };
@@ -251,7 +279,8 @@ Sets up only the remote (secrets-holding) server side:
   - Generates a remote server keypair
   - Optionally imports the MCP proxy client's public keys
   - Configures server binding (host, port)
-  - Interactive route configuration (endpoints, headers, secrets)
+  - Selects pre-built connection templates (GitHub, Stripe, Trello, etc.)
+  - Interactive custom route configuration (endpoints, headers, secrets)
   - Writes remote.config.json
 
 Usage:

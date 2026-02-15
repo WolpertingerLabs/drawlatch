@@ -406,6 +406,171 @@ describe('loadRemoteConfig', () => {
   });
 });
 
+describe('loadRemoteConfig with connections', () => {
+  it('should append connection routes after manual routes', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      const filePath = String(p);
+      // remote.config.json exists, connection template exists
+      return filePath === REMOTE_CONFIG_PATH || filePath.endsWith('test-conn.json');
+    });
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
+      const filePath = String(p);
+      if (filePath === REMOTE_CONFIG_PATH) {
+        return JSON.stringify({
+          connections: ['test-conn'],
+          routes: [
+            {
+              name: 'Manual Route',
+              allowedEndpoints: ['https://api.manual.com/**'],
+            },
+          ],
+        });
+      }
+      if (filePath.endsWith('test-conn.json')) {
+        return JSON.stringify({
+          name: 'Test Connection',
+          allowedEndpoints: ['https://api.test.com/**'],
+          headers: { Authorization: 'Bearer ${TOKEN}' },
+          secrets: { TOKEN: '${TEST_TOKEN}' },
+        });
+      }
+      throw new Error(`Unexpected read: ${filePath}`);
+    });
+
+    const config = loadRemoteConfig();
+
+    expect(config.routes).toHaveLength(2);
+    expect(config.routes[0].name).toBe('Manual Route');
+    expect(config.routes[1].name).toBe('Test Connection');
+    expect(config.connections).toEqual(['test-conn']);
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
+  it('should work with connections and no manual routes', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      const filePath = String(p);
+      return filePath === REMOTE_CONFIG_PATH || filePath.endsWith('test-conn.json');
+    });
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
+      const filePath = String(p);
+      if (filePath === REMOTE_CONFIG_PATH) {
+        return JSON.stringify({
+          connections: ['test-conn'],
+        });
+      }
+      if (filePath.endsWith('test-conn.json')) {
+        return JSON.stringify({
+          name: 'Test Connection',
+          allowedEndpoints: ['https://api.test.com/**'],
+        });
+      }
+      throw new Error(`Unexpected read: ${filePath}`);
+    });
+
+    const config = loadRemoteConfig();
+
+    expect(config.routes).toHaveLength(1);
+    expect(config.routes[0].name).toBe('Test Connection');
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
+  it('should not modify routes when no connections field is present', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      return String(p) === REMOTE_CONFIG_PATH;
+    });
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        routes: [
+          {
+            name: 'Only Route',
+            allowedEndpoints: ['https://api.example.com/**'],
+          },
+        ],
+      }),
+    );
+
+    const config = loadRemoteConfig();
+
+    expect(config.routes).toHaveLength(1);
+    expect(config.routes[0].name).toBe('Only Route');
+    expect(config.connections).toBeUndefined();
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
+  it('should not modify routes when connections is an empty array', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      return String(p) === REMOTE_CONFIG_PATH;
+    });
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        connections: [],
+        routes: [
+          {
+            name: 'Only Route',
+            allowedEndpoints: ['https://api.example.com/**'],
+          },
+        ],
+      }),
+    );
+
+    const config = loadRemoteConfig();
+
+    expect(config.routes).toHaveLength(1);
+    expect(config.routes[0].name).toBe('Only Route');
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
+  it('should load multiple connections in order', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      const filePath = String(p);
+      return (
+        filePath === REMOTE_CONFIG_PATH ||
+        filePath.endsWith('conn-a.json') ||
+        filePath.endsWith('conn-b.json')
+      );
+    });
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
+      const filePath = String(p);
+      if (filePath === REMOTE_CONFIG_PATH) {
+        return JSON.stringify({
+          connections: ['conn-a', 'conn-b'],
+          routes: [],
+        });
+      }
+      if (filePath.endsWith('conn-a.json')) {
+        return JSON.stringify({
+          name: 'Connection A',
+          allowedEndpoints: ['https://api.a.com/**'],
+        });
+      }
+      if (filePath.endsWith('conn-b.json')) {
+        return JSON.stringify({
+          name: 'Connection B',
+          allowedEndpoints: ['https://api.b.com/**'],
+        });
+      }
+      throw new Error(`Unexpected read: ${filePath}`);
+    });
+
+    const config = loadRemoteConfig();
+
+    expect(config.routes).toHaveLength(2);
+    expect(config.routes[0].name).toBe('Connection A');
+    expect(config.routes[1].name).toBe('Connection B');
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+});
+
 describe('saveProxyConfig', () => {
   it('should create config directory and write proxy config file', () => {
     const mkdirSpy = vi.spyOn(fs, 'mkdirSync').mockReturnValue(undefined);

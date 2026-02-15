@@ -277,6 +277,7 @@ Create `.mcp-secure-proxy/remote.config.json`. This is where you define your API
 | `port` | Port to listen on | `9999` |
 | `localKeysDir` | Absolute path to the remote server's own keypair | `.mcp-secure-proxy/keys/remote` |
 | `authorizedPeersDir` | Directory containing authorized client public keys (one subdirectory per client) | `.mcp-secure-proxy/keys/peers/authorized-clients` |
+| `connections` | Array of pre-built connection template names to load (see [CONNECTIONS.md](CONNECTIONS.md)) | `[]` |
 | `routes` | Array of route definitions (see below) | `[]` |
 | `rateLimitPerMinute` | Max requests per minute per session | `60` |
 
@@ -308,6 +309,21 @@ Header values can reference secrets using `${VAR}` placeholders:
 ```
 
 The placeholder `${API_TOKEN}` is resolved against the route's resolved `secrets` map. This means the actual secret value is never exposed to the local proxy or Claude Code — it only exists on the remote server.
+
+### Connections (Pre-built Route Templates)
+
+Instead of manually configuring routes for popular APIs, you can use **connections** — pre-built route templates that ship with the package (`github`, `stripe`, `trello`). Reference them by name:
+
+```json
+{
+  "connections": ["github", "stripe"],
+  "routes": []
+}
+```
+
+Set the required environment variables (e.g., `GITHUB_TOKEN`, `STRIPE_SECRET_KEY`) and the connection templates handle endpoint patterns, auth headers, docs URLs, and OpenAPI specs automatically. Manual routes always take priority over connection routes.
+
+See **[CONNECTIONS.md](CONNECTIONS.md)** for the full list of available connections, required environment variables, and usage examples.
 
 ### Step 5: Start the Servers
 
@@ -394,6 +410,10 @@ src/
 │   ├── helpers.ts              # Shared CLI utilities
 │   ├── setup-local.ts          # Interactive local proxy setup
 │   └── setup-remote.ts         # Interactive remote server setup
+├── connections/                 # Pre-built route templates (JSON)
+│   ├── github.json         # GitHub REST API
+│   ├── stripe.json             # Stripe Payments API
+│   └── trello.json             # Trello Boards API
 ├── mcp/
 │   └── server.ts               # Local MCP proxy server (stdio transport)
 ├── remote/
@@ -402,7 +422,7 @@ src/
 │   └── server.e2e.test.ts      # End-to-end tests
 └── shared/
     ├── config.ts               # Config loading/saving, route resolution
-    ├── config.test.ts          # Config tests
+    ├── connections.ts           # Connection template loading
     ├── crypto/
     │   ├── keys.ts             # Ed25519 + X25519 key generation/serialization
     │   ├── channel.ts          # AES-256-GCM encrypted channel

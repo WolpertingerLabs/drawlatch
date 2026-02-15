@@ -14,6 +14,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { loadConnection } from './connections.js';
+
 /** Base directory for all config and keys.
  *  Defaults to .mcp-secure-proxy/ in the current working directory (repo-local).
  *  Override with MCP_CONFIG_DIR env var for custom deployments. */
@@ -93,6 +95,9 @@ export interface RemoteServerConfig {
   localKeysDir: string;
   /** Directory containing authorized peer public keys (one subdir per peer) */
   authorizedPeersDir: string;
+  /** Pre-built connection template names to load (e.g., ["stripe", "github"]).
+   *  Connection routes are appended after manual routes, so manual routes take priority. */
+  connections?: string[];
   /** Route definitions — each scopes secrets and headers to endpoint patterns */
   routes: Route[];
   /** Rate limit: max requests per minute per session */
@@ -161,19 +166,28 @@ export function loadProxyConfig(): ProxyConfig {
 export function loadRemoteConfig(): RemoteServerConfig {
   const def = remoteDefaults();
 
+  let config: RemoteServerConfig;
+
   // Try dedicated remote config file first
   if (fs.existsSync(REMOTE_CONFIG_PATH)) {
     const raw = JSON.parse(fs.readFileSync(REMOTE_CONFIG_PATH, 'utf-8'));
-    return { ...def, ...raw };
-  }
-
-  // Fall back to combined config.json
-  if (fs.existsSync(CONFIG_PATH)) {
+    config = { ...def, ...raw };
+  } else if (fs.existsSync(CONFIG_PATH)) {
+    // Fall back to combined config.json
     const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-    if (raw.remote) return { ...def, ...raw.remote };
+    config = raw.remote ? { ...def, ...raw.remote } : def;
+  } else {
+    config = def;
   }
 
-  return def;
+  // Resolve connections: load templates and append after manual routes.
+  // Manual routes are checked first by matchRoute(), so they take priority.
+  if (config.connections && config.connections.length > 0) {
+    const connectionRoutes = config.connections.map((name) => loadConnection(name));
+    config = { ...config, routes: [...config.routes, ...connectionRoutes] };
+  }
+
+  return config;
 }
 
 // ── Split config saving ─────────────────────────────────────────────────────
