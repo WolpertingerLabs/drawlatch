@@ -14,8 +14,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createApp } from './remote-server.js';
-import type { Config } from './config.js';
+import { createApp } from './server.js';
+import type { Config } from '../shared/config.js';
 import {
   generateKeyBundle,
   extractPublicKeys,
@@ -24,13 +24,13 @@ import {
   EncryptedChannel,
   type KeyBundle,
   type PublicKeyBundle,
-} from './crypto/index.js';
+} from '../shared/crypto/index.js';
 import {
   HandshakeInitiator,
   type HandshakeReply,
   type ProxyRequest,
   type ProxyResponse,
-} from './protocol/index.js';
+} from '../shared/protocol/index.js';
 
 // ── Test fixtures ─────────────────────────────────────────────────────────
 

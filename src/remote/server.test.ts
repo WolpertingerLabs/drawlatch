@@ -13,7 +13,7 @@ import {
   cleanupSessions,
   SESSION_TTL,
   HANDSHAKE_TTL,
-} from './remote-server.js';
+} from './server.js';
 
 // ── isEndpointAllowed ──────────────────────────────────────────────────────
 
