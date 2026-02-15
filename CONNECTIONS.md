@@ -70,3 +70,39 @@ You can use connections alongside manually defined routes. Manual routes are che
 ```
 
 Connection templates are stored as JSON files in `src/connections/`. You can inspect them to see exactly what headers, endpoints, and secrets each connection configures.
+
+## Planned Connections
+
+The following connections are on the roadmap to be added:
+
+### Tier 1 — High Priority
+- [ ] **Jira** — Project management (Atlassian)
+- [ ] **Notion** — Docs, wikis, and project management
+- [ ] **Google APIs** — Sheets, Docs, Drive, Calendar
+- [ ] **HubSpot** — CRM platform
+- [ ] **Twilio / SendGrid** — Messaging & email APIs
+
+### Tier 2 — Developer & Productivity
+- [ ] **GitLab** — Git hosting & CI/CD
+- [ ] **Bitbucket** — Git hosting (Atlassian ecosystem)
+- [ ] **Asana** — Project management
+- [ ] **Confluence** — Wiki & docs (Atlassian ecosystem)
+- [ ] **Discord** — Community & messaging platform
+- [ ] **Datadog** — Monitoring & observability
+- [ ] **PagerDuty** — Incident management
+
+### Tier 3 — Popular SaaS & Business Tools
+- [ ] **Airtable** — Spreadsheet/database hybrid
+- [ ] **Shopify** — E-commerce platform
+- [ ] **Intercom** — Customer support
+- [ ] **Zendesk** — Customer support
+- [ ] **Salesforce** — Enterprise CRM
+- [ ] **Monday.com** — Project management
+- [ ] **Figma** — Design platform
+
+### Tier 4 — Infrastructure & AI
+- [ ] **AWS** — S3, Lambda, etc.
+- [ ] **Cloudflare** — Edge, DNS, Workers
+- [ ] **OpenAI API** — LLM provider
+- [ ] **Anthropic API** — LLM provider
+- [ ] **OpenRouter** — Unified LLM API gateway
