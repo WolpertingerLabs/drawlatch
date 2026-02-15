@@ -9,3 +9,4 @@ coverage/
 
 # Environment files with secrets
 .env*
+.env
