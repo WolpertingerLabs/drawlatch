@@ -43,6 +43,15 @@ export interface ProxyConfig {
 
 /** A single route definition — scopes secrets and headers to a set of endpoints */
 export interface Route {
+  /** Human-readable name for this route (e.g., "GitHub API", "Stripe Payments").
+   *  Optional but recommended for discoverability by the local agent. */
+  name?: string;
+  /** Short description of what this route provides or what it's used for.
+   *  Optional — helps the agent understand the route's purpose. */
+  description?: string;
+  /** URL linking to API documentation for the service behind this route.
+   *  Optional — helps the agent find usage instructions. */
+  docsUrl?: string;
   /** Headers to inject automatically into outgoing requests for this route.
    *  These MUST NOT conflict with client-provided headers (request is rejected on conflict).
    *  Values may contain ${VAR} placeholders resolved against this route's secrets. */
@@ -57,6 +66,12 @@ export interface Route {
 
 /** A route after secret/header resolution — used at runtime */
 export interface ResolvedRoute {
+  /** Human-readable name for this route (carried from config) */
+  name?: string;
+  /** Short description of this route's purpose (carried from config) */
+  description?: string;
+  /** Link to API documentation for the service behind this route (carried from config) */
+  docsUrl?: string;
   headers: Record<string, string>;
   secrets: Record<string, string>;
   allowedEndpoints: string[];
@@ -215,6 +230,9 @@ export function resolveRoutes(routes: Route[]): ResolvedRoute[] {
       resolvedHeaders[key] = resolvePlaceholders(value, resolvedSecrets);
     }
     return {
+      ...(route.name !== undefined && { name: route.name }),
+      ...(route.description !== undefined && { description: route.description }),
+      ...(route.docsUrl !== undefined && { docsUrl: route.docsUrl }),
       headers: resolvedHeaders,
       secrets: resolvedSecrets,
       allowedEndpoints: route.allowedEndpoints,

@@ -280,16 +280,25 @@ const toolHandlers: Record<string, ToolHandler> = {
   },
 
   /**
-   * List available secret names (not values) across all routes.
+   * List available routes with metadata, endpoint patterns, and secret names (not values).
+   * Provides full disclosure of available routes for the local agent.
    */
-  list_secrets() {
-    const allNames = new Set<string>();
-    for (const route of resolvedRoutes) {
-      for (const name of Object.keys(route.secrets)) {
-        allNames.add(name);
-      }
-    }
-    return Promise.resolve([...allNames]);
+  list_routes() {
+    const routes = resolvedRoutes.map((route, index) => {
+      const info: Record<string, unknown> = { index };
+
+      if (route.name) info.name = route.name;
+      if (route.description) info.description = route.description;
+      if (route.docsUrl) info.docsUrl = route.docsUrl;
+
+      info.allowedEndpoints = route.allowedEndpoints;
+      info.secretNames = Object.keys(route.secrets);
+      info.autoHeaders = Object.keys(route.headers);
+
+      return info;
+    });
+
+    return Promise.resolve(routes);
   },
 };
 

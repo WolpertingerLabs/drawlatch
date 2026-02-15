@@ -232,13 +232,16 @@ describe('Encrypted requests', () => {
     channel = result.channel;
   });
 
-  it('should list secrets', async () => {
-    const response = await sendToolRequest(channel, 'list_secrets', {});
+  it('should list routes', async () => {
+    const response = await sendToolRequest(channel, 'list_routes', {});
     expect(response.success).toBe(true);
 
-    const names = response.result as string[];
-    expect(names).toContain('TEST_SECRET');
-    expect(names).toContain('API_KEY');
+    const routes = response.result as Array<Record<string, unknown>>;
+    expect(routes).toHaveLength(1);
+    expect(routes[0].index).toBe(0);
+    expect(routes[0].secretNames).toContain('TEST_SECRET');
+    expect(routes[0].secretNames).toContain('API_KEY');
+    expect(routes[0].allowedEndpoints).toEqual([]);
   });
 
   it('should return an error for unknown tools', async () => {
@@ -256,7 +259,7 @@ describe('Security', () => {
     const request: ProxyRequest = {
       type: 'proxy_request',
       id: crypto.randomUUID(),
-      toolName: 'list_secrets',
+      toolName: 'list_routes',
       toolInput: {},
       timestamp: Date.now(),
     };
@@ -329,8 +332,8 @@ describe('Security', () => {
     expect(session1.sessionId).not.toBe(session2.sessionId);
 
     // Both sessions should work independently
-    const resp1 = await sendToolRequest(session1.channel, 'list_secrets', {});
-    const resp2 = await sendToolRequest(session2.channel, 'list_secrets', {});
+    const resp1 = await sendToolRequest(session1.channel, 'list_routes', {});
+    const resp2 = await sendToolRequest(session2.channel, 'list_routes', {});
 
     expect(resp1.success).toBe(true);
     expect(resp2.success).toBe(true);
@@ -413,7 +416,7 @@ describe('Rate limiting', () => {
       const request: ProxyRequest = {
         type: 'proxy_request',
         id: crypto.randomUUID(),
-        toolName: 'list_secrets',
+        toolName: 'list_routes',
         toolInput: {},
         timestamp: Date.now(),
       };
@@ -435,7 +438,7 @@ describe('Rate limiting', () => {
     const request: ProxyRequest = {
       type: 'proxy_request',
       id: crypto.randomUUID(),
-      toolName: 'list_secrets',
+      toolName: 'list_routes',
       toolInput: {},
       timestamp: Date.now(),
     };
@@ -905,14 +908,161 @@ describe('Route isolation', () => {
     expect(response.error).toContain('Endpoint not allowed');
   });
 
-  it('should list secrets from all routes', async () => {
+  it('should list all routes with metadata', async () => {
     const channel = await isolationHandshake();
-    const response = await sendIsolationRequest(channel, 'list_secrets', {});
+    const response = await sendIsolationRequest(channel, 'list_routes', {});
 
     expect(response.success).toBe(true);
-    const names = response.result as string[];
-    expect(names).toContain('TOKEN_A');
-    expect(names).toContain('TOKEN_B');
+    const routes = response.result as Array<Record<string, unknown>>;
+    expect(routes).toHaveLength(2);
+
+    // Route 0 — targets server A
+    expect(routes[0].index).toBe(0);
+    expect(routes[0].secretNames).toContain('TOKEN_A');
+    expect(routes[0].autoHeaders).toContain('Authorization');
+
+    // Route 1 — targets server B
+    expect(routes[1].index).toBe(1);
+    expect(routes[1].secretNames).toContain('TOKEN_B');
+    expect(routes[1].autoHeaders).toContain('Authorization');
+  });
+});
+
+// ── Route metadata ─────────────────────────────────────────────────────────
+
+describe('Route metadata in list_routes', () => {
+  let metadataServer: Server;
+  let metadataUrl: string;
+
+  beforeAll(async () => {
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      localKeysDir: '',
+      authorizedPeersDir: '',
+      routes: [
+        {
+          name: 'GitHub API',
+          description: 'Access to GitHub REST API v3',
+          docsUrl: 'https://docs.github.com/en/rest',
+          secrets: { GH_TOKEN: 'ghp_test123' },
+          headers: { Authorization: 'Bearer ${GH_TOKEN}' },
+          allowedEndpoints: ['https://api.github.com/**'],
+        },
+        {
+          // Route without metadata — should still work
+          secrets: { STRIPE_KEY: 'sk_test_abc' },
+          allowedEndpoints: ['https://api.stripe.com/**'],
+        },
+        {
+          name: 'Internal API',
+          // description and docsUrl intentionally omitted
+          secrets: {},
+          allowedEndpoints: ['https://internal.example.com/**'],
+        },
+      ],
+      rateLimitPerMinute: 60,
+    };
+
+    const app = createApp({
+      config,
+      ownKeys: serverKeys,
+      authorizedPeers: [clientPub],
+    });
+
+    await new Promise<void>((resolve) => {
+      metadataServer = app.listen(0, '127.0.0.1', () => {
+        const addr = metadataServer.address() as AddressInfo;
+        metadataUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) => {
+      metadataServer.close((err) => (err ? reject(err) : resolve()));
+    });
+  });
+
+  async function metadataHandshake(): Promise<EncryptedChannel> {
+    const initiator = new HandshakeInitiator(clientKeys, serverPub);
+    const initMsg = initiator.createInit();
+    const initResp = await fetch(`${metadataUrl}/handshake/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(initMsg),
+    });
+    const reply = (await initResp.json()) as HandshakeReply;
+    const sessionKeys = initiator.processReply(reply);
+    const channel = new EncryptedChannel(sessionKeys);
+
+    const finishMsg = initiator.createFinish(sessionKeys);
+    await fetch(`${metadataUrl}/handshake/finish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Id': sessionKeys.sessionId,
+      },
+      body: JSON.stringify(finishMsg),
+    });
+
+    return channel;
+  }
+
+  async function sendMetadataRequest(
+    channel: EncryptedChannel,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+  ): Promise<ProxyResponse> {
+    const request: ProxyRequest = {
+      type: 'proxy_request',
+      id: crypto.randomUUID(),
+      toolName,
+      toolInput,
+      timestamp: Date.now(),
+    };
+    const encrypted = channel.encryptJSON(request);
+    const resp = await fetch(`${metadataUrl}/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Session-Id': channel.sessionId,
+      },
+      body: new Uint8Array(encrypted),
+    });
+    expect(resp.ok).toBe(true);
+    return channel.decryptJSON<ProxyResponse>(Buffer.from(await resp.arrayBuffer()));
+  }
+
+  it('should return route metadata fields when present', async () => {
+    const channel = await metadataHandshake();
+    const response = await sendMetadataRequest(channel, 'list_routes', {});
+
+    expect(response.success).toBe(true);
+    const routes = response.result as Array<Record<string, unknown>>;
+    expect(routes).toHaveLength(3);
+
+    // Route 0 — full metadata
+    expect(routes[0].name).toBe('GitHub API');
+    expect(routes[0].description).toBe('Access to GitHub REST API v3');
+    expect(routes[0].docsUrl).toBe('https://docs.github.com/en/rest');
+    expect(routes[0].allowedEndpoints).toEqual(['https://api.github.com/**']);
+    expect(routes[0].secretNames).toEqual(['GH_TOKEN']);
+    expect(routes[0].autoHeaders).toEqual(['Authorization']);
+
+    // Route 1 — no metadata
+    expect(routes[1].name).toBeUndefined();
+    expect(routes[1].description).toBeUndefined();
+    expect(routes[1].docsUrl).toBeUndefined();
+    expect(routes[1].secretNames).toEqual(['STRIPE_KEY']);
+
+    // Route 2 — partial metadata (name only)
+    expect(routes[2].name).toBe('Internal API');
+    expect(routes[2].description).toBeUndefined();
+    expect(routes[2].docsUrl).toBeUndefined();
+    expect(routes[2].secretNames).toEqual([]);
+    expect(routes[2].autoHeaders).toEqual([]);
   });
 });
 
@@ -1038,11 +1188,11 @@ describe('loadAuthorizedPeers via createApp', () => {
       });
       expect(finishResp.ok).toBe(true);
 
-      // Verify we can list secrets (confirms the session is usable)
+      // Verify we can list routes (confirms the session is usable)
       const request: ProxyRequest = {
         type: 'proxy_request',
         id: crypto.randomUUID(),
-        toolName: 'list_secrets',
+        toolName: 'list_routes',
         toolInput: {},
         timestamp: Date.now(),
       };
@@ -1058,7 +1208,9 @@ describe('loadAuthorizedPeers via createApp', () => {
       expect(resp.ok).toBe(true);
       const decrypted = channel.decryptJSON<ProxyResponse>(Buffer.from(await resp.arrayBuffer()));
       expect(decrypted.success).toBe(true);
-      expect(decrypted.result).toContain('TEST');
+      const routes = decrypted.result as Array<Record<string, unknown>>;
+      expect(routes).toHaveLength(1);
+      expect(routes[0].secretNames).toContain('TEST');
     } finally {
       await new Promise<void>((resolve) => {
         diskServer.close(() => resolve());
@@ -1121,7 +1273,7 @@ describe('Pending handshake state', () => {
     const request: ProxyRequest = {
       type: 'proxy_request',
       id: crypto.randomUUID(),
-      toolName: 'list_secrets',
+      toolName: 'list_routes',
       toolInput: {},
       timestamp: Date.now(),
     };

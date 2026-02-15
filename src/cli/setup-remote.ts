@@ -123,6 +123,12 @@ This will:
     while (addingRoutes) {
       console.log(`\n  ── Route ${routeIndex} ──`);
 
+      // Route metadata (optional)
+      const routeName = await ask(
+        rl,
+        '  Route name (e.g., "GitHub API", empty to skip)',
+      );
+
       // Endpoint patterns (required)
       const endpointPatterns: string[] = [];
       console.log('  Endpoint patterns (glob, e.g. https://api.example.com/**)');
@@ -140,6 +146,15 @@ This will:
         addingRoutes = false;
         break;
       }
+
+      const routeDescription = await ask(
+        rl,
+        '  Description (empty to skip)',
+      );
+      const routeDocsUrl = await ask(
+        rl,
+        '  API docs URL (empty to skip)',
+      );
 
       // Headers
       const headers: Record<string, string> = {};
@@ -173,11 +188,16 @@ This will:
         }
       }
 
-      routes.push({
-        headers: Object.keys(headers).length > 0 ? headers : undefined,
-        secrets: Object.keys(secrets).length > 0 ? secrets : undefined,
+      const route: Route = {
         allowedEndpoints: endpointPatterns,
-      });
+      };
+      if (routeName) route.name = routeName;
+      if (routeDescription) route.description = routeDescription;
+      if (routeDocsUrl) route.docsUrl = routeDocsUrl;
+      if (Object.keys(headers).length > 0) route.headers = headers;
+      if (Object.keys(secrets).length > 0) route.secrets = secrets;
+
+      routes.push(route);
       routeIndex++;
 
       const addMore = await ask(rl, '  Add another route? (y/n)', 'n');

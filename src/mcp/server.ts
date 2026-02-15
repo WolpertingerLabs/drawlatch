@@ -187,17 +187,19 @@ server.tool(
 );
 
 /**
- * List available secret names (not values) from the remote store.
+ * List all available routes from the remote server with full metadata.
+ * Returns route names, descriptions, docs links, endpoint patterns,
+ * secret names (not values), and auto-injected header names.
  */
 // eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
 server.tool(
-  'list_secrets',
-  'List the names of available secrets on the remote server. Does not return secret values.',
+  'list_routes',
+  'List all available routes on the remote server. Returns metadata (name, description, docs link), allowed endpoint patterns, available secret placeholder names (not values), and auto-injected header names for each route. Use this to discover which APIs are available and how to call them.',
   // Empty schema — no input needed
   { _: z.string().optional().describe('unused') },
   async () => {
     try {
-      const result = await sendEncryptedRequest('list_secrets', {});
+      const result = await sendEncryptedRequest('list_routes', {});
       return {
         content: [
           {
