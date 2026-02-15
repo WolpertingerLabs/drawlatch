@@ -68,6 +68,10 @@ export interface Route {
   /** Allowlisted URL patterns (glob). A request must match at least one pattern
    *  in this route's list to use this route. Empty = matches nothing. */
   allowedEndpoints: string[];
+  /** Whether to resolve ${VAR} placeholders in request bodies.
+   *  Defaults to false — prevents agents from exfiltrating secrets by
+   *  writing placeholder strings into API resources and reading them back. */
+  resolveSecretsInBody?: boolean;
 }
 
 /** A route after secret/header resolution — used at runtime */
@@ -83,6 +87,8 @@ export interface ResolvedRoute {
   headers: Record<string, string>;
   secrets: Record<string, string>;
   allowedEndpoints: string[];
+  /** Whether to resolve ${VAR} placeholders in request bodies (default: false) */
+  resolveSecretsInBody: boolean;
 }
 
 /** Remote server configuration */
@@ -257,6 +263,7 @@ export function resolveRoutes(routes: Route[]): ResolvedRoute[] {
       headers: resolvedHeaders,
       secrets: resolvedSecrets,
       allowedEndpoints: route.allowedEndpoints,
+      resolveSecretsInBody: route.resolveSecretsInBody ?? false,
     };
   });
 }

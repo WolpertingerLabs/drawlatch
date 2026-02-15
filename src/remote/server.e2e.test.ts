@@ -631,7 +631,7 @@ describe('http_request tool', () => {
     expect(result.body.auth).toBe('Bearer secret-jwt-token');
   });
 
-  it('should resolve placeholders in string body', async () => {
+  it('should NOT resolve placeholders in string body by default (resolveSecretsInBody=false)', async () => {
     const channel = await httpHandshake();
     const response = await sendHttpToolRequest(channel, 'http_request', {
       method: 'POST',
@@ -642,10 +642,11 @@ describe('http_request tool', () => {
 
     expect(response.success).toBe(true);
     const result = response.result as { body: { received: string } };
-    expect(result.body.received).toBe('my secret is super-secret-body');
+    // Placeholder should be left as-is — not resolved
+    expect(result.body.received).toBe('my secret is ${BODY_SECRET}');
   });
 
-  it('should resolve placeholders in object body and set Content-Type', async () => {
+  it('should NOT resolve placeholders in object body by default (resolveSecretsInBody=false)', async () => {
     const channel = await httpHandshake();
     const response = await sendHttpToolRequest(channel, 'http_request', {
       method: 'POST',
@@ -657,8 +658,9 @@ describe('http_request tool', () => {
     expect(response.success).toBe(true);
     const result = response.result as { body: { received: string; contentType: string } };
     const parsed = JSON.parse(result.body.received) as { key: string };
-    expect(parsed.key).toBe('super-secret-body');
-    // Should auto-set Content-Type when body is an object and no Content-Type header exists
+    // Placeholder should be left as-is — not resolved
+    expect(parsed.key).toBe('${BODY_SECRET}');
+    // Should still auto-set Content-Type when body is an object
     expect(result.body.contentType).toContain('application/json');
   });
 
@@ -687,6 +689,157 @@ describe('http_request tool', () => {
     const result = response.result as { body: { auth: string } };
     // The unknown placeholder should be left as-is
     expect(result.body.auth).toBe('${UNKNOWN_SECRET}');
+  });
+});
+
+// ── resolveSecretsInBody opt-in ──────────────────────────────────────────────
+
+describe('http_request with resolveSecretsInBody enabled', () => {
+  let bodyTargetServer: Server;
+  let bodyTargetUrl: string;
+  let bodyTestServer: Server;
+  let bodyTestUrl: string;
+
+  beforeAll(async () => {
+    // Target server that echoes the body back
+    bodyTargetServer = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk: Buffer) => {
+        body += chunk.toString();
+      });
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ received: body, contentType: req.headers['content-type'] }));
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      bodyTargetServer.listen(0, '127.0.0.1', () => {
+        const addr = bodyTargetServer.address() as AddressInfo;
+        bodyTargetUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      localKeysDir: '',
+      authorizedPeersDir: '',
+      routes: [
+        {
+          secrets: { MY_TOKEN: 'Bearer secret-jwt-token', BODY_SECRET: 'super-secret-body' },
+          allowedEndpoints: [`${bodyTargetUrl}/**`],
+          resolveSecretsInBody: true,
+        },
+      ],
+      rateLimitPerMinute: 60,
+    };
+
+    const app = createApp({
+      config,
+      ownKeys: serverKeys,
+      authorizedPeers: [clientPub],
+    });
+
+    await new Promise<void>((resolve) => {
+      bodyTestServer = app.listen(0, '127.0.0.1', () => {
+        const addr = bodyTestServer.address() as AddressInfo;
+        bodyTestUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await Promise.all([
+      new Promise<void>((resolve, reject) => {
+        bodyTargetServer.close((err) => (err ? reject(err) : resolve()));
+      }),
+      new Promise<void>((resolve, reject) => {
+        bodyTestServer.close((err) => (err ? reject(err) : resolve()));
+      }),
+    ]);
+  });
+
+  async function bodyHandshake(): Promise<EncryptedChannel> {
+    const initiator = new HandshakeInitiator(clientKeys, serverPub);
+    const initMsg = initiator.createInit();
+    const initResp = await fetch(`${bodyTestUrl}/handshake/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(initMsg),
+    });
+    const reply = (await initResp.json()) as HandshakeReply;
+    const sessionKeys = initiator.processReply(reply);
+    const channel = new EncryptedChannel(sessionKeys);
+
+    const finishMsg = initiator.createFinish(sessionKeys);
+    await fetch(`${bodyTestUrl}/handshake/finish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Id': sessionKeys.sessionId,
+      },
+      body: JSON.stringify(finishMsg),
+    });
+
+    return channel;
+  }
+
+  async function sendBodyToolRequest(
+    channel: EncryptedChannel,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+  ): Promise<ProxyResponse> {
+    const request: ProxyRequest = {
+      type: 'proxy_request',
+      id: crypto.randomUUID(),
+      toolName,
+      toolInput,
+      timestamp: Date.now(),
+    };
+    const encrypted = channel.encryptJSON(request);
+    const resp = await fetch(`${bodyTestUrl}/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Session-Id': channel.sessionId,
+      },
+      body: new Uint8Array(encrypted),
+    });
+    expect(resp.ok).toBe(true);
+    return channel.decryptJSON<ProxyResponse>(Buffer.from(await resp.arrayBuffer()));
+  }
+
+  it('should resolve placeholders in string body when resolveSecretsInBody is true', async () => {
+    const channel = await bodyHandshake();
+    const response = await sendBodyToolRequest(channel, 'http_request', {
+      method: 'POST',
+      url: `${bodyTargetUrl}/echo`,
+      headers: { 'Content-Type': 'text/plain' },
+      body: 'my secret is ${BODY_SECRET}',
+    });
+
+    expect(response.success).toBe(true);
+    const result = response.result as { body: { received: string } };
+    expect(result.body.received).toBe('my secret is super-secret-body');
+  });
+
+  it('should resolve placeholders in object body when resolveSecretsInBody is true', async () => {
+    const channel = await bodyHandshake();
+    const response = await sendBodyToolRequest(channel, 'http_request', {
+      method: 'POST',
+      url: `${bodyTargetUrl}/echo`,
+      headers: {},
+      body: { key: '${BODY_SECRET}' },
+    });
+
+    expect(response.success).toBe(true);
+    const result = response.result as { body: { received: string; contentType: string } };
+    const parsed = JSON.parse(result.body.received) as { key: string };
+    expect(parsed.key).toBe('super-secret-body');
+    expect(result.body.contentType).toContain('application/json');
   });
 });
 

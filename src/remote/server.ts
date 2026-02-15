@@ -240,12 +240,20 @@ const toolHandlers: Record<string, ToolHandler> = {
       resolvedHeaders[k] = v;
     }
 
-    // Step 5: Resolve body placeholders using matched route's secrets
+    // Step 5: Resolve body placeholders using matched route's secrets.
+    // Only when the route explicitly opts in via resolveSecretsInBody — prevents
+    // exfiltration of secrets by writing placeholder strings into API resources
+    // and reading them back.
     let resolvedBody: string | undefined;
     if (typeof body === 'string') {
-      resolvedBody = resolvePlaceholders(body, matched.secrets);
+      resolvedBody = matched.resolveSecretsInBody
+        ? resolvePlaceholders(body, matched.secrets)
+        : body;
     } else if (body !== null && body !== undefined) {
-      resolvedBody = resolvePlaceholders(JSON.stringify(body), matched.secrets);
+      const serialized = JSON.stringify(body);
+      resolvedBody = matched.resolveSecretsInBody
+        ? resolvePlaceholders(serialized, matched.secrets)
+        : serialized;
       if (!resolvedHeaders['content-type'] && !resolvedHeaders['Content-Type']) {
         resolvedHeaders['Content-Type'] = 'application/json';
       }

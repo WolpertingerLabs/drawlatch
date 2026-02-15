@@ -192,6 +192,41 @@ describe('resolveRoutes', () => {
     expect(routes[1].secrets).toEqual({ KEY_B: 'value-b' });
   });
 
+  it('should default resolveSecretsInBody to false', () => {
+    const routes = resolveRoutes([
+      {
+        secrets: { KEY: 'value' },
+        allowedEndpoints: ['https://api.example.com/**'],
+      },
+    ]);
+
+    expect(routes[0].resolveSecretsInBody).toBe(false);
+  });
+
+  it('should carry through resolveSecretsInBody when explicitly set to true', () => {
+    const routes = resolveRoutes([
+      {
+        secrets: { KEY: 'value' },
+        allowedEndpoints: ['https://api.example.com/**'],
+        resolveSecretsInBody: true,
+      },
+    ]);
+
+    expect(routes[0].resolveSecretsInBody).toBe(true);
+  });
+
+  it('should carry through resolveSecretsInBody when explicitly set to false', () => {
+    const routes = resolveRoutes([
+      {
+        secrets: { KEY: 'value' },
+        allowedEndpoints: ['https://api.example.com/**'],
+        resolveSecretsInBody: false,
+      },
+    ]);
+
+    expect(routes[0].resolveSecretsInBody).toBe(false);
+  });
+
   it('should resolve header placeholders against the route own secrets', () => {
     const routes = resolveRoutes([
       {
