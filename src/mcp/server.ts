@@ -145,7 +145,7 @@ const server = new McpServer({
 // eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
 server.tool(
   'secure_request',
-  'Make an authenticated HTTP request through the encrypted proxy. Use ${VAR_NAME} placeholders for secrets — they are resolved server-side and never exposed to the client.',
+  "Make an authenticated HTTP request through the encrypted proxy. Route-level headers (e.g., Authorization) are injected automatically by the server — do not send them yourself. You may use ${VAR_NAME} placeholders for other secrets in the URL, headers, or body — they are resolved server-side using the matched route's secrets and never exposed to the client.",
   {
     method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).describe('HTTP method'),
     url: z.string().describe('Full URL, may contain ${VAR} placeholders'),

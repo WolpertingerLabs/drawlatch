@@ -17,7 +17,12 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { loadConfig, resolveSecrets } from '../shared/config.js';
+import {
+  loadConfig,
+  resolveRoutes,
+  resolvePlaceholders,
+  type ResolvedRoute,
+} from '../shared/config.js';
 import {
   loadKeyBundle,
   loadPublicKeys,
@@ -55,8 +60,7 @@ export interface PendingHandshake {
 const sessions = new Map<string, Session>();
 const pendingHandshakes = new Map<string, PendingHandshake>();
 
-let secrets: Record<string, string> = {};
-let allowedEndpoints: string[] = [];
+let resolvedRoutes: ResolvedRoute[] = [];
 let rateLimitPerMinute = 60;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -105,12 +109,20 @@ export function isEndpointAllowed(url: string, patterns: string[]): boolean {
   });
 }
 
-export function resolvePlaceholders(str: string, secretsMap: Record<string, string>): string {
-  return str.replace(/\$\{(\w+)\}/g, (match, name: string) => {
-    if (name in secretsMap) return secretsMap[name];
-    console.error(`[remote] Warning: placeholder ${match} not found in secrets`);
-    return match;
-  });
+// Re-export resolvePlaceholders from config for backward compatibility with tests
+export { resolvePlaceholders } from '../shared/config.js';
+
+/**
+ * Find the first route whose allowedEndpoints match the given URL.
+ * Routes with empty allowedEndpoints match nothing.
+ */
+export function matchRoute(url: string, routes: ResolvedRoute[]): ResolvedRoute | null {
+  for (const route of routes) {
+    if (route.allowedEndpoints.length > 0 && isEndpointAllowed(url, route.allowedEndpoints)) {
+      return route;
+    }
+  }
+  return null;
 }
 
 export function checkRateLimit(
@@ -170,7 +182,7 @@ type ToolHandler = (input: Record<string, unknown>) => Promise<unknown>;
 
 const toolHandlers: Record<string, ToolHandler> = {
   /**
-   * Proxied HTTP request with secret injection.
+   * Proxied HTTP request with route-scoped secret injection.
    */
   async http_request(input) {
     const { method, url, headers, body } = input as {
@@ -180,29 +192,69 @@ const toolHandlers: Record<string, ToolHandler> = {
       body?: unknown;
     };
 
-    // Resolve secret placeholders in URL and headers
-    const resolvedUrl = resolvePlaceholders(url, secrets);
-    const resolvedHeaders: Record<string, string> = {};
-    for (const [k, v] of Object.entries(headers)) {
-      resolvedHeaders[k] = resolvePlaceholders(v, secrets);
+    // Step 1: Find matching route — try raw URL first
+    let matched: ResolvedRoute | null = matchRoute(url, resolvedRoutes);
+    let resolvedUrl = url;
+
+    if (matched) {
+      // Resolve URL placeholders using matched route's secrets
+      resolvedUrl = resolvePlaceholders(url, matched.secrets);
+    } else {
+      // Try resolving URL with each route's secrets to find a match
+      for (const route of resolvedRoutes) {
+        if (route.allowedEndpoints.length === 0) continue;
+        const candidateUrl = resolvePlaceholders(url, route.secrets);
+        if (isEndpointAllowed(candidateUrl, route.allowedEndpoints)) {
+          matched = route;
+          resolvedUrl = candidateUrl;
+          break;
+        }
+      }
     }
 
-    // Check endpoint allowlist
-    if (!isEndpointAllowed(resolvedUrl, allowedEndpoints)) {
+    if (!matched) {
       throw new Error(`Endpoint not allowed: ${url}`);
     }
 
-    // Resolve body placeholders if it's a string
+    // Step 2: Resolve client headers using matched route's secrets
+    const resolvedHeaders: Record<string, string> = {};
+    for (const [k, v] of Object.entries(headers)) {
+      resolvedHeaders[k] = resolvePlaceholders(v, matched.secrets);
+    }
+
+    // Step 3: Check for header conflicts — reject if client provides a header
+    // that conflicts with a route-level header (case-insensitive)
+    const routeHeaderKeys = new Set(Object.keys(matched.headers).map((k) => k.toLowerCase()));
+    for (const clientKey of Object.keys(resolvedHeaders)) {
+      if (routeHeaderKeys.has(clientKey.toLowerCase())) {
+        throw new Error(
+          `Header conflict: client-provided header "${clientKey}" conflicts with a route-level header. Remove it from the request.`,
+        );
+      }
+    }
+
+    // Step 4: Merge route-level headers (they take effect after conflict check)
+    for (const [k, v] of Object.entries(matched.headers)) {
+      resolvedHeaders[k] = v;
+    }
+
+    // Step 5: Resolve body placeholders using matched route's secrets
     let resolvedBody: string | undefined;
     if (typeof body === 'string') {
-      resolvedBody = resolvePlaceholders(body, secrets);
+      resolvedBody = resolvePlaceholders(body, matched.secrets);
     } else if (body !== null && body !== undefined) {
-      resolvedBody = resolvePlaceholders(JSON.stringify(body), secrets);
+      resolvedBody = resolvePlaceholders(JSON.stringify(body), matched.secrets);
       if (!resolvedHeaders['content-type'] && !resolvedHeaders['Content-Type']) {
         resolvedHeaders['Content-Type'] = 'application/json';
       }
     }
 
+    // Step 6: Final endpoint check on fully resolved URL
+    if (!isEndpointAllowed(resolvedUrl, matched.allowedEndpoints)) {
+      throw new Error(`Endpoint not allowed after resolution: ${url}`);
+    }
+
+    // Step 7: Make the actual HTTP request
     const resp = await fetch(resolvedUrl, {
       method,
       headers: resolvedHeaders,
@@ -227,10 +279,16 @@ const toolHandlers: Record<string, ToolHandler> = {
   },
 
   /**
-   * List available secret names (not values).
+   * List available secret names (not values) across all routes.
    */
   list_secrets() {
-    return Promise.resolve(Object.keys(secrets));
+    const allNames = new Set<string>();
+    for (const route of resolvedRoutes) {
+      for (const name of Object.keys(route.secrets)) {
+        allNames.add(name);
+      }
+    }
+    return Promise.resolve([...allNames]);
   },
 };
 
@@ -260,13 +318,18 @@ export function createApp(options: CreateAppOptions = {}) {
   const authorizedPeers =
     options.authorizedPeers ?? loadAuthorizedPeers(config.remote.authorizedPeersDir);
 
-  secrets = resolveSecrets(config.remote.secrets);
-  allowedEndpoints = config.remote.allowedEndpoints;
+  resolvedRoutes = resolveRoutes(config.remote.routes);
   rateLimitPerMinute = config.remote.rateLimitPerMinute;
 
-  console.log(`[remote] Loaded ${Object.keys(secrets).length} secrets`);
+  console.log(`[remote] Loaded ${resolvedRoutes.length} route(s)`);
+  for (const [i, route] of resolvedRoutes.entries()) {
+    console.log(
+      `[remote]   Route ${i}: ${Object.keys(route.secrets).length} secrets, ` +
+        `${route.allowedEndpoints.length} endpoint patterns, ` +
+        `${Object.keys(route.headers).length} auto-headers`,
+    );
+  }
   console.log(`[remote] ${authorizedPeers.length} authorized peer(s)`);
-  console.log(`[remote] ${allowedEndpoints.length} allowed endpoint pattern(s)`);
   console.log(`[remote] Rate limit: ${rateLimitPerMinute} req/min per session`);
 
   // ── Handshake init ─────────────────────────────────────────────────────

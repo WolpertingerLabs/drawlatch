@@ -2,13 +2,15 @@
  * Unit tests for remote-server exported helpers.
  *
  * Tests the actual exported functions from remote-server.ts:
- * isEndpointAllowed, resolvePlaceholders, checkRateLimit, and cleanupSessions.
+ * isEndpointAllowed, resolvePlaceholders, matchRoute, checkRateLimit, and cleanupSessions.
  */
 import { describe, it, expect } from 'vitest';
+import type { ResolvedRoute } from '../shared/config.js';
 
 import {
   isEndpointAllowed,
   resolvePlaceholders,
+  matchRoute,
   checkRateLimit,
   cleanupSessions,
   SESSION_TTL,
@@ -99,6 +101,70 @@ describe('resolvePlaceholders', () => {
   it('should handle secrets with special characters', () => {
     const secrets = { PASS: 'p@$$w0rd!&' };
     expect(resolvePlaceholders('password=${PASS}', secrets)).toBe('password=p@$$w0rd!&');
+  });
+});
+
+// ── matchRoute ──────────────────────────────────────────────────────────────
+
+describe('matchRoute', () => {
+  const routes: ResolvedRoute[] = [
+    {
+      headers: { Authorization: 'Bearer token-a' },
+      secrets: { KEY_A: 'value-a' },
+      allowedEndpoints: ['https://api.a.com/**'],
+    },
+    {
+      headers: { Authorization: 'Bearer token-b' },
+      secrets: { KEY_B: 'value-b' },
+      allowedEndpoints: ['https://api.b.com/**'],
+    },
+  ];
+
+  it('should return the first matching route', () => {
+    const match = matchRoute('https://api.a.com/v1/data', routes);
+    expect(match).toBe(routes[0]);
+  });
+
+  it('should return the second route for matching URL', () => {
+    const match = matchRoute('https://api.b.com/v2/users', routes);
+    expect(match).toBe(routes[1]);
+  });
+
+  it('should return null when no route matches', () => {
+    const match = matchRoute('https://api.evil.com/hack', routes);
+    expect(match).toBeNull();
+  });
+
+  it('should return the first match when multiple routes could match', () => {
+    const overlappingRoutes: ResolvedRoute[] = [
+      { headers: {}, secrets: { A: '1' }, allowedEndpoints: ['https://api.example.com/**'] },
+      { headers: {}, secrets: { B: '2' }, allowedEndpoints: ['https://api.example.com/v1/**'] },
+    ];
+    const match = matchRoute('https://api.example.com/v1/data', overlappingRoutes);
+    expect(match).toBe(overlappingRoutes[0]);
+  });
+
+  it('should skip routes with empty allowedEndpoints', () => {
+    const routesWithEmpty: ResolvedRoute[] = [
+      { headers: {}, secrets: {}, allowedEndpoints: [] },
+      { headers: {}, secrets: { KEY: 'val' }, allowedEndpoints: ['https://api.example.com/**'] },
+    ];
+    const match = matchRoute('https://api.example.com/data', routesWithEmpty);
+    expect(match).toBe(routesWithEmpty[1]);
+  });
+
+  it('should return null when all routes have empty allowedEndpoints', () => {
+    const emptyRoutes: ResolvedRoute[] = [
+      { headers: {}, secrets: {}, allowedEndpoints: [] },
+      { headers: {}, secrets: {}, allowedEndpoints: [] },
+    ];
+    const match = matchRoute('https://anything.com', emptyRoutes);
+    expect(match).toBeNull();
+  });
+
+  it('should return null for empty routes array', () => {
+    const match = matchRoute('https://api.example.com/data', []);
+    expect(match).toBeNull();
   });
 });
 

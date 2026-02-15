@@ -35,6 +35,7 @@ import {
   PEER_KEYS_DIR,
   saveConfig,
   type Config,
+  type Route,
 } from '../shared/config.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -140,40 +141,83 @@ This will:
       port: parseInt(port, 10),
       localKeysDir: REMOTE_KEYS_DIR,
       authorizedPeersDir: path.join(PEER_KEYS_DIR, 'authorized-clients'),
-      secrets: {},
-      allowedEndpoints: [],
+      routes: [],
       rateLimitPerMinute: 60,
     },
   };
 
-  // Add secrets
-  console.log('\n  Configure secrets (env var references like ${API_KEY}):');
-  console.log('  Press Enter with empty name to finish.\n');
+  // Add routes
+  console.log('\n  Configure routes (each route scopes secrets and headers to endpoint patterns):');
+  console.log('  Enter endpoint patterns first, then headers and secrets for each route.');
+  console.log('  Press Enter with empty pattern to finish adding routes.\n');
 
-  let addingSecrets = true;
-  while (addingSecrets) {
-    const name = await ask('  Secret name (empty to finish)');
-    if (!name) {
-      addingSecrets = false;
-    } else {
-      const value = await ask(`  Value for "${name}" (use \${VAR} for env vars)`, `\${${name}}`);
-      config.remote.secrets[name] = value;
+  const routes: Route[] = [];
+  let addingRoutes = true;
+  let routeIndex = 1;
+
+  while (addingRoutes) {
+    console.log(`\n  ── Route ${routeIndex} ──`);
+
+    // Endpoint patterns (required)
+    const endpointPatterns: string[] = [];
+    console.log('  Endpoint patterns (glob, e.g. https://api.example.com/**)');
+    let addingEndpoints = true;
+    while (addingEndpoints) {
+      const pattern = await ask('    Endpoint pattern (empty to finish)');
+      if (!pattern) {
+        addingEndpoints = false;
+      } else {
+        endpointPatterns.push(pattern);
+      }
+    }
+
+    if (endpointPatterns.length === 0) {
+      addingRoutes = false;
+      break;
+    }
+
+    // Headers
+    const headers: Record<string, string> = {};
+    console.log('  Headers to auto-inject (e.g., Authorization: Bearer ${API_KEY})');
+    let addingHeaders = true;
+    while (addingHeaders) {
+      const name = await ask('    Header name (empty to finish)');
+      if (!name) {
+        addingHeaders = false;
+      } else {
+        const value = await ask(`    Value for "${name}"`);
+        headers[name] = value;
+      }
+    }
+
+    // Secrets
+    const secrets: Record<string, string> = {};
+    console.log('  Secrets for this route (env var references like ${API_KEY})');
+    let addingSecrets = true;
+    while (addingSecrets) {
+      const name = await ask('    Secret name (empty to finish)');
+      if (!name) {
+        addingSecrets = false;
+      } else {
+        const value = await ask(`    Value for "${name}" (use \${VAR} for env vars)`, `\${${name}}`);
+        secrets[name] = value;
+      }
+    }
+
+    routes.push({
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
+      secrets: Object.keys(secrets).length > 0 ? secrets : undefined,
+      allowedEndpoints: endpointPatterns,
+    });
+    routeIndex++;
+
+    const addMore = await ask('  Add another route? (y/n)', 'n');
+    if (addMore.toLowerCase() !== 'y') {
+      addingRoutes = false;
     }
   }
 
-  // Add endpoint allowlist
-  console.log('\n  Allowed endpoint patterns (glob, e.g. https://api.example.com/**)');
-  console.log('  Leave empty to allow all endpoints.\n');
-
-  let addingEndpoints = true;
-  while (addingEndpoints) {
-    const pattern = await ask('  Endpoint pattern (empty to finish)');
-    if (!pattern) {
-      addingEndpoints = false;
-    } else {
-      config.remote.allowedEndpoints.push(pattern);
-    }
-  }
+  config.remote.routes = routes;
 
   saveConfig(config);
   console.log(`\n  ✓ Config saved to ${CONFIG_PATH}`);
@@ -185,7 +229,7 @@ This will:
   rl.close();
   console.log('\n✓ Setup complete!\n');
   console.log('Next steps:');
-  console.log(`  1. Add secrets to the config: edit ${CONFIG_PATH}`);
+  console.log(`  1. Review/edit routes in the config: ${CONFIG_PATH}`);
   console.log('  2. Start the remote server: npm run dev:remote');
   console.log('  3. Run the `claude mcp add` command printed above');
   console.log('  4. Restart Claude Code\n');

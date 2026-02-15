@@ -33,6 +33,27 @@ export interface ProxyConfig {
   requestTimeout: number;
 }
 
+/** A single route definition — scopes secrets and headers to a set of endpoints */
+export interface Route {
+  /** Headers to inject automatically into outgoing requests for this route.
+   *  These MUST NOT conflict with client-provided headers (request is rejected on conflict).
+   *  Values may contain ${VAR} placeholders resolved against this route's secrets. */
+  headers?: Record<string, string>;
+  /** Secrets available for ${VAR} placeholder resolution in this route only.
+   *  Values can be literals or "${ENV_VAR}" references resolved at startup. */
+  secrets?: Record<string, string>;
+  /** Allowlisted URL patterns (glob). A request must match at least one pattern
+   *  in this route's list to use this route. Empty = matches nothing. */
+  allowedEndpoints: string[];
+}
+
+/** A route after secret/header resolution — used at runtime */
+export interface ResolvedRoute {
+  headers: Record<string, string>;
+  secrets: Record<string, string>;
+  allowedEndpoints: string[];
+}
+
 /** Remote server configuration */
 export interface RemoteServerConfig {
   /** Host to bind to */
@@ -43,10 +64,8 @@ export interface RemoteServerConfig {
   localKeysDir: string;
   /** Directory containing authorized peer public keys (one subdir per peer) */
   authorizedPeersDir: string;
-  /** Secrets configuration — env vars to inject */
-  secrets: Record<string, string>;
-  /** Allowlisted URL patterns for API proxying */
-  allowedEndpoints: string[];
+  /** Route definitions — each scopes secrets and headers to endpoint patterns */
+  routes: Route[];
   /** Rate limit: max requests per minute per session */
   rateLimitPerMinute: number;
 }
@@ -71,8 +90,7 @@ function defaults(): Config {
       port: 9999,
       localKeysDir: REMOTE_KEYS_DIR,
       authorizedPeersDir: path.join(PEER_KEYS_DIR, 'authorized-clients'),
-      secrets: {},
-      allowedEndpoints: [],
+      routes: [],
       rateLimitPerMinute: 60,
     },
   };
@@ -96,6 +114,18 @@ export function saveConfig(config: Config): void {
 }
 
 /**
+ * Replace ${VAR} placeholders in a string with values from a secrets map.
+ * Unknown placeholders are left unchanged (with a warning).
+ */
+export function resolvePlaceholders(str: string, secretsMap: Record<string, string>): string {
+  return str.replace(/\$\{(\w+)\}/g, (match, name: string) => {
+    if (name in secretsMap) return secretsMap[name];
+    console.error(`[config] Warning: placeholder ${match} not found in secrets`);
+    return match;
+  });
+}
+
+/**
  * Load secrets from the config's secrets map, resolving from environment
  * variables. Value can be a literal string or "${VAR_NAME}" to read from env.
  */
@@ -115,4 +145,23 @@ export function resolveSecrets(secretsMap: Record<string, string>): Record<strin
     }
   }
   return resolved;
+}
+
+/**
+ * Resolve all routes: resolve secrets from env vars, then resolve header
+ * placeholders against each route's own resolved secrets.
+ */
+export function resolveRoutes(routes: Route[]): ResolvedRoute[] {
+  return routes.map((route) => {
+    const resolvedSecrets = resolveSecrets(route.secrets ?? {});
+    const resolvedHeaders: Record<string, string> = {};
+    for (const [key, value] of Object.entries(route.headers ?? {})) {
+      resolvedHeaders[key] = resolvePlaceholders(value, resolvedSecrets);
+    }
+    return {
+      headers: resolvedHeaders,
+      secrets: resolvedSecrets,
+      allowedEndpoints: route.allowedEndpoints,
+    };
+  });
 }

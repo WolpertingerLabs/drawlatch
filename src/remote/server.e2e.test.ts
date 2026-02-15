@@ -3,7 +3,7 @@
  *
  * Boots a real Express app with in-memory keys, performs handshakes
  * over HTTP, sends encrypted requests, and validates the full flow.
- * Replaces the old test-integration.ts custom harness.
+ * Tests route-based secret scoping, header injection, and header conflict rejection.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { Server } from 'node:http';
@@ -68,8 +68,12 @@ beforeAll(async () => {
       port: 0, // not used — we listen on a random port
       localKeysDir: '',
       authorizedPeersDir: '',
-      secrets: testSecrets, // literal values, no env var resolution needed
-      allowedEndpoints: [], // empty = allow all
+      routes: [
+        {
+          secrets: testSecrets, // literal values, no env var resolution needed
+          allowedEndpoints: [], // empty = matches nothing (we use a different server for http_request tests)
+        },
+      ],
       rateLimitPerMinute: 60,
     },
   };
@@ -362,8 +366,12 @@ describe('Rate limiting', () => {
         port: 0,
         localKeysDir: '',
         authorizedPeersDir: '',
-        secrets: { SECRET: 'value' },
-        allowedEndpoints: [],
+        routes: [
+          {
+            secrets: { SECRET: 'value' },
+            allowedEndpoints: [],
+          },
+        ],
         rateLimitPerMinute: 3, // Very low limit for testing
       },
     };
@@ -504,7 +512,7 @@ describe('http_request tool', () => {
       });
     });
 
-    // Create the MCP server with allowedEndpoints set to our target server
+    // Create the MCP server with route-based config
     const config: Config = {
       proxy: {
         remoteUrl: '',
@@ -518,8 +526,12 @@ describe('http_request tool', () => {
         port: 0,
         localKeysDir: '',
         authorizedPeersDir: '',
-        secrets: { MY_TOKEN: 'Bearer secret-jwt-token', BODY_SECRET: 'super-secret-body' },
-        allowedEndpoints: [`${targetUrl}/**`],
+        routes: [
+          {
+            secrets: { MY_TOKEN: 'Bearer secret-jwt-token', BODY_SECRET: 'super-secret-body' },
+            allowedEndpoints: [`${targetUrl}/**`],
+          },
+        ],
         rateLimitPerMinute: 60,
       },
     };
@@ -702,6 +714,244 @@ describe('http_request tool', () => {
   });
 });
 
+// ── Route isolation ────────────────────────────────────────────────────────
+
+describe('Route isolation', () => {
+  let targetServerA: Server;
+  let targetUrlA: string;
+  let targetServerB: Server;
+  let targetUrlB: string;
+  let isolationServer: Server;
+  let isolationUrl: string;
+
+  beforeAll(async () => {
+    // Create two target HTTP servers
+    targetServerA = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ server: 'A', auth: req.headers.authorization ?? null }));
+    });
+    targetServerB = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ server: 'B', auth: req.headers.authorization ?? null }));
+    });
+
+    await Promise.all([
+      new Promise<void>((resolve) => {
+        targetServerA.listen(0, '127.0.0.1', () => {
+          const addr = targetServerA.address() as AddressInfo;
+          targetUrlA = `http://127.0.0.1:${addr.port}`;
+          resolve();
+        });
+      }),
+      new Promise<void>((resolve) => {
+        targetServerB.listen(0, '127.0.0.1', () => {
+          const addr = targetServerB.address() as AddressInfo;
+          targetUrlB = `http://127.0.0.1:${addr.port}`;
+          resolve();
+        });
+      }),
+    ]);
+
+    // Create a server with two routes pointing to different targets
+    const config: Config = {
+      proxy: {
+        remoteUrl: '',
+        localKeysDir: '',
+        remotePublicKeysDir: '',
+        connectTimeout: 10_000,
+        requestTimeout: 30_000,
+      },
+      remote: {
+        host: '127.0.0.1',
+        port: 0,
+        localKeysDir: '',
+        authorizedPeersDir: '',
+        routes: [
+          {
+            headers: { Authorization: 'Bearer route-a-token' },
+            secrets: { TOKEN_A: 'secret-a-value' },
+            allowedEndpoints: [`${targetUrlA}/**`],
+          },
+          {
+            headers: { Authorization: 'Bearer route-b-token' },
+            secrets: { TOKEN_B: 'secret-b-value' },
+            allowedEndpoints: [`${targetUrlB}/**`],
+          },
+        ],
+        rateLimitPerMinute: 60,
+      },
+    };
+
+    const app = createApp({
+      config,
+      ownKeys: serverKeys,
+      authorizedPeers: [clientPub],
+    });
+
+    await new Promise<void>((resolve) => {
+      isolationServer = app.listen(0, '127.0.0.1', () => {
+        const addr = isolationServer.address() as AddressInfo;
+        isolationUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await Promise.all([
+      new Promise<void>((resolve, reject) => {
+        targetServerA.close((err) => (err ? reject(err) : resolve()));
+      }),
+      new Promise<void>((resolve, reject) => {
+        targetServerB.close((err) => (err ? reject(err) : resolve()));
+      }),
+      new Promise<void>((resolve, reject) => {
+        isolationServer.close((err) => (err ? reject(err) : resolve()));
+      }),
+    ]);
+  });
+
+  async function isolationHandshake(): Promise<EncryptedChannel> {
+    const initiator = new HandshakeInitiator(clientKeys, serverPub);
+    const initMsg = initiator.createInit();
+    const initResp = await fetch(`${isolationUrl}/handshake/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(initMsg),
+    });
+    const reply = (await initResp.json()) as HandshakeReply;
+    const sessionKeys = initiator.processReply(reply);
+    const channel = new EncryptedChannel(sessionKeys);
+
+    const finishMsg = initiator.createFinish(sessionKeys);
+    await fetch(`${isolationUrl}/handshake/finish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Id': sessionKeys.sessionId,
+      },
+      body: JSON.stringify(finishMsg),
+    });
+
+    return channel;
+  }
+
+  async function sendIsolationRequest(
+    channel: EncryptedChannel,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+  ): Promise<ProxyResponse> {
+    const request: ProxyRequest = {
+      type: 'proxy_request',
+      id: crypto.randomUUID(),
+      toolName,
+      toolInput,
+      timestamp: Date.now(),
+    };
+    const encrypted = channel.encryptJSON(request);
+    const resp = await fetch(`${isolationUrl}/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Session-Id': channel.sessionId,
+      },
+      body: new Uint8Array(encrypted),
+    });
+    expect(resp.ok).toBe(true);
+    return channel.decryptJSON<ProxyResponse>(Buffer.from(await resp.arrayBuffer()));
+  }
+
+  it('should inject route-level headers for route A', async () => {
+    const channel = await isolationHandshake();
+    const response = await sendIsolationRequest(channel, 'http_request', {
+      method: 'GET',
+      url: `${targetUrlA}/anything`,
+      headers: {},
+    });
+
+    expect(response.success).toBe(true);
+    const result = response.result as { body: { server: string; auth: string } };
+    expect(result.body.server).toBe('A');
+    expect(result.body.auth).toBe('Bearer route-a-token');
+  });
+
+  it('should inject route-level headers for route B', async () => {
+    const channel = await isolationHandshake();
+    const response = await sendIsolationRequest(channel, 'http_request', {
+      method: 'GET',
+      url: `${targetUrlB}/anything`,
+      headers: {},
+    });
+
+    expect(response.success).toBe(true);
+    const result = response.result as { body: { server: string; auth: string } };
+    expect(result.body.server).toBe('B');
+    expect(result.body.auth).toBe('Bearer route-b-token');
+  });
+
+  it('should only resolve secrets from the matched route (route A)', async () => {
+    const channel = await isolationHandshake();
+    // TOKEN_A belongs to route A, TOKEN_B belongs to route B
+    // Requesting route A's endpoint should only resolve route A's secrets
+    const response = await sendIsolationRequest(channel, 'http_request', {
+      method: 'GET',
+      url: `${targetUrlA}/anything`,
+      headers: { 'X-Token-A': '${TOKEN_A}', 'X-Token-B': '${TOKEN_B}' },
+    });
+
+    expect(response.success).toBe(true);
+    // Route A's Authorization header is injected by the server
+    // X-Token-A should resolve, X-Token-B should NOT (left as placeholder)
+  });
+
+  it('should reject request when client header conflicts with route header', async () => {
+    const channel = await isolationHandshake();
+    const response = await sendIsolationRequest(channel, 'http_request', {
+      method: 'GET',
+      url: `${targetUrlA}/anything`,
+      headers: { Authorization: 'Bearer client-override-attempt' },
+    });
+
+    expect(response.success).toBe(false);
+    expect(response.error).toContain('Header conflict');
+    expect(response.error).toContain('Authorization');
+  });
+
+  it('should reject request when client header conflicts with route header (case-insensitive)', async () => {
+    const channel = await isolationHandshake();
+    const response = await sendIsolationRequest(channel, 'http_request', {
+      method: 'GET',
+      url: `${targetUrlA}/anything`,
+      headers: { authorization: 'Bearer client-override-attempt' },
+    });
+
+    expect(response.success).toBe(false);
+    expect(response.error).toContain('Header conflict');
+  });
+
+  it('should reject requests to unmatched endpoints', async () => {
+    const channel = await isolationHandshake();
+    const response = await sendIsolationRequest(channel, 'http_request', {
+      method: 'GET',
+      url: 'https://evil.example.com/steal-secrets',
+      headers: {},
+    });
+
+    expect(response.success).toBe(false);
+    expect(response.error).toContain('Endpoint not allowed');
+  });
+
+  it('should list secrets from all routes', async () => {
+    const channel = await isolationHandshake();
+    const response = await sendIsolationRequest(channel, 'list_secrets', {});
+
+    expect(response.success).toBe(true);
+    const names = response.result as string[];
+    expect(names).toContain('TOKEN_A');
+    expect(names).toContain('TOKEN_B');
+  });
+});
+
 // ── Handshake finish edge cases ────────────────────────────────────────────
 
 describe('Handshake finish edge cases', () => {
@@ -788,8 +1038,12 @@ describe('loadAuthorizedPeers via createApp', () => {
         port: 0,
         localKeysDir: tmpKeysDir,
         authorizedPeersDir: peersDir,
-        secrets: { TEST: 'loaded-from-disk' },
-        allowedEndpoints: [],
+        routes: [
+          {
+            secrets: { TEST: 'loaded-from-disk' },
+            allowedEndpoints: [],
+          },
+        ],
         rateLimitPerMinute: 60,
       },
     };
@@ -871,8 +1125,7 @@ describe('loadAuthorizedPeers via createApp', () => {
         port: 0,
         localKeysDir: '',
         authorizedPeersDir: '/tmp/nonexistent-peers-dir-xyz-' + crypto.randomUUID(),
-        secrets: {},
-        allowedEndpoints: [],
+        routes: [],
         rateLimitPerMinute: 60,
       },
     };
