@@ -1,0 +1,16 @@
+{
+  "name": "Discord Bot API",
+  "description": "Discord Bot API (v10) — guilds, channels, messages, users, roles, and more. Auth is handled automatically via the DISCORD_BOT_TOKEN environment variable. Uses the 'Bot' authorization prefix. For OAuth2 user-scoped access, use the 'discord-oauth' connection instead.",
+  "docsUrl": "https://discord.com/developers/docs/intro",
+  "openApiUrl": "https://raw.githubusercontent.com/discord/discord-api-spec/main/specs/openapi.json",
+  "headers": {
+    "Authorization": "Bot ${DISCORD_BOT_TOKEN}",
+    "Content-Type": "application/json"
+  },
+  "secrets": {
+    "DISCORD_BOT_TOKEN": "${DISCORD_BOT_TOKEN}"
+  },
+  "allowedEndpoints": [
+    "https://discord.com/api/v10/**"
+  ]
+}
