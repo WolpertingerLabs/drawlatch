@@ -2,7 +2,7 @@
   "host": "0.0.0.0",
   "port": 9999,
   "localKeysDir": "/absolute/path/to/.mcp-secure-proxy/keys/remote",
-
+  "rateLimitPerMinute": 60,
   "connectors": [
     {
       "alias": "internal-api",
@@ -13,7 +13,6 @@
       "secrets": { "ADMIN_KEY": "${INTERNAL_ADMIN_KEY}" }
     }
   ],
-
   "callers": {
     "my-laptop": {
       "name": "Personal Laptop",
@@ -33,7 +32,5 @@
         "GITHUB_TOKEN": "${ALICE_GITHUB_TOKEN}"
       }
     }
-  },
-
-  "rateLimitPerMinute": 60
+  }
 }

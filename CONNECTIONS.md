@@ -21,23 +21,23 @@ Connection templates are loaded when a caller's session is established. Custom c
 
 ## Available Connections
 
-| Connection    | API                                                                                           | Required Environment Variable(s) | Auth Method                      |
-| ------------- | --------------------------------------------------------------------------------------------- | -------------------------------- | -------------------------------- |
-| `anthropic`   | [Anthropic Claude API](https://docs.anthropic.com/en/api)                                     | `ANTHROPIC_API_KEY`              | x-api-key header (see note)      |
-| `devin`       | [Devin AI API](https://docs.devin.ai/api-reference/overview)                                  | `DEVIN_API_KEY`                  | Bearer token header              |
-| `discord-bot` | [Discord Bot API](https://discord.com/developers/docs/intro)                                  | `DISCORD_BOT_TOKEN`              | Bot token header (see note)      |
-| `discord-oauth` | [Discord OAuth2 API](https://discord.com/developers/docs/topics/oauth2)                     | `DISCORD_OAUTH_TOKEN`            | Bearer token header (see note)   |
-| `github`      | [GitHub REST API](https://docs.github.com/en/rest)                                            | `GITHUB_TOKEN`                   | Bearer token header              |
-| `google`      | [Google APIs](https://developers.google.com/apis-explorer)                                    | `GOOGLE_API_TOKEN`               | Bearer token header (see note)   |
-| `google-ai`   | [Google AI Gemini API](https://ai.google.dev/api)                                             | `GOOGLE_AI_API_KEY`              | x-goog-api-key header (see note) |
-| `hex`         | [Hex API](https://learn.hex.tech/docs/api/api-overview)                                       | `HEX_TOKEN`                      | Bearer token header              |
-| `linear`      | [Linear GraphQL API](https://developers.linear.app/docs/graphql/working-with-the-graphql-api) | `LINEAR_API_KEY`                 | API key header (see note)        |
-| `notion`      | [Notion API](https://developers.notion.com/reference)                                         | `NOTION_API_KEY`                 | Bearer token header (see note)   |
-| `openai`      | [OpenAI API](https://platform.openai.com/docs/api-reference)                                  | `OPENAI_API_KEY`                 | Bearer token header              |
-| `openrouter`  | [OpenRouter API](https://openrouter.ai/docs/api-reference)                                    | `OPENROUTER_API_KEY`             | Bearer token header              |
-| `slack`       | [Slack Web API](https://docs.slack.dev/apis/web-api)                                          | `SLACK_BOT_TOKEN`                | Bearer token header              |
-| `stripe`      | [Stripe Payments API](https://docs.stripe.com/api)                                            | `STRIPE_SECRET_KEY`              | Bearer token header              |
-| `trello`      | [Trello Boards API](https://developer.atlassian.com/cloud/trello/rest/)                       | `TRELLO_API_KEY`, `TRELLO_TOKEN` | Query parameters (see note)      |
+| Connection      | API                                                                                           | Required Environment Variable(s) | Auth Method                      |
+| --------------- | --------------------------------------------------------------------------------------------- | -------------------------------- | -------------------------------- |
+| `anthropic`     | [Anthropic Claude API](https://docs.anthropic.com/en/api)                                     | `ANTHROPIC_API_KEY`              | x-api-key header (see note)      |
+| `devin`         | [Devin AI API](https://docs.devin.ai/api-reference/overview)                                  | `DEVIN_API_KEY`                  | Bearer token header              |
+| `discord-bot`   | [Discord Bot API](https://discord.com/developers/docs/intro)                                  | `DISCORD_BOT_TOKEN`              | Bot token header (see note)      |
+| `discord-oauth` | [Discord OAuth2 API](https://discord.com/developers/docs/topics/oauth2)                       | `DISCORD_OAUTH_TOKEN`            | Bearer token header (see note)   |
+| `github`        | [GitHub REST API](https://docs.github.com/en/rest)                                            | `GITHUB_TOKEN`                   | Bearer token header              |
+| `google`        | [Google APIs](https://developers.google.com/apis-explorer)                                    | `GOOGLE_API_TOKEN`               | Bearer token header (see note)   |
+| `google-ai`     | [Google AI Gemini API](https://ai.google.dev/api)                                             | `GOOGLE_AI_API_KEY`              | x-goog-api-key header (see note) |
+| `hex`           | [Hex API](https://learn.hex.tech/docs/api/api-overview)                                       | `HEX_TOKEN`                      | Bearer token header              |
+| `linear`        | [Linear GraphQL API](https://developers.linear.app/docs/graphql/working-with-the-graphql-api) | `LINEAR_API_KEY`                 | API key header (see note)        |
+| `notion`        | [Notion API](https://developers.notion.com/reference)                                         | `NOTION_API_KEY`                 | Bearer token header (see note)   |
+| `openai`        | [OpenAI API](https://platform.openai.com/docs/api-reference)                                  | `OPENAI_API_KEY`                 | Bearer token header              |
+| `openrouter`    | [OpenRouter API](https://openrouter.ai/docs/api-reference)                                    | `OPENROUTER_API_KEY`             | Bearer token header              |
+| `slack`         | [Slack Web API](https://docs.slack.dev/apis/web-api)                                          | `SLACK_BOT_TOKEN`                | Bearer token header              |
+| `stripe`        | [Stripe Payments API](https://docs.stripe.com/api)                                            | `STRIPE_SECRET_KEY`              | Bearer token header              |
+| `trello`        | [Trello Boards API](https://developer.atlassian.com/cloud/trello/rest/)                       | `TRELLO_API_KEY`, `TRELLO_TOKEN` | Query parameters (see note)      |
 
 > **Anthropic note:** The Anthropic API uses a custom `x-api-key` header instead of the standard `Authorization: Bearer` pattern. The `anthropic-version` header is pinned to `2023-06-01`. To use a different API version, override with a custom route.
 

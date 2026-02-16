@@ -138,13 +138,13 @@ Edit `.mcp-secure-proxy/proxy.config.json`:
 }
 ```
 
-| Field | Description | Default |
-|---|---|---|
-| `remoteUrl` | URL of the remote secure server | `http://localhost:9999` |
-| `localKeysDir` | Absolute path to the proxy's own keypair directory | `.mcp-secure-proxy/keys/local` |
-| `remotePublicKeysDir` | Absolute path to the remote server's public keys | `.mcp-secure-proxy/keys/peers/remote-server` |
-| `connectTimeout` | Handshake timeout in milliseconds | `10000` (10s) |
-| `requestTimeout` | Request timeout in milliseconds | `30000` (30s) |
+| Field                 | Description                                        | Default                                      |
+| --------------------- | -------------------------------------------------- | -------------------------------------------- |
+| `remoteUrl`           | URL of the remote secure server                    | `http://localhost:9999`                      |
+| `localKeysDir`        | Absolute path to the proxy's own keypair directory | `.mcp-secure-proxy/keys/local`               |
+| `remotePublicKeysDir` | Absolute path to the remote server's public keys   | `.mcp-secure-proxy/keys/peers/remote-server` |
+| `connectTimeout`      | Handshake timeout in milliseconds                  | `10000` (10s)                                |
+| `requestTimeout`      | Request timeout in milliseconds                    | `30000` (30s)                                |
 
 ### Step 4: Create the Remote Server Config
 
@@ -245,6 +245,7 @@ When multiple callers use the same connection but need different credentials, us
 ```
 
 The `env` map works as follows:
+
 - **Keys** are the env var names that connectors reference (e.g., `GITHUB_TOKEN`)
 - **Values** are either `"${REAL_ENV_VAR}"` (redirect to a different env var) or a literal string (direct injection)
 - When resolving secrets, the caller's `env` is checked **before** `process.env`
@@ -253,39 +254,39 @@ In this example, both Alice and Bob use the same built-in `github` connection, b
 
 #### Remote Config Reference
 
-| Field | Description | Default |
-|---|---|---|
-| `host` | Network interface to bind to. Use `0.0.0.0` for all interfaces or `127.0.0.1` for local only | `127.0.0.1` |
-| `port` | Port to listen on | `9999` |
-| `localKeysDir` | Absolute path to the remote server's own keypair | `.mcp-secure-proxy/keys/remote` |
-| `connectors` | Array of custom connector definitions, each with an `alias` for referencing from callers (see [Connector Definition](#connector-definition)) | `[]` |
-| `callers` | Per-caller access control. Keys are caller aliases used in audit logs (see [Caller Definition](#caller-definition)) | `{}` |
-| `rateLimitPerMinute` | Max requests per minute per session | `60` |
+| Field                | Description                                                                                                                                  | Default                         |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `host`               | Network interface to bind to. Use `0.0.0.0` for all interfaces or `127.0.0.1` for local only                                                 | `127.0.0.1`                     |
+| `port`               | Port to listen on                                                                                                                            | `9999`                          |
+| `localKeysDir`       | Absolute path to the remote server's own keypair                                                                                             | `.mcp-secure-proxy/keys/remote` |
+| `connectors`         | Array of custom connector definitions, each with an `alias` for referencing from callers (see [Connector Definition](#connector-definition)) | `[]`                            |
+| `callers`            | Per-caller access control. Keys are caller aliases used in audit logs (see [Caller Definition](#caller-definition))                          | `{}`                            |
+| `rateLimitPerMinute` | Max requests per minute per session                                                                                                          | `60`                            |
 
 #### Connector Definition
 
 Custom connectors define reusable route templates referenced by `alias` from caller connection lists. They follow the same structure as routes:
 
-| Field | Required | Description |
-|---|---|---|
-| `alias` | Yes | Unique name for referencing this connector from caller `connections` lists |
-| `allowedEndpoints` | Yes | Array of glob patterns for allowed URLs (e.g., `https://api.example.com/**`) |
-| `name` | No | Human-readable name (e.g., `"Internal Admin API"`) |
-| `description` | No | Short description of what the connector provides |
-| `docsUrl` | No | URL to API documentation |
-| `openApiUrl` | No | URL to OpenAPI/Swagger spec (preferred over `docsUrl` for `get_route_docs`) |
-| `headers` | No | Headers to auto-inject. Values may contain `${VAR}` placeholders resolved from `secrets` |
-| `secrets` | No | Key-value pairs. Values can be literal strings or `${ENV_VAR}` references resolved from environment variables at startup |
-| `resolveSecretsInBody` | No | Whether to resolve `${VAR}` placeholders in request bodies. Default: `false` |
+| Field                  | Required | Description                                                                                                              |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `alias`                | Yes      | Unique name for referencing this connector from caller `connections` lists                                               |
+| `allowedEndpoints`     | Yes      | Array of glob patterns for allowed URLs (e.g., `https://api.example.com/**`)                                             |
+| `name`                 | No       | Human-readable name (e.g., `"Internal Admin API"`)                                                                       |
+| `description`          | No       | Short description of what the connector provides                                                                         |
+| `docsUrl`              | No       | URL to API documentation                                                                                                 |
+| `openApiUrl`           | No       | URL to OpenAPI/Swagger spec (preferred over `docsUrl` for `get_route_docs`)                                              |
+| `headers`              | No       | Headers to auto-inject. Values may contain `${VAR}` placeholders resolved from `secrets`                                 |
+| `secrets`              | No       | Key-value pairs. Values can be literal strings or `${ENV_VAR}` references resolved from environment variables at startup |
+| `resolveSecretsInBody` | No       | Whether to resolve `${VAR}` placeholders in request bodies. Default: `false`                                             |
 
 #### Caller Definition
 
-| Field | Required | Description |
-|---|---|---|
-| `peerKeyDir` | Yes | Path to this caller's public key files (`signing.pub.pem` + `exchange.pub.pem`) |
-| `connections` | Yes | Array of connection names — references built-in templates (e.g., `"github"`) or custom connector aliases |
-| `name` | No | Human-readable name for audit logs |
-| `env` | No | Per-caller environment variable overrides (see [env overrides example](#example-per-caller-env-overrides-shared-connector-different-credentials)) |
+| Field         | Required | Description                                                                                                                                       |
+| ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `peerKeyDir`  | Yes      | Path to this caller's public key files (`signing.pub.pem` + `exchange.pub.pem`)                                                                   |
+| `connections` | Yes      | Array of connection names — references built-in templates (e.g., `"github"`) or custom connector aliases                                          |
+| `name`        | No       | Human-readable name for audit logs                                                                                                                |
+| `env`         | No       | Per-caller environment variable overrides (see [env overrides example](#example-per-caller-env-overrides-shared-connector-different-credentials)) |
 
 #### How Secrets Work
 
