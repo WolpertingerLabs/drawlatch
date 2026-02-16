@@ -103,6 +103,11 @@ export interface CallerConfig {
   /** List of connection aliases — references built-in templates (e.g., "github")
    *  or custom connector aliases defined in the top-level connectors array. */
   connections: string[];
+  /** Per-caller environment variable overrides.
+   *  Keys = env var names that connectors reference (e.g., "GITHUB_TOKEN").
+   *  Values = "${REAL_ENV_VAR}" (redirect to a different env var) or a literal string (direct injection).
+   *  These are resolved first, then checked BEFORE process.env during secret resolution. */
+  env?: Record<string, string>;
 }
 
 /** Remote server configuration */
@@ -302,17 +307,24 @@ export function resolvePlaceholders(str: string, secretsMap: Record<string, stri
 /**
  * Load secrets from the config's secrets map, resolving from environment
  * variables. Value can be a literal string or "${VAR_NAME}" to read from env.
+ *
+ * When `envOverrides` is provided (pre-resolved caller env map), those values
+ * are checked BEFORE process.env, allowing per-caller secret redirection.
  */
-export function resolveSecrets(secretsMap: Record<string, string>): Record<string, string> {
+export function resolveSecrets(
+  secretsMap: Record<string, string>,
+  envOverrides?: Record<string, string>,
+): Record<string, string> {
   const resolved: Record<string, string> = {};
   for (const [key, value] of Object.entries(secretsMap)) {
     const envMatch = /^\$\{(.+)\}$/.exec(value);
     if (envMatch) {
-      const envVal = process.env[envMatch[1]];
+      const varName = envMatch[1];
+      const envVal = envOverrides?.[varName] ?? process.env[varName];
       if (envVal !== undefined) {
         resolved[key] = envVal;
       } else {
-        console.error(`[secrets] Warning: env var ${envMatch[1]} not found for key ${key}`);
+        console.error(`[secrets] Warning: env var ${varName} not found for key ${key}`);
       }
     } else {
       resolved[key] = value;
@@ -324,10 +336,13 @@ export function resolveSecrets(secretsMap: Record<string, string>): Record<strin
 /**
  * Resolve all routes: resolve secrets from env vars, then resolve header
  * placeholders against each route's own resolved secrets.
+ *
+ * When `envOverrides` is provided, those pre-resolved values are checked
+ * before process.env during secret resolution (used for per-caller env).
  */
-export function resolveRoutes(routes: Route[]): ResolvedRoute[] {
+export function resolveRoutes(routes: Route[], envOverrides?: Record<string, string>): ResolvedRoute[] {
   return routes.map((route) => {
-    const resolvedSecrets = resolveSecrets(route.secrets ?? {});
+    const resolvedSecrets = resolveSecrets(route.secrets ?? {}, envOverrides);
     const resolvedHeaders: Record<string, string> = {};
     for (const [key, value] of Object.entries(route.headers ?? {})) {
       resolvedHeaders[key] = resolvePlaceholders(value, resolvedSecrets);
