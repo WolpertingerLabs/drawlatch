@@ -43,8 +43,11 @@ export interface ProxyConfig {
   requestTimeout: number;
 }
 
-/** A single route definition — scopes secrets and headers to a set of endpoints */
+/** A single route / connector definition — scopes secrets and headers to a set of endpoints */
 export interface Route {
+  /** Alias for referencing this connector from caller connection lists.
+   *  Required for custom connectors that callers need to reference by name. */
+  alias?: string;
   /** Human-readable name for this route (e.g., "GitHub API", "Stripe Payments").
    *  Optional but recommended for discoverability by the local agent. */
   name?: string;
@@ -91,6 +94,17 @@ export interface ResolvedRoute {
   resolveSecretsInBody: boolean;
 }
 
+/** Per-caller access configuration */
+export interface CallerConfig {
+  /** Human-readable name for this caller (used in audit logs) */
+  name?: string;
+  /** Path to this caller's public key files (signing.pub.pem + exchange.pub.pem) */
+  peerKeyDir: string;
+  /** List of connection aliases — references built-in templates (e.g., "github")
+   *  or custom connector aliases defined in the top-level connectors array. */
+  connections: string[];
+}
+
 /** Remote server configuration */
 export interface RemoteServerConfig {
   /** Host to bind to */
@@ -99,13 +113,12 @@ export interface RemoteServerConfig {
   port: number;
   /** Path to our own key bundle */
   localKeysDir: string;
-  /** Directory containing authorized peer public keys (one subdir per peer) */
-  authorizedPeersDir: string;
-  /** Pre-built connection template names to load (e.g., ["stripe", "github"]).
-   *  Connection routes are appended after manual routes, so manual routes take priority. */
-  connections?: string[];
-  /** Route definitions — each scopes secrets and headers to endpoint patterns */
-  routes: Route[];
+  /** Custom connector definitions — a reusable pool referenced by alias from callers.
+   *  Each connector scopes secrets and headers to endpoint patterns. */
+  connectors?: Route[];
+  /** Per-caller access control. Keys are caller aliases (used in audit logs).
+   *  Each caller specifies their peer key directory and which connections they can use. */
+  callers: Record<string, CallerConfig>;
   /** Rate limit: max requests per minute per session */
   rateLimitPerMinute: number;
 }
@@ -127,8 +140,7 @@ function remoteDefaults(): RemoteServerConfig {
     host: '127.0.0.1',
     port: 9999,
     localKeysDir: REMOTE_KEYS_DIR,
-    authorizedPeersDir: path.join(PEER_KEYS_DIR, 'authorized-clients'),
-    routes: [],
+    callers: {},
     rateLimitPerMinute: 60,
   };
 }
@@ -168,6 +180,9 @@ export function loadProxyConfig(): ProxyConfig {
  *   1. remote.config.json (flat RemoteServerConfig)
  *   2. config.json → .remote section (legacy combined format)
  *   3. Built-in defaults
+ *
+ * Legacy configs with `routes`/`authorizedPeersDir`/`connections` are auto-migrated
+ * to the caller-centric format with a deprecation warning.
  */
 export function loadRemoteConfig(): RemoteServerConfig {
   const def = remoteDefaults();
@@ -186,11 +201,44 @@ export function loadRemoteConfig(): RemoteServerConfig {
     config = def;
   }
 
-  // Resolve connections: load templates and append after manual routes.
-  // Manual routes are checked first by matchRoute(), so they take priority.
-  if (config.connections && config.connections.length > 0) {
-    const connectionRoutes = config.connections.map((name) => loadConnection(name));
-    config = { ...config, routes: [...config.routes, ...connectionRoutes] };
+  // Legacy migration: old format had routes/authorizedPeersDir/connections at top level
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reading unknown legacy config shape
+  const rawConfig = config as any;
+  if (rawConfig.routes && !config.callers?.default && !rawConfig.connectors) {
+    console.error(
+      '[config] Warning: legacy config format detected (routes/authorizedPeersDir/connections). ' +
+        'Migrating to caller-centric format. Please update your remote.config.json.',
+    );
+
+    const legacyRoutes: Route[] = rawConfig.routes;
+    const legacyConnections: string[] = rawConfig.connections ?? [];
+    const legacyPeersDir: string = rawConfig.authorizedPeersDir ?? path.join(PEER_KEYS_DIR, 'authorized-clients');
+
+    // Auto-assign aliases to unnamed routes for the default caller
+    const connectors = legacyRoutes.map((r, i) => ({
+      ...r,
+      alias: r.alias ?? r.name?.toLowerCase().replace(/\s+/g, '-') ?? `route-${i}`,
+    }));
+
+    const allConnectionNames = [
+      ...legacyConnections,
+      ...connectors.map((c) => c.alias!),
+    ];
+
+    config = {
+      ...def,
+      host: config.host,
+      port: config.port,
+      localKeysDir: config.localKeysDir,
+      connectors,
+      callers: {
+        default: {
+          peerKeyDir: legacyPeersDir,
+          connections: allConnectionNames,
+        },
+      },
+      rateLimitPerMinute: config.rateLimitPerMinute,
+    };
   }
 
   return config;
@@ -206,6 +254,35 @@ export function saveProxyConfig(config: ProxyConfig): void {
 export function saveRemoteConfig(config: RemoteServerConfig): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   fs.writeFileSync(REMOTE_CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+}
+
+// ── Per-caller route resolution ──────────────────────────────────────────
+
+/**
+ * Resolve the effective routes for a specific caller.
+ *
+ * For each connection name in the caller's `connections` list:
+ *   1. Check custom connectors (by alias) first
+ *   2. Fall back to built-in connection templates (e.g., "github", "stripe")
+ *
+ * Returns an array of Route objects ready for `resolveRoutes()`.
+ */
+export function resolveCallerRoutes(config: RemoteServerConfig, callerAlias: string): Route[] {
+  const caller = config.callers[callerAlias];
+  if (!caller) return [];
+
+  // Build lookup map for custom connectors by alias
+  const connectorsByAlias = new Map<string, Route>();
+  for (const c of config.connectors ?? []) {
+    if (c.alias) connectorsByAlias.set(c.alias, c);
+  }
+
+  return caller.connections.map((name) => {
+    // Custom connectors take precedence over built-in templates
+    const custom = connectorsByAlias.get(name);
+    if (custom) return custom;
+    return loadConnection(name);
+  });
 }
 
 // ── Secret / placeholder resolution ──────────────────────────────────────────

@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createApp } from './server.js';
+import { createApp, type AuthorizedPeer } from './server.js';
 import type { RemoteServerConfig } from '../shared/config.js';
 import {
   generateKeyBundle,
@@ -59,20 +59,23 @@ beforeAll(async () => {
     host: '127.0.0.1',
     port: 0, // not used — we listen on a random port
     localKeysDir: '',
-    authorizedPeersDir: '',
-    routes: [
+    connectors: [
       {
+        alias: 'test-route',
         secrets: testSecrets, // literal values, no env var resolution needed
         allowedEndpoints: [], // empty = matches nothing (we use a different server for http_request tests)
       },
     ],
+    callers: {
+      'test-client': { peerKeyDir: '', connections: ['test-route'] },
+    },
     rateLimitPerMinute: 60,
   };
 
   const app = createApp({
     config,
     ownKeys: serverKeys,
-    authorizedPeers: [clientPub],
+    authorizedPeers: [{ alias: 'test-client', keys: clientPub }],
   });
 
   // Start on a random available port
@@ -351,20 +354,23 @@ describe('Rate limiting', () => {
       host: '127.0.0.1',
       port: 0,
       localKeysDir: '',
-      authorizedPeersDir: '',
-      routes: [
+      connectors: [
         {
+          alias: 'rate-test',
           secrets: { SECRET: 'value' },
           allowedEndpoints: [],
         },
       ],
+      callers: {
+        'test-client': { peerKeyDir: '', connections: ['rate-test'] },
+      },
       rateLimitPerMinute: 3, // Very low limit for testing
     };
 
     const app = createApp({
       config,
       ownKeys: serverKeys,
-      authorizedPeers: [clientPub],
+      authorizedPeers: [{ alias: 'test-client', keys: clientPub }],
     });
 
     await new Promise<void>((resolve) => {
@@ -502,20 +508,23 @@ describe('http_request tool', () => {
       host: '127.0.0.1',
       port: 0,
       localKeysDir: '',
-      authorizedPeersDir: '',
-      routes: [
+      connectors: [
         {
+          alias: 'http-test',
           secrets: { MY_TOKEN: 'Bearer secret-jwt-token', BODY_SECRET: 'super-secret-body' },
           allowedEndpoints: [`${targetUrl}/**`],
         },
       ],
+      callers: {
+        'test-client': { peerKeyDir: '', connections: ['http-test'] },
+      },
       rateLimitPerMinute: 60,
     };
 
     const app = createApp({
       config,
       ownKeys: serverKeys,
-      authorizedPeers: [clientPub],
+      authorizedPeers: [{ alias: 'test-client', keys: clientPub }],
     });
 
     await new Promise<void>((resolve) => {
@@ -725,21 +734,24 @@ describe('http_request with resolveSecretsInBody enabled', () => {
       host: '127.0.0.1',
       port: 0,
       localKeysDir: '',
-      authorizedPeersDir: '',
-      routes: [
+      connectors: [
         {
+          alias: 'body-test',
           secrets: { MY_TOKEN: 'Bearer secret-jwt-token', BODY_SECRET: 'super-secret-body' },
           allowedEndpoints: [`${bodyTargetUrl}/**`],
           resolveSecretsInBody: true,
         },
       ],
+      callers: {
+        'test-client': { peerKeyDir: '', connections: ['body-test'] },
+      },
       rateLimitPerMinute: 60,
     };
 
     const app = createApp({
       config,
       ownKeys: serverKeys,
-      authorizedPeers: [clientPub],
+      authorizedPeers: [{ alias: 'test-client', keys: clientPub }],
     });
 
     await new Promise<void>((resolve) => {
@@ -886,26 +898,30 @@ describe('Route isolation', () => {
       host: '127.0.0.1',
       port: 0,
       localKeysDir: '',
-      authorizedPeersDir: '',
-      routes: [
+      connectors: [
         {
+          alias: 'route-a',
           headers: { Authorization: 'Bearer route-a-token' },
           secrets: { TOKEN_A: 'secret-a-value' },
           allowedEndpoints: [`${targetUrlA}/**`],
         },
         {
+          alias: 'route-b',
           headers: { Authorization: 'Bearer route-b-token' },
           secrets: { TOKEN_B: 'secret-b-value' },
           allowedEndpoints: [`${targetUrlB}/**`],
         },
       ],
+      callers: {
+        'test-client': { peerKeyDir: '', connections: ['route-a', 'route-b'] },
+      },
       rateLimitPerMinute: 60,
     };
 
     const app = createApp({
       config,
       ownKeys: serverKeys,
-      authorizedPeers: [clientPub],
+      authorizedPeers: [{ alias: 'test-client', keys: clientPub }],
     });
 
     await new Promise<void>((resolve) => {
@@ -1092,9 +1108,9 @@ describe('Route metadata in list_routes', () => {
       host: '127.0.0.1',
       port: 0,
       localKeysDir: '',
-      authorizedPeersDir: '',
-      routes: [
+      connectors: [
         {
+          alias: 'github',
           name: 'GitHub API',
           description: 'Access to GitHub REST API v3',
           docsUrl: 'https://docs.github.com/en/rest',
@@ -1104,24 +1120,29 @@ describe('Route metadata in list_routes', () => {
           allowedEndpoints: ['https://api.github.com/**'],
         },
         {
+          alias: 'stripe',
           // Route without metadata — should still work
           secrets: { STRIPE_KEY: 'sk_test_abc' },
           allowedEndpoints: ['https://api.stripe.com/**'],
         },
         {
+          alias: 'internal',
           name: 'Internal API',
           // description and docsUrl intentionally omitted
           secrets: {},
           allowedEndpoints: ['https://internal.example.com/**'],
         },
       ],
+      callers: {
+        'test-client': { peerKeyDir: '', connections: ['github', 'stripe', 'internal'] },
+      },
       rateLimitPerMinute: 60,
     };
 
     const app = createApp({
       config,
       ownKeys: serverKeys,
-      authorizedPeers: [clientPub],
+      authorizedPeers: [{ alias: 'test-client', keys: clientPub }],
     });
 
     await new Promise<void>((resolve) => {
@@ -1265,9 +1286,9 @@ describe('get_route_docs tool', () => {
       host: '127.0.0.1',
       port: 0,
       localKeysDir: '',
-      authorizedPeersDir: '',
-      routes: [
+      connectors: [
         {
+          alias: 'openapi-route',
           name: 'Route with OpenAPI and Docs',
           docsUrl: `${docsTargetUrl}/docs`,
           openApiUrl: `${docsTargetUrl}/openapi.json`,
@@ -1275,24 +1296,29 @@ describe('get_route_docs tool', () => {
           allowedEndpoints: [`${docsTargetUrl}/**`],
         },
         {
+          alias: 'docs-route',
           name: 'Route with Docs only',
           docsUrl: `${docsTargetUrl}/docs`,
           secrets: {},
           allowedEndpoints: [],
         },
         {
+          alias: 'no-docs-route',
           name: 'Route with no docs',
           secrets: {},
           allowedEndpoints: [],
         },
       ],
+      callers: {
+        'test-client': { peerKeyDir: '', connections: ['openapi-route', 'docs-route', 'no-docs-route'] },
+      },
       rateLimitPerMinute: 60,
     };
 
     const app = createApp({
       config,
       ownKeys: serverKeys,
-      authorizedPeers: [clientPub],
+      authorizedPeers: [{ alias: 'test-client', keys: clientPub }],
     });
 
     await new Promise<void>((resolve) => {
@@ -1464,36 +1490,28 @@ describe('Handshake finish edge cases', () => {
 
 // ── loadAuthorizedPeers (disk-based) ───────────────────────────────────────
 
-describe('loadAuthorizedPeers via createApp', () => {
-  let peersDir: string;
+describe('loadCallerPeers via createApp', () => {
+  let peerDir: string;
   let tmpKeysDir: string;
 
   beforeAll(() => {
     // Create temp directories for peer public keys
-    peersDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-peers-'));
+    const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-peers-'));
+    peerDir = path.join(tmpBase, 'client1');
+    fs.mkdirSync(peerDir, { recursive: true });
     tmpKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-server-keys-'));
 
     // Save server keys to disk so createApp can load them
     saveKeyBundle(serverKeys, tmpKeysDir);
 
     // Save one valid peer's public keys
-    const peerDir = path.join(peersDir, 'client1');
-    fs.mkdirSync(peerDir, { recursive: true });
     const serialized = serializeKeyBundle(clientKeys);
     fs.writeFileSync(path.join(peerDir, 'signing.pub.pem'), serialized.signing.publicKey);
     fs.writeFileSync(path.join(peerDir, 'exchange.pub.pem'), serialized.exchange.publicKey);
-
-    // Also create an invalid peer dir (missing files) to test error handling
-    const badPeerDir = path.join(peersDir, 'broken-peer');
-    fs.mkdirSync(badPeerDir, { recursive: true });
-    fs.writeFileSync(path.join(badPeerDir, 'signing.pub.pem'), 'not-a-valid-key');
-
-    // Create a non-directory entry to test the isDirectory() check
-    fs.writeFileSync(path.join(peersDir, 'stray-file.txt'), 'ignore me');
   });
 
   afterAll(() => {
-    fs.rmSync(peersDir, { recursive: true, force: true });
+    fs.rmSync(path.dirname(peerDir), { recursive: true, force: true });
     fs.rmSync(tmpKeysDir, { recursive: true, force: true });
   });
 
@@ -1502,13 +1520,16 @@ describe('loadAuthorizedPeers via createApp', () => {
       host: '127.0.0.1',
       port: 0,
       localKeysDir: tmpKeysDir,
-      authorizedPeersDir: peersDir,
-      routes: [
+      connectors: [
         {
+          alias: 'disk-test',
           secrets: { TEST: 'loaded-from-disk' },
           allowedEndpoints: [],
         },
       ],
+      callers: {
+        client1: { peerKeyDir: peerDir, connections: ['disk-test'] },
+      },
       rateLimitPerMinute: 60,
     };
 
@@ -1582,17 +1603,21 @@ describe('loadAuthorizedPeers via createApp', () => {
       host: '127.0.0.1',
       port: 0,
       localKeysDir: '',
-      authorizedPeersDir: '/tmp/nonexistent-peers-dir-xyz-' + crypto.randomUUID(),
-      routes: [],
+      callers: {
+        ghost: {
+          peerKeyDir: '/tmp/nonexistent-peers-dir-xyz-' + crypto.randomUUID(),
+          connections: [],
+        },
+      },
       rateLimitPerMinute: 60,
     };
 
-    // Should not throw — loadAuthorizedPeers returns empty array if dir doesn't exist
+    // Should not throw — loadCallerPeers skips missing dirs
     expect(() =>
       createApp({
         config,
         ownKeys: serverKeys,
-        // authorizedPeers not passed, so it'll call loadAuthorizedPeers
+        // authorizedPeers not passed, so it'll call loadCallerPeers
       }),
     ).not.toThrow();
   });
@@ -1646,5 +1671,228 @@ describe('Pending handshake state', () => {
       body: new Uint8Array(encrypted),
     });
     expect(resp.ok).toBe(true);
+  });
+});
+
+// ── Per-caller access control ──────────────────────────────────────────────
+
+describe('Per-caller access control', () => {
+  let targetServerX: Server;
+  let targetUrlX: string;
+  let targetServerY: Server;
+  let targetUrlY: string;
+  let accessServer: Server;
+  let accessUrl: string;
+
+  // Two separate clients with different key pairs
+  let client2Keys: KeyBundle;
+  let client2Pub: PublicKeyBundle;
+
+  beforeAll(async () => {
+    client2Keys = generateKeyBundle();
+    client2Pub = extractPublicKeys(client2Keys);
+
+    // Two target servers
+    targetServerX = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ server: 'X', auth: req.headers.authorization ?? null }));
+    });
+    targetServerY = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ server: 'Y', auth: req.headers.authorization ?? null }));
+    });
+
+    await Promise.all([
+      new Promise<void>((resolve) => {
+        targetServerX.listen(0, '127.0.0.1', () => {
+          const addr = targetServerX.address() as AddressInfo;
+          targetUrlX = `http://127.0.0.1:${addr.port}`;
+          resolve();
+        });
+      }),
+      new Promise<void>((resolve) => {
+        targetServerY.listen(0, '127.0.0.1', () => {
+          const addr = targetServerY.address() as AddressInfo;
+          targetUrlY = `http://127.0.0.1:${addr.port}`;
+          resolve();
+        });
+      }),
+    ]);
+
+    // Configure: caller "full" gets both connectors, caller "limited" gets only X
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      localKeysDir: '',
+      connectors: [
+        {
+          alias: 'service-x',
+          name: 'Service X',
+          headers: { Authorization: 'Bearer token-x' },
+          secrets: {},
+          allowedEndpoints: [`${targetUrlX}/**`],
+        },
+        {
+          alias: 'service-y',
+          name: 'Service Y',
+          headers: { Authorization: 'Bearer token-y' },
+          secrets: {},
+          allowedEndpoints: [`${targetUrlY}/**`],
+        },
+      ],
+      callers: {
+        full: { peerKeyDir: '', connections: ['service-x', 'service-y'] },
+        limited: { peerKeyDir: '', connections: ['service-x'] },
+      },
+      rateLimitPerMinute: 60,
+    };
+
+    const authorizedPeers: AuthorizedPeer[] = [
+      { alias: 'full', keys: clientPub },
+      { alias: 'limited', keys: client2Pub },
+    ];
+
+    const app = createApp({
+      config,
+      ownKeys: serverKeys,
+      authorizedPeers,
+    });
+
+    await new Promise<void>((resolve) => {
+      accessServer = app.listen(0, '127.0.0.1', () => {
+        const addr = accessServer.address() as AddressInfo;
+        accessUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await Promise.all([
+      new Promise<void>((resolve, reject) => {
+        targetServerX.close((err) => (err ? reject(err) : resolve()));
+      }),
+      new Promise<void>((resolve, reject) => {
+        targetServerY.close((err) => (err ? reject(err) : resolve()));
+      }),
+      new Promise<void>((resolve, reject) => {
+        accessServer.close((err) => (err ? reject(err) : resolve()));
+      }),
+    ]);
+  });
+
+  async function handshakeAs(keys: KeyBundle): Promise<EncryptedChannel> {
+    const initiator = new HandshakeInitiator(keys, serverPub);
+    const initMsg = initiator.createInit();
+    const initResp = await fetch(`${accessUrl}/handshake/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(initMsg),
+    });
+    expect(initResp.ok).toBe(true);
+    const reply = (await initResp.json()) as HandshakeReply;
+    const sessionKeys = initiator.processReply(reply);
+    const channel = new EncryptedChannel(sessionKeys);
+
+    const finishMsg = initiator.createFinish(sessionKeys);
+    await fetch(`${accessUrl}/handshake/finish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Id': sessionKeys.sessionId,
+      },
+      body: JSON.stringify(finishMsg),
+    });
+
+    return channel;
+  }
+
+  async function sendAccessRequest(
+    channel: EncryptedChannel,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+  ): Promise<ProxyResponse> {
+    const request: ProxyRequest = {
+      type: 'proxy_request',
+      id: crypto.randomUUID(),
+      toolName,
+      toolInput,
+      timestamp: Date.now(),
+    };
+    const encrypted = channel.encryptJSON(request);
+    const resp = await fetch(`${accessUrl}/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Session-Id': channel.sessionId,
+      },
+      body: new Uint8Array(encrypted),
+    });
+    expect(resp.ok).toBe(true);
+    return channel.decryptJSON<ProxyResponse>(Buffer.from(await resp.arrayBuffer()));
+  }
+
+  it('should show different routes for different callers', async () => {
+    const fullChannel = await handshakeAs(clientKeys);
+    const limitedChannel = await handshakeAs(client2Keys);
+
+    const fullRoutes = await sendAccessRequest(fullChannel, 'list_routes', {});
+    const limitedRoutes = await sendAccessRequest(limitedChannel, 'list_routes', {});
+
+    expect(fullRoutes.success).toBe(true);
+    expect(limitedRoutes.success).toBe(true);
+
+    const fullList = fullRoutes.result as Array<Record<string, unknown>>;
+    const limitedList = limitedRoutes.result as Array<Record<string, unknown>>;
+
+    // Full caller sees both connectors
+    expect(fullList).toHaveLength(2);
+    expect(fullList[0].name).toBe('Service X');
+    expect(fullList[1].name).toBe('Service Y');
+
+    // Limited caller sees only service-x
+    expect(limitedList).toHaveLength(1);
+    expect(limitedList[0].name).toBe('Service X');
+  });
+
+  it('should allow full caller to access both services', async () => {
+    const channel = await handshakeAs(clientKeys);
+
+    const respX = await sendAccessRequest(channel, 'http_request', {
+      method: 'GET',
+      url: `${targetUrlX}/test`,
+      headers: {},
+    });
+    expect(respX.success).toBe(true);
+    expect((respX.result as { body: { server: string } }).body.server).toBe('X');
+
+    const respY = await sendAccessRequest(channel, 'http_request', {
+      method: 'GET',
+      url: `${targetUrlY}/test`,
+      headers: {},
+    });
+    expect(respY.success).toBe(true);
+    expect((respY.result as { body: { server: string } }).body.server).toBe('Y');
+  });
+
+  it('should block limited caller from accessing service Y', async () => {
+    const channel = await handshakeAs(client2Keys);
+
+    // Service X should work
+    const respX = await sendAccessRequest(channel, 'http_request', {
+      method: 'GET',
+      url: `${targetUrlX}/test`,
+      headers: {},
+    });
+    expect(respX.success).toBe(true);
+
+    // Service Y should be blocked
+    const respY = await sendAccessRequest(channel, 'http_request', {
+      method: 'GET',
+      url: `${targetUrlY}/test`,
+      headers: {},
+    });
+    expect(respY.success).toBe(false);
+    expect(respY.error).toContain('Endpoint not allowed');
   });
 });

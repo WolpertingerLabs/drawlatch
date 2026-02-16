@@ -16,13 +16,14 @@
 import 'dotenv/config';
 import express from 'express';
 import fs from 'node:fs';
-import path from 'node:path';
 
 import {
   loadRemoteConfig,
   resolveRoutes,
+  resolveCallerRoutes,
   resolvePlaceholders,
   type RemoteServerConfig,
+  type CallerConfig,
   type ResolvedRoute,
 } from '../shared/config.js';
 import {
@@ -41,8 +42,22 @@ import {
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
+/** An authorized peer with its alias and optional display name */
+export interface AuthorizedPeer {
+  /** Caller alias — the key from the callers config object */
+  alias: string;
+  /** Human-readable name for audit logs */
+  name?: string;
+  /** The peer's public keys (signing + exchange) */
+  keys: PublicKeyBundle;
+}
+
 export interface Session {
   channel: EncryptedChannel;
+  /** Caller alias for this session (from the matched AuthorizedPeer) */
+  callerAlias: string;
+  /** Per-caller resolved routes for this session */
+  resolvedRoutes: ResolvedRoute[];
   createdAt: number;
   lastActivity: number;
   requestCount: number;
@@ -62,23 +77,27 @@ export interface PendingHandshake {
 const sessions = new Map<string, Session>();
 const pendingHandshakes = new Map<string, PendingHandshake>();
 
-let resolvedRoutes: ResolvedRoute[] = [];
 let rateLimitPerMinute = 60;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function loadAuthorizedPeers(peersDir: string): PublicKeyBundle[] {
-  const peers: PublicKeyBundle[] = [];
-  if (!fs.existsSync(peersDir)) return peers;
+/**
+ * Load authorized peers from per-caller config.
+ * Each caller specifies its own peerKeyDir containing signing.pub.pem + exchange.pub.pem.
+ */
+function loadCallerPeers(callers: Record<string, CallerConfig>): AuthorizedPeer[] {
+  const peers: AuthorizedPeer[] = [];
 
-  for (const entry of fs.readdirSync(peersDir)) {
-    const peerDir = path.join(peersDir, entry);
-    if (!fs.statSync(peerDir).isDirectory()) continue;
+  for (const [alias, caller] of Object.entries(callers)) {
+    if (!fs.existsSync(caller.peerKeyDir)) {
+      console.error(`[remote] Peer key dir not found for "${alias}": ${caller.peerKeyDir}`);
+      continue;
+    }
     try {
-      peers.push(loadPublicKeys(peerDir));
-      console.log(`[remote] Loaded authorized peer: ${entry}`);
+      peers.push({ alias, name: caller.name, keys: loadPublicKeys(caller.peerKeyDir) });
+      console.log(`[remote] Loaded authorized peer: ${alias}`);
     } catch (err) {
-      console.error(`[remote] Failed to load peer ${entry}:`, err);
+      console.error(`[remote] Failed to load peer ${alias}:`, err);
     }
   }
   return peers;
@@ -158,7 +177,8 @@ export function cleanupSessions(
 
   for (const [id, session] of sessionsMap) {
     if (now - session.lastActivity > SESSION_TTL) {
-      auditLog(id, 'session_expired');
+      const caller = 'callerAlias' in session ? (session as Session).callerAlias : undefined;
+      auditLog(id, 'session_expired', caller ? { caller } : {});
       sessionsMap.delete(id);
       expiredSessions.push(id);
     }
@@ -180,13 +200,13 @@ setInterval(() => {
 
 // ── Tool handlers ──────────────────────────────────────────────────────────
 
-type ToolHandler = (input: Record<string, unknown>) => Promise<unknown>;
+type ToolHandler = (input: Record<string, unknown>, routes: ResolvedRoute[]) => Promise<unknown>;
 
 const toolHandlers: Record<string, ToolHandler> = {
   /**
    * Proxied HTTP request with route-scoped secret injection.
    */
-  async http_request(input) {
+  async http_request(input, routes) {
     const { method, url, headers, body } = input as {
       method: string;
       url: string;
@@ -195,7 +215,7 @@ const toolHandlers: Record<string, ToolHandler> = {
     };
 
     // Step 1: Find matching route — try raw URL first
-    let matched: ResolvedRoute | null = matchRoute(url, resolvedRoutes);
+    let matched: ResolvedRoute | null = matchRoute(url, routes);
     let resolvedUrl = url;
 
     if (matched) {
@@ -203,7 +223,7 @@ const toolHandlers: Record<string, ToolHandler> = {
       resolvedUrl = resolvePlaceholders(url, matched.secrets);
     } else {
       // Try resolving URL with each route's secrets to find a match
-      for (const route of resolvedRoutes) {
+      for (const route of routes) {
         if (route.allowedEndpoints.length === 0) continue;
         const candidateUrl = resolvePlaceholders(url, route.secrets);
         if (isEndpointAllowed(candidateUrl, route.allowedEndpoints)) {
@@ -292,8 +312,8 @@ const toolHandlers: Record<string, ToolHandler> = {
    * List available routes with metadata, endpoint patterns, and secret names (not values).
    * Provides full disclosure of available routes for the local agent.
    */
-  list_routes() {
-    const routes = resolvedRoutes.map((route, index) => {
+  list_routes(_input, routes) {
+    const routeList = routes.map((route, index) => {
       const info: Record<string, unknown> = { index };
 
       if (route.name) info.name = route.name;
@@ -308,7 +328,7 @@ const toolHandlers: Record<string, ToolHandler> = {
       return info;
     });
 
-    return Promise.resolve(routes);
+    return Promise.resolve(routeList);
   },
 
   /**
@@ -316,16 +336,16 @@ const toolHandlers: Record<string, ToolHandler> = {
    * Prefers openApiUrl if set, otherwise falls back to docsUrl.
    * This is a workaround for agents that cannot access external URLs directly.
    */
-  async get_route_docs(input) {
+  async get_route_docs(input, routes) {
     const { routeIndex } = input as { routeIndex: number };
 
-    if (typeof routeIndex !== 'number' || routeIndex < 0 || routeIndex >= resolvedRoutes.length) {
+    if (typeof routeIndex !== 'number' || routeIndex < 0 || routeIndex >= routes.length) {
       throw new Error(
-        `Invalid route index: ${routeIndex}. Must be 0–${resolvedRoutes.length - 1}.`,
+        `Invalid route index: ${routeIndex}. Must be 0–${routes.length - 1}.`,
       );
     }
 
-    const route = resolvedRoutes[routeIndex];
+    const route = routes[routeIndex];
     const url = route.openApiUrl ?? route.docsUrl;
 
     if (!url) {
@@ -373,7 +393,7 @@ export interface CreateAppOptions {
   /** Override key bundle instead of loading from disk */
   ownKeys?: import('../shared/crypto/index.js').KeyBundle;
   /** Override authorized peers instead of loading from disk */
-  authorizedPeers?: PublicKeyBundle[];
+  authorizedPeers?: AuthorizedPeer[];
 }
 
 export function createApp(options: CreateAppOptions = {}) {
@@ -387,18 +407,16 @@ export function createApp(options: CreateAppOptions = {}) {
 
   const config = options.config ?? loadRemoteConfig();
   const ownKeys = options.ownKeys ?? loadKeyBundle(config.localKeysDir);
-  const authorizedPeers = options.authorizedPeers ?? loadAuthorizedPeers(config.authorizedPeersDir);
+  const authorizedPeers = options.authorizedPeers ?? loadCallerPeers(config.callers);
 
-  resolvedRoutes = resolveRoutes(config.routes);
   rateLimitPerMinute = config.rateLimitPerMinute;
 
-  console.log(`[remote] Loaded ${resolvedRoutes.length} route(s)`);
-  for (const [i, route] of resolvedRoutes.entries()) {
-    console.log(
-      `[remote]   Route ${i}: ${Object.keys(route.secrets).length} secrets, ` +
-        `${route.allowedEndpoints.length} endpoint patterns, ` +
-        `${Object.keys(route.headers).length} auto-headers`,
-    );
+  // Log connector and caller summary
+  const connectorCount = config.connectors?.length ?? 0;
+  const callerCount = Object.keys(config.callers).length;
+  console.log(`[remote] ${connectorCount} custom connector(s), ${callerCount} caller(s)`);
+  for (const [alias, caller] of Object.entries(config.callers)) {
+    console.log(`[remote]   Caller "${alias}": ${caller.connections.length} connection(s)`);
   }
   console.log(`[remote] ${authorizedPeers.length} authorized peer(s)`);
   console.log(`[remote] Rate limit: ${rateLimitPerMinute} req/min per session`);
@@ -408,10 +426,21 @@ export function createApp(options: CreateAppOptions = {}) {
   app.post('/handshake/init', (req, res) => {
     try {
       const init: HandshakeInit = req.body;
-      const responder = new HandshakeResponder(ownKeys, authorizedPeers);
+      const responder = new HandshakeResponder(
+        ownKeys,
+        authorizedPeers.map((p) => p.keys),
+      );
 
-      const { reply } = responder.processInit(init);
+      const { reply, initiatorPubKey } = responder.processInit(init);
       const sessionKeys = responder.deriveKeys(init);
+
+      // Look up the caller alias by matching the returned PublicKeyBundle
+      const matchedPeer = authorizedPeers.find((p) => p.keys === initiatorPubKey);
+      const callerAlias = matchedPeer?.alias ?? 'unknown';
+
+      // Resolve per-caller routes
+      const callerRoutes = resolveCallerRoutes(config, callerAlias);
+      const callerResolvedRoutes = resolveRoutes(callerRoutes);
 
       // Store pending handshake for the finish step
       pendingHandshakes.set(sessionKeys.sessionId, {
@@ -423,6 +452,8 @@ export function createApp(options: CreateAppOptions = {}) {
       // Create the session preemptively (will be activated on finish)
       sessions.set(sessionKeys.sessionId, {
         channel: new EncryptedChannel(sessionKeys),
+        callerAlias,
+        resolvedRoutes: callerResolvedRoutes,
         createdAt: Date.now(),
         lastActivity: Date.now(),
         requestCount: 0,
@@ -430,7 +461,7 @@ export function createApp(options: CreateAppOptions = {}) {
         windowStart: Date.now(),
       });
 
-      auditLog(sessionKeys.sessionId, 'handshake_init_ok');
+      auditLog(sessionKeys.sessionId, 'handshake_init_ok', { caller: callerAlias });
       res.json(reply);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -468,7 +499,7 @@ export function createApp(options: CreateAppOptions = {}) {
       }
 
       pendingHandshakes.delete(sessionId);
-      auditLog(sessionId, 'handshake_complete');
+      auditLog(sessionId, 'handshake_complete', { caller: session.callerAlias });
       res.json({ status: 'established', sessionId });
     } catch (err) {
       pendingHandshakes.delete(sessionId);
@@ -496,7 +527,7 @@ export function createApp(options: CreateAppOptions = {}) {
 
     // Rate limit check
     if (!checkRateLimit(session, rateLimitPerMinute)) {
-      auditLog(sessionId, 'rate_limited');
+      auditLog(sessionId, 'rate_limited', { caller: session.callerAlias });
       res.status(429).send('Rate limit exceeded');
       return;
     }
@@ -510,6 +541,7 @@ export function createApp(options: CreateAppOptions = {}) {
       const request = session.channel.decryptJSON<ProxyRequest>(encryptedBody);
 
       auditLog(sessionId, 'request', {
+        caller: session.callerAlias,
         toolName: request.toolName,
         requestId: request.id,
       });
@@ -521,7 +553,7 @@ export function createApp(options: CreateAppOptions = {}) {
         throw new Error(`Unknown tool: ${request.toolName}`);
       }
 
-      const result = await handler(request.toolInput);
+      const result = await handler(request.toolInput, session.resolvedRoutes);
 
       // Build and encrypt response
       const response: ProxyResponse = {
@@ -535,6 +567,7 @@ export function createApp(options: CreateAppOptions = {}) {
       const encrypted = session.channel.encryptJSON(response);
 
       auditLog(sessionId, 'response', {
+        caller: session.callerAlias,
         requestId: request.id,
         success: true,
       });

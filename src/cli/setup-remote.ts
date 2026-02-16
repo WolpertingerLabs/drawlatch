@@ -4,9 +4,10 @@
  *
  * Handles only the remote (secrets-holding) server side:
  *   1. Generating a keypair for the remote server
- *   2. Optionally importing the MCP proxy client's public keys
- *   3. Configuring server binding, routes, secrets, and headers
- *   4. Writing remote.config.json
+ *   2. Configuring server binding
+ *   3. Defining custom connectors (endpoints, headers, secrets)
+ *   4. Setting up callers (peer keys, connection access)
+ *   5. Writing remote.config.json
  *
  * Usage:
  *   npx tsx src/cli/setup-remote.ts               # Interactive setup
@@ -31,6 +32,7 @@ import {
   saveRemoteConfig,
   type RemoteServerConfig,
   type Route,
+  type CallerConfig,
 } from '../shared/config.js';
 import { listAvailableConnections } from '../shared/connections.js';
 import { createReadline, ask, ensureDir, copyPublicKeys } from './helpers.js';
@@ -48,11 +50,10 @@ async function main(): Promise<void> {
 
 This will:
   1. Generate a keypair for the remote server
-  2. Optionally import the MCP proxy client's public keys
-  3. Configure server binding
-  4. Select pre-built connection templates (optional)
-  5. Configure custom routes, secrets, and headers
-  6. Write remote.config.json
+  2. Configure server binding
+  3. Define custom connectors (optional)
+  4. Set up callers (peer keys + connection access)
+  5. Write remote.config.json
 `);
 
     ensureDir(CONFIG_DIR);
@@ -71,40 +72,12 @@ This will:
       console.log(`  ✓ Generated remote keys (fingerprint: ${fp})`);
     }
 
-    console.log(`\n  Public keys to share with the MCP proxy client:`);
+    console.log(`\n  Public keys to share with MCP proxy clients:`);
     console.log(`    ${path.join(REMOTE_KEYS_DIR, 'signing.pub.pem')}`);
     console.log(`    ${path.join(REMOTE_KEYS_DIR, 'exchange.pub.pem')}`);
 
-    // Step 2: Import MCP proxy client's public keys (optional)
-    console.log('\n─── Step 2: Import MCP proxy client public keys (optional) ───\n');
-    console.log('  If the MCP proxy has already been set up, provide the path to');
-    console.log('  its public keys directory (containing signing.pub.pem and exchange.pub.pem).\n');
-
-    const importPath = await ask(rl, '  Path to MCP proxy public keys (empty to skip)');
-
-    if (importPath) {
-      if (
-        fs.existsSync(path.join(importPath, 'signing.pub.pem')) &&
-        fs.existsSync(path.join(importPath, 'exchange.pub.pem'))
-      ) {
-        const clientName = await ask(rl, '  Client name', 'mcp-proxy');
-        const dest = path.join(PEER_KEYS_DIR, 'authorized-clients', clientName);
-        copyPublicKeys(importPath, dest);
-        console.log(`  ✓ Imported client public keys → ${dest}`);
-      } else {
-        console.log('  ⚠ Could not find signing.pub.pem and exchange.pub.pem in that directory.');
-        console.log('    You can import them later by copying them to:');
-        console.log(`    ${path.join(PEER_KEYS_DIR, 'authorized-clients', '<client-name>')}`);
-      }
-    } else {
-      console.log("  Skipped. You can import them later by copying the proxy's");
-      console.log(
-        `  public key files to: ${path.join(PEER_KEYS_DIR, 'authorized-clients', '<client-name>')}`,
-      );
-    }
-
-    // Step 3: Server configuration
-    console.log('\n─── Step 3: Server Configuration ───\n');
+    // Step 2: Server configuration
+    console.log('\n─── Step 2: Server Configuration ───\n');
 
     console.log('  Bind host controls which network interface the server listens on.');
     console.log(
@@ -115,55 +88,26 @@ This will:
     const host = await ask(rl, '  Host to bind', '0.0.0.0');
     const port = await ask(rl, '  Port to listen on', '9999');
 
-    // Step 4: Connection templates
-    console.log('\n─── Step 4: Connection Templates (optional) ───\n');
-    const available = listAvailableConnections();
-    const connections: string[] = [];
+    // Step 3: Custom connectors
+    console.log('\n─── Step 3: Custom Connectors (optional) ───\n');
+    console.log('  Define custom connectors (each scopes secrets and headers to endpoint patterns).');
+    console.log('  These are referenced by alias from caller connection lists.');
+    console.log('  Press Enter with empty alias to finish adding connectors.\n');
 
-    if (available.length > 0) {
-      console.log('  Pre-built connection templates provide ready-made route configurations');
-      console.log('  for popular APIs (auth headers, endpoint patterns, docs links).\n');
-      console.log('  Available connections:');
-      for (const conn of available) {
-        console.log(`    - ${conn}`);
+    const connectors: Route[] = [];
+    let addingConnectors = true;
+    let connectorIndex = 1;
+
+    while (addingConnectors) {
+      console.log(`\n  ── Connector ${connectorIndex} ──`);
+
+      const alias = await ask(rl, '  Connector alias (e.g., "admin-api", empty to finish)');
+      if (!alias) {
+        addingConnectors = false;
+        break;
       }
-      console.log('');
 
-      const useConnections = await ask(rl, '  Use connection templates? (y/n)', 'y');
-      if (useConnections.toLowerCase() === 'y') {
-        for (const conn of available) {
-          const use = await ask(rl, `    Enable "${conn}"? (y/n)`, 'n');
-          if (use.toLowerCase() === 'y') {
-            connections.push(conn);
-          }
-        }
-
-        if (connections.length > 0) {
-          console.log(`\n  ✓ Selected connections: ${connections.join(', ')}`);
-          console.log('  Remember to set the required environment variables on the remote server.');
-        } else {
-          console.log('\n  No connections selected.');
-        }
-      }
-    } else {
-      console.log('  No connection templates found.');
-    }
-
-    // Step 5: Route configuration
-    console.log('\n─── Step 5: Custom Route Configuration ───\n');
-    console.log('  Configure routes (each route scopes secrets and headers to endpoint patterns).');
-    console.log('  Enter endpoint patterns first, then headers and secrets for each route.');
-    console.log('  Press Enter with empty pattern to finish adding routes.\n');
-
-    const routes: Route[] = [];
-    let addingRoutes = true;
-    let routeIndex = 1;
-
-    while (addingRoutes) {
-      console.log(`\n  ── Route ${routeIndex} ──`);
-
-      // Route metadata (optional)
-      const routeName = await ask(rl, '  Route name (e.g., "GitHub API", empty to skip)');
+      const connectorName = await ask(rl, '  Display name (e.g., "Internal Admin API", empty to skip)');
 
       // Endpoint patterns (required)
       const endpointPatterns: string[] = [];
@@ -179,13 +123,13 @@ This will:
       }
 
       if (endpointPatterns.length === 0) {
-        addingRoutes = false;
-        break;
+        console.log('  ⚠ No endpoint patterns — skipping this connector.');
+        continue;
       }
 
-      const routeDescription = await ask(rl, '  Description (empty to skip)');
-      const routeDocsUrl = await ask(rl, '  API docs URL (empty to skip)');
-      const routeOpenApiUrl = await ask(rl, '  OpenAPI spec URL (empty to skip)');
+      const connectorDescription = await ask(rl, '  Description (empty to skip)');
+      const connectorDocsUrl = await ask(rl, '  API docs URL (empty to skip)');
+      const connectorOpenApiUrl = await ask(rl, '  OpenAPI spec URL (empty to skip)');
 
       // Headers
       const headers: Record<string, string> = {};
@@ -203,7 +147,7 @@ This will:
 
       // Secrets
       const secrets: Record<string, string> = {};
-      console.log('  Secrets for this route (env var references like ${API_KEY})');
+      console.log('  Secrets for this connector (env var references like ${API_KEY})');
       let addingSecrets = true;
       while (addingSecrets) {
         const name = await ask(rl, '    Secret name (empty to finish)');
@@ -219,22 +163,108 @@ This will:
         }
       }
 
-      const route: Route = {
+      const connector: Route = {
+        alias,
         allowedEndpoints: endpointPatterns,
       };
-      if (routeName) route.name = routeName;
-      if (routeDescription) route.description = routeDescription;
-      if (routeDocsUrl) route.docsUrl = routeDocsUrl;
-      if (routeOpenApiUrl) route.openApiUrl = routeOpenApiUrl;
-      if (Object.keys(headers).length > 0) route.headers = headers;
-      if (Object.keys(secrets).length > 0) route.secrets = secrets;
+      if (connectorName) connector.name = connectorName;
+      if (connectorDescription) connector.description = connectorDescription;
+      if (connectorDocsUrl) connector.docsUrl = connectorDocsUrl;
+      if (connectorOpenApiUrl) connector.openApiUrl = connectorOpenApiUrl;
+      if (Object.keys(headers).length > 0) connector.headers = headers;
+      if (Object.keys(secrets).length > 0) connector.secrets = secrets;
 
-      routes.push(route);
-      routeIndex++;
+      connectors.push(connector);
+      connectorIndex++;
 
-      const addMore = await ask(rl, '  Add another route? (y/n)', 'n');
+      const addMore = await ask(rl, '  Add another connector? (y/n)', 'n');
       if (addMore.toLowerCase() !== 'y') {
-        addingRoutes = false;
+        addingConnectors = false;
+      }
+    }
+
+    // Step 4: Set up callers
+    console.log('\n─── Step 4: Caller Configuration ───\n');
+    console.log('  Each caller is identified by a unique alias (e.g., "laptop", "ci-server").');
+    console.log('  Each caller specifies their peer key directory and which connections they can use.\n');
+
+    // Collect available connection names (built-in templates + custom connector aliases)
+    const builtinConnections = listAvailableConnections();
+    const customAliases = connectors.map((c) => c.alias!).filter(Boolean);
+    const allAvailable = [...builtinConnections, ...customAliases];
+
+    if (allAvailable.length > 0) {
+      console.log('  Available connections:');
+      if (builtinConnections.length > 0) {
+        console.log('    Built-in templates: ' + builtinConnections.join(', '));
+      }
+      if (customAliases.length > 0) {
+        console.log('    Custom connectors:  ' + customAliases.join(', '));
+      }
+      console.log('');
+    }
+
+    const callers: Record<string, CallerConfig> = {};
+    let addingCallers = true;
+
+    while (addingCallers) {
+      const callerAlias = await ask(rl, '  Caller alias (e.g., "laptop", empty to finish)');
+      if (!callerAlias) {
+        addingCallers = false;
+        break;
+      }
+
+      const callerName = await ask(rl, `  Display name for "${callerAlias}" (empty to skip)`);
+
+      // Import or specify peer key path
+      console.log(`\n  Peer keys for "${callerAlias}":`);
+      const importPath = await ask(rl, '  Path to public keys directory (containing signing.pub.pem + exchange.pub.pem)');
+
+      let peerKeyDir: string;
+      if (
+        importPath &&
+        fs.existsSync(path.join(importPath, 'signing.pub.pem')) &&
+        fs.existsSync(path.join(importPath, 'exchange.pub.pem'))
+      ) {
+        const dest = path.join(PEER_KEYS_DIR, callerAlias);
+        copyPublicKeys(importPath, dest);
+        peerKeyDir = dest;
+        console.log(`  ✓ Imported public keys → ${dest}`);
+      } else if (importPath) {
+        console.log('  ⚠ Could not find key files. Using path as-is.');
+        peerKeyDir = importPath;
+      } else {
+        peerKeyDir = path.join(PEER_KEYS_DIR, callerAlias);
+        console.log(`  Using default path: ${peerKeyDir}`);
+        console.log('  Copy the client\'s signing.pub.pem and exchange.pub.pem there before starting.');
+      }
+
+      // Select connections
+      const connections: string[] = [];
+      if (allAvailable.length > 0) {
+        console.log(`\n  Select connections for "${callerAlias}":`);
+        for (const conn of allAvailable) {
+          const use = await ask(rl, `    Enable "${conn}"? (y/n)`, 'n');
+          if (use.toLowerCase() === 'y') {
+            connections.push(conn);
+          }
+        }
+      }
+
+      if (connections.length === 0) {
+        console.log('  ⚠ No connections selected — this caller won\'t have access to any routes.');
+      } else {
+        console.log(`  ✓ Connections: ${connections.join(', ')}`);
+      }
+
+      const caller: CallerConfig = { peerKeyDir, connections };
+      if (callerName) caller.name = callerName;
+      callers[callerAlias] = caller;
+
+      console.log('');
+      const addMore = await ask(rl, '  Add another caller? (y/n)', 'n');
+      if (addMore.toLowerCase() !== 'y') {
+        addingCallers = false;
       }
     }
 
@@ -242,9 +272,8 @@ This will:
       host,
       port: parseInt(port, 10),
       localKeysDir: REMOTE_KEYS_DIR,
-      authorizedPeersDir: path.join(PEER_KEYS_DIR, 'authorized-clients'),
-      ...(connections.length > 0 && { connections }),
-      routes,
+      ...(connectors.length > 0 && { connectors }),
+      callers,
       rateLimitPerMinute: 60,
     };
 
@@ -253,14 +282,11 @@ This will:
 
     console.log('\n✓ Remote setup complete!\n');
     console.log('Next steps:');
-    console.log(`  1. Share your public keys with the MCP proxy operator:`);
+    console.log(`  1. Share your public keys with MCP proxy clients:`);
     console.log(`     ${REMOTE_KEYS_DIR}/signing.pub.pem`);
     console.log(`     ${REMOTE_KEYS_DIR}/exchange.pub.pem`);
-    console.log("  2. If you haven't imported the proxy client's public keys yet,");
-    console.log(
-      `     copy them to: ${path.join(PEER_KEYS_DIR, 'authorized-clients', '<client-name>')}`,
-    );
-    console.log(`  3. Review/edit routes in the config: ${REMOTE_CONFIG_PATH}`);
+    console.log("  2. Ensure each caller's public keys are in their configured peerKeyDir.");
+    console.log(`  3. Review/edit config: ${REMOTE_CONFIG_PATH}`);
     console.log('  4. Start the remote server: npm run dev:remote\n');
   } finally {
     rl.close();
@@ -277,10 +303,9 @@ MCP Secure Proxy — Remote Server Setup
 
 Sets up only the remote (secrets-holding) server side:
   - Generates a remote server keypair
-  - Optionally imports the MCP proxy client's public keys
   - Configures server binding (host, port)
-  - Selects pre-built connection templates (GitHub, Stripe, Trello, etc.)
-  - Interactive custom route configuration (endpoints, headers, secrets)
+  - Defines custom connectors (endpoints, headers, secrets)
+  - Sets up callers (peer keys + connection access per caller)
   - Writes remote.config.json
 
 Usage:
