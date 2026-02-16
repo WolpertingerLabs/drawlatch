@@ -1,0 +1,39 @@
+{
+  "host": "0.0.0.0",
+  "port": 9999,
+  "localKeysDir": "/absolute/path/to/.mcp-secure-proxy/keys/remote",
+
+  "connectors": [
+    {
+      "alias": "internal-api",
+      "name": "Internal Admin API",
+      "description": "Custom connector example — scopes secrets and headers to endpoint patterns",
+      "allowedEndpoints": ["https://admin.internal.com/**"],
+      "headers": { "Authorization": "Bearer ${ADMIN_KEY}" },
+      "secrets": { "ADMIN_KEY": "${INTERNAL_ADMIN_KEY}" }
+    }
+  ],
+
+  "callers": {
+    "my-laptop": {
+      "name": "Personal Laptop",
+      "peerKeyDir": "/absolute/path/to/.mcp-secure-proxy/keys/peers/my-laptop",
+      "connections": ["github", "stripe", "internal-api"]
+    },
+    "ci-server": {
+      "name": "GitHub Actions CI",
+      "peerKeyDir": "/absolute/path/to/.mcp-secure-proxy/keys/peers/ci-server",
+      "connections": ["github"]
+    },
+    "alice": {
+      "name": "Alice (per-caller env override example)",
+      "peerKeyDir": "/absolute/path/to/.mcp-secure-proxy/keys/peers/alice",
+      "connections": ["github"],
+      "env": {
+        "GITHUB_TOKEN": "${ALICE_GITHUB_TOKEN}"
+      }
+    }
+  },
+
+  "rateLimitPerMinute": 60
+}

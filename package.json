@@ -7,8 +7,6 @@
     "build": "tsc && cp -r src/connections dist/connections",
     "dev:remote": "tsx src/remote/server.ts",
     "dev:mcp": "tsx src/mcp/server.ts",
-    "setup:local": "tsx src/cli/setup-local.ts",
-    "setup:remote": "tsx src/cli/setup-remote.ts",
     "generate-keys": "tsx src/cli/generate-keys.ts",
     "start:remote": "NODE_ENV=production node dist/remote/server.js",
     "start:mcp": "node dist/mcp/server.js",
