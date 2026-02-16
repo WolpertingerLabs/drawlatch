@@ -433,8 +433,11 @@ function main() {
     process.on('SIGTERM', shutdown);
     process.on('SIGINT', shutdown);
 }
-// Only run when executed directly (not when imported by tests)
-const isDirectRun = process.argv[1]?.endsWith('remote/server.ts') || process.argv[1]?.endsWith('remote/server.js');
+// Only run when executed directly (not when imported by tests).
+// Check argv (direct node invocation) and pm_id env var (pm2 process manager).
+const isDirectRun = process.argv[1]?.endsWith('remote/server.ts') ||
+    process.argv[1]?.endsWith('remote/server.js') ||
+    process.env.pm_id !== undefined;
 if (isDirectRun) {
     try {
         main();
