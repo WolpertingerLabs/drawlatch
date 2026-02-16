@@ -274,7 +274,7 @@ Custom connectors define reusable route templates referenced by `alias` from cal
 | `name`                 | No       | Human-readable name (e.g., `"Internal Admin API"`)                                                                       |
 | `description`          | No       | Short description of what the connector provides                                                                         |
 | `docsUrl`              | No       | URL to API documentation                                                                                                 |
-| `openApiUrl`           | No       | URL to OpenAPI/Swagger spec (preferred over `docsUrl` for `get_route_docs`)                                              |
+| `openApiUrl`           | No       | URL to OpenAPI/Swagger spec                                                                                              |
 | `headers`              | No       | Headers to auto-inject. Values may contain `${VAR}` placeholders resolved from `secrets`                                 |
 | `secrets`              | No       | Key-value pairs. Values can be literal strings or `${ENV_VAR}` references resolved from environment variables at startup |
 | `resolveSecretsInBody` | No       | Whether to resolve `${VAR}` placeholders in request bodies. Default: `false`                                             |
@@ -375,10 +375,6 @@ body: Optional request body
 ### `list_routes`
 
 List all available routes for the current caller. Returns metadata (name, description, docs link), allowed endpoint patterns, available secret placeholder names (not values), and auto-injected header names. Different callers may see different routes based on their `connections` configuration.
-
-### `get_route_docs`
-
-Fetch API documentation for a specific route by index (from `list_routes`). The remote server fetches the docs on the agent's behalf. If the route has an OpenAPI spec URL, that is returned; otherwise the general docs URL content is fetched.
 
 ## Development
 

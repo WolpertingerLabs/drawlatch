@@ -218,49 +218,6 @@ server.tool(
   },
 );
 
-/**
- * Fetch documentation for a specific route from the remote server.
- * The remote server fetches the docs URL on behalf of the agent —
- * useful when the agent doesn't have direct access to external URLs.
- * If the route has an openApiUrl, that is fetched (structured spec);
- * otherwise the docsUrl is fetched (general docs page).
- *
- * NOTE: Hidden from available tools for now — impractical at the moment.
- * The remote handler in remote/server.ts still supports this; uncomment
- * the registration below to re-enable.
- */
-// // eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
-// server.tool(
-//   'get_route_docs',
-//   'Fetch API documentation for a specific route by index (from list_routes). The remote server fetches the docs on your behalf. If the route has an OpenAPI spec URL, that is returned; otherwise the general docs URL content is returned. Use this when you need to understand how to call a route\'s API.',
-//   {
-//     routeIndex: z
-//       .number()
-//       .int()
-//       .min(0)
-//       .describe('Route index from list_routes (0-based)'),
-//   },
-//   async ({ routeIndex }) => {
-//     try {
-//       const result = await sendEncryptedRequest('get_route_docs', { routeIndex });
-//       return {
-//         content: [
-//           {
-//             type: 'text' as const,
-//             text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
-//           },
-//         ],
-//       };
-//     } catch (err) {
-//       const message = err instanceof Error ? err.message : String(err);
-//       return {
-//         content: [{ type: 'text' as const, text: `Error: ${message}` }],
-//         isError: true,
-//       };
-//     }
-//   },
-// );
-
 // ── Start ──────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {

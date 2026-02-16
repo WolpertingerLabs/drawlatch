@@ -58,8 +58,7 @@ export interface Route {
    *  Optional — helps the agent find usage instructions. */
   docsUrl?: string;
   /** URL to an OpenAPI / Swagger spec (JSON or YAML) for this route's API.
-   *  Optional — when present, get_route_docs will fetch this instead of docsUrl
-   *  for more structured, agent-friendly documentation. */
+   *  Optional — provides more structured, agent-friendly documentation. */
   openApiUrl?: string;
   /** Headers to inject automatically into outgoing requests for this route.
    *  These MUST NOT conflict with client-provided headers (request is rejected on conflict).
