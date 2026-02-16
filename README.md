@@ -35,7 +35,7 @@ npm run setup:remote
 npm run setup:local
 ```
 
-The scripts will generate keys, configure connections, and print the `claude mcp add` command to register the MCP server.
+The scripts will generate keys, configure connectors and callers, and print the `claude mcp add` command to register the MCP server.
 
 ## Manual Setup
 
@@ -70,10 +70,12 @@ All config and key files live inside a `.mcp-secure-proxy/` directory (relative 
     │   ├── exchange.pub.pem
     │   └── exchange.key.pem
     └── peers/
-        ├── authorized-clients/
-        │   └── mcp-proxy/                     # One subdirectory per authorized client
-        │       ├── signing.pub.pem            # Client's public signing key
-        │       └── exchange.pub.pem           # Client's public exchange key
+        ├── alice/                             # One subdirectory per caller
+        │   ├── signing.pub.pem               # Caller's public signing key
+        │   └── exchange.pub.pem              # Caller's public exchange key
+        ├── bob/                               # Another caller
+        │   ├── signing.pub.pem
+        │   └── exchange.pub.pem
         └── remote-server/                     # Remote server's public keys (for proxy)
             ├── signing.pub.pem
             └── exchange.pub.pem
@@ -109,16 +111,16 @@ npm run generate-keys -- show .mcp-secure-proxy/keys/local
 
 The local proxy and remote server need each other's public keys for mutual authentication. Copy the **public** key files (`.pub.pem` only — never share private keys):
 
-**From local to remote** — copy the proxy's public keys into the remote server's authorized clients directory:
+**From local to remote** — copy the proxy's public keys into a caller directory on the remote server:
 
 ```bash
-mkdir -p .mcp-secure-proxy/keys/peers/authorized-clients/mcp-proxy
+mkdir -p .mcp-secure-proxy/keys/peers/my-laptop
 
 cp .mcp-secure-proxy/keys/local/signing.pub.pem \
-   .mcp-secure-proxy/keys/peers/authorized-clients/mcp-proxy/signing.pub.pem
+   .mcp-secure-proxy/keys/peers/my-laptop/signing.pub.pem
 
 cp .mcp-secure-proxy/keys/local/exchange.pub.pem \
-   .mcp-secure-proxy/keys/peers/authorized-clients/mcp-proxy/exchange.pub.pem
+   .mcp-secure-proxy/keys/peers/my-laptop/exchange.pub.pem
 ```
 
 **From remote to local** — copy the remote server's public keys into the proxy's peer directory:
@@ -133,7 +135,7 @@ cp .mcp-secure-proxy/keys/remote/exchange.pub.pem \
    .mcp-secure-proxy/keys/peers/remote-server/exchange.pub.pem
 ```
 
-> **Tip:** If the proxy and remote server are on different machines, securely transfer only the `*.pub.pem` files (e.g., via `scp`). You can authorize multiple proxy clients by creating additional subdirectories under `authorized-clients/` (e.g., `authorized-clients/my-laptop/`, `authorized-clients/ci-server/`).
+> **Tip:** If the proxy and remote server are on different machines, securely transfer only the `*.pub.pem` files (e.g., via `scp`). Each caller gets its own subdirectory under the peers directory — the directory name becomes the caller's alias used in the remote config and audit logs.
 
 ### Step 3: Create the Local Proxy Config
 
@@ -159,115 +161,102 @@ Create `.mcp-secure-proxy/proxy.config.json`:
 
 ### Step 4: Create the Remote Server Config
 
-Create `.mcp-secure-proxy/remote.config.json`. This is where you define your API routes, secrets, and auto-injected headers.
+Create `.mcp-secure-proxy/remote.config.json`. This is where you define your callers, their connections, custom connectors, and secrets.
 
-#### Example: Single API with a Bearer token
+The config is **caller-centric** — each caller is identified by their public key and explicitly declares which connections they can access.
 
-```json
-{
-  "host": "0.0.0.0",
-  "port": 9999,
-  "localKeysDir": "/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy/keys/remote",
-  "authorizedPeersDir": "/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy/keys/peers/authorized-clients",
-  "routes": [
-    {
-      "name": "GitHub API",
-      "description": "GitHub REST API v3",
-      "docsUrl": "https://docs.github.com/en/rest",
-      "openApiUrl": "https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json",
-      "allowedEndpoints": [
-        "https://api.github.com/**"
-      ],
-      "headers": {
-        "Authorization": "Bearer ${GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-      },
-      "secrets": {
-        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
-      }
-    }
-  ],
-  "rateLimitPerMinute": 60
-}
-```
-
-#### Example: Multiple routes with different auth strategies
+#### Example: Single caller with a built-in connection
 
 ```json
 {
   "host": "0.0.0.0",
   "port": 9999,
   "localKeysDir": "/absolute/path/to/.mcp-secure-proxy/keys/remote",
-  "authorizedPeersDir": "/absolute/path/to/.mcp-secure-proxy/keys/peers/authorized-clients",
-  "routes": [
-    {
-      "name": "OpenAI API",
-      "description": "OpenAI chat completions and embeddings",
-      "allowedEndpoints": [
-        "https://api.openai.com/**"
-      ],
-      "headers": {
-        "Authorization": "Bearer ${OPENAI_API_KEY}"
-      },
-      "secrets": {
-        "OPENAI_API_KEY": "${OPENAI_API_KEY}"
-      }
-    },
-    {
-      "name": "Stripe API",
-      "description": "Stripe payments API",
-      "docsUrl": "https://stripe.com/docs/api",
-      "allowedEndpoints": [
-        "https://api.stripe.com/**"
-      ],
-      "headers": {
-        "Authorization": "Bearer ${STRIPE_SECRET_KEY}"
-      },
-      "secrets": {
-        "STRIPE_SECRET_KEY": "sk_live_your_actual_key_here"
-      }
-    },
-    {
-      "name": "Internal API",
-      "description": "Public endpoints on the internal API (no auth required)",
-      "allowedEndpoints": [
-        "http://localhost:4567/public/**"
-      ]
+  "callers": {
+    "my-laptop": {
+      "name": "Personal Laptop",
+      "peerKeyDir": "/absolute/path/to/.mcp-secure-proxy/keys/peers/my-laptop",
+      "connections": ["github"]
     }
-  ],
+  },
   "rateLimitPerMinute": 60
 }
 ```
 
-#### Example: Route with inline secret values (no env vars)
+Set the `GITHUB_TOKEN` environment variable on the remote server and the built-in `github` connection template handles everything else — endpoint patterns, auth headers, docs URLs, and OpenAPI specs.
+
+#### Example: Multiple callers with different access levels
 
 ```json
 {
-  "host": "127.0.0.1",
+  "host": "0.0.0.0",
   "port": 9999,
   "localKeysDir": "/absolute/path/to/.mcp-secure-proxy/keys/remote",
-  "authorizedPeersDir": "/absolute/path/to/.mcp-secure-proxy/keys/peers/authorized-clients",
-  "routes": [
+  "connectors": [
     {
-      "name": "Test API Server",
-      "description": "Test API Server for testing the MCP secure proxy",
-      "docsUrl": "http://localhost:4567/docs",
-      "openApiUrl": "http://localhost:4567/openapi.json",
-      "allowedEndpoints": [
-        "http://localhost:4567/auth/**",
-        "http://localhost:4567/passthrough/**"
-      ],
-      "headers": {
-        "Authorization": "Bearer ${API_TOKEN}"
-      },
-      "secrets": {
-        "API_TOKEN": "test-secret-key-12345"
-      }
+      "alias": "internal-api",
+      "name": "Internal Admin API",
+      "headers": { "Authorization": "Bearer ${ADMIN_KEY}" },
+      "secrets": { "ADMIN_KEY": "${INTERNAL_ADMIN_KEY}" },
+      "allowedEndpoints": ["https://admin.internal.com/**"]
     }
   ],
+  "callers": {
+    "alice": {
+      "name": "Alice (senior engineer)",
+      "peerKeyDir": "/keys/peers/alice",
+      "connections": ["github", "stripe", "internal-api"]
+    },
+    "ci-server": {
+      "name": "GitHub Actions CI",
+      "peerKeyDir": "/keys/peers/ci-server",
+      "connections": ["github"]
+    }
+  },
   "rateLimitPerMinute": 60
 }
 ```
+
+Alice gets access to GitHub, Stripe, and the internal API. The CI server only gets GitHub. Each caller is isolated — they only see the routes for their declared connections.
+
+#### Example: Per-caller env overrides (shared connector, different credentials)
+
+When multiple callers use the same connection but need different credentials, use the `env` field to redirect environment variable resolution per caller:
+
+```json
+{
+  "host": "0.0.0.0",
+  "port": 9999,
+  "localKeysDir": "/keys/server",
+  "callers": {
+    "alice": {
+      "name": "Alice",
+      "peerKeyDir": "/keys/peers/alice",
+      "connections": ["github"],
+      "env": {
+        "GITHUB_TOKEN": "${ALICE_GITHUB_TOKEN}"
+      }
+    },
+    "bob": {
+      "name": "Bob",
+      "peerKeyDir": "/keys/peers/bob",
+      "connections": ["github", "stripe"],
+      "env": {
+        "GITHUB_TOKEN": "${BOB_GITHUB_TOKEN}",
+        "STRIPE_SECRET_KEY": "sk_test_bob_dev_key"
+      }
+    }
+  },
+  "rateLimitPerMinute": 60
+}
+```
+
+The `env` map works as follows:
+- **Keys** are the env var names that connectors reference (e.g., `GITHUB_TOKEN`)
+- **Values** are either `"${REAL_ENV_VAR}"` (redirect to a different env var) or a literal string (direct injection)
+- When resolving secrets, the caller's `env` is checked **before** `process.env`
+
+In this example, both Alice and Bob use the same built-in `github` connection, but Alice's requests use `process.env.ALICE_GITHUB_TOKEN` while Bob's use `process.env.BOB_GITHUB_TOKEN`. Bob also gets a hardcoded Stripe test key without needing an env var.
 
 #### Remote Config Reference
 
@@ -276,29 +265,42 @@ Create `.mcp-secure-proxy/remote.config.json`. This is where you define your API
 | `host` | Network interface to bind to. Use `0.0.0.0` for all interfaces or `127.0.0.1` for local only | `127.0.0.1` |
 | `port` | Port to listen on | `9999` |
 | `localKeysDir` | Absolute path to the remote server's own keypair | `.mcp-secure-proxy/keys/remote` |
-| `authorizedPeersDir` | Directory containing authorized client public keys (one subdirectory per client) | `.mcp-secure-proxy/keys/peers/authorized-clients` |
-| `connections` | Array of pre-built connection template names to load (see [CONNECTIONS.md](CONNECTIONS.md)) | `[]` |
-| `routes` | Array of route definitions (see below) | `[]` |
+| `connectors` | Array of custom connector definitions, each with an `alias` for referencing from callers (see [Connector Definition](#connector-definition)) | `[]` |
+| `callers` | Per-caller access control. Keys are caller aliases used in audit logs (see [Caller Definition](#caller-definition)) | `{}` |
 | `rateLimitPerMinute` | Max requests per minute per session | `60` |
 
-#### Route Definition
+#### Connector Definition
+
+Custom connectors define reusable route templates referenced by `alias` from caller connection lists. They follow the same structure as routes:
 
 | Field | Required | Description |
 |---|---|---|
+| `alias` | Yes | Unique name for referencing this connector from caller `connections` lists |
 | `allowedEndpoints` | Yes | Array of glob patterns for allowed URLs (e.g., `https://api.example.com/**`) |
-| `name` | No | Human-readable name (e.g., `"GitHub API"`) |
-| `description` | No | Short description of what the route provides |
+| `name` | No | Human-readable name (e.g., `"Internal Admin API"`) |
+| `description` | No | Short description of what the connector provides |
 | `docsUrl` | No | URL to API documentation |
 | `openApiUrl` | No | URL to OpenAPI/Swagger spec (preferred over `docsUrl` for `get_route_docs`) |
 | `headers` | No | Headers to auto-inject. Values may contain `${VAR}` placeholders resolved from `secrets` |
 | `secrets` | No | Key-value pairs. Values can be literal strings or `${ENV_VAR}` references resolved from environment variables at startup |
+| `resolveSecretsInBody` | No | Whether to resolve `${VAR}` placeholders in request bodies. Default: `false` |
+
+#### Caller Definition
+
+| Field | Required | Description |
+|---|---|---|
+| `peerKeyDir` | Yes | Path to this caller's public key files (`signing.pub.pem` + `exchange.pub.pem`) |
+| `connections` | Yes | Array of connection names — references built-in templates (e.g., `"github"`) or custom connector aliases |
+| `name` | No | Human-readable name for audit logs |
+| `env` | No | Per-caller environment variable overrides (see [env overrides example](#example-per-caller-env-overrides-shared-connector-different-credentials)) |
 
 #### How Secrets Work
 
-Secret values in the `secrets` map are resolved at server startup:
+Secret values in the `secrets` map are resolved at session establishment time (per-caller):
 
 - **Literal values** — used as-is: `"API_TOKEN": "sk_live_abc123"`
 - **Environment variable references** — resolved from the server's environment: `"API_TOKEN": "${API_TOKEN}"`
+- **Per-caller overrides** — when a caller has an `env` entry for a variable name, that value is used instead of `process.env`
 
 Header values can reference secrets using `${VAR}` placeholders:
 
@@ -312,16 +314,20 @@ The placeholder `${API_TOKEN}` is resolved against the route's resolved `secrets
 
 ### Connections (Pre-built Route Templates)
 
-Instead of manually configuring routes for popular APIs, you can use **connections** — pre-built route templates that ship with the package (`github`, `stripe`, `trello`). Reference them by name:
+Instead of manually configuring connectors for popular APIs, you can use **connections** — pre-built route templates that ship with the package (`github`, `stripe`, `openai`, etc.). Reference them by name in a caller's `connections` list:
 
 ```json
 {
-  "connections": ["github", "stripe"],
-  "routes": []
+  "callers": {
+    "my-laptop": {
+      "peerKeyDir": "/keys/peers/my-laptop",
+      "connections": ["github", "stripe"]
+    }
+  }
 }
 ```
 
-Set the required environment variables (e.g., `GITHUB_TOKEN`, `STRIPE_SECRET_KEY`) and the connection templates handle endpoint patterns, auth headers, docs URLs, and OpenAPI specs automatically. Manual routes always take priority over connection routes.
+Set the required environment variables (e.g., `GITHUB_TOKEN`, `STRIPE_SECRET_KEY`) and the connection templates handle endpoint patterns, auth headers, docs URLs, and OpenAPI specs automatically. Custom connectors with a matching `alias` take precedence over built-in templates.
 
 See **[CONNECTIONS.md](CONNECTIONS.md)** for the full list of available connections, required environment variables, and usage examples.
 
@@ -374,7 +380,7 @@ body: Optional request body
 
 ### `list_routes`
 
-List all available routes on the remote server. Returns metadata (name, description, docs link), allowed endpoint patterns, available secret placeholder names (not values), and auto-injected header names.
+List all available routes for the current caller. Returns metadata (name, description, docs link), allowed endpoint patterns, available secret placeholder names (not values), and auto-injected header names. Different callers may see different routes based on their `connections` configuration.
 
 ### `get_route_docs`
 
@@ -409,11 +415,11 @@ src/
 │   ├── generate-keys.ts        # Standalone key generation
 │   ├── helpers.ts              # Shared CLI utilities
 │   ├── setup-local.ts          # Interactive local proxy setup
-│   └── setup-remote.ts         # Interactive remote server setup
+│   └── setup-remote.ts         # Interactive remote server setup (caller-centric)
 ├── connections/                 # Pre-built route templates (JSON)
-│   ├── github.json         # GitHub REST API
+│   ├── github.json             # GitHub REST API
 │   ├── stripe.json             # Stripe Payments API
-│   └── trello.json             # Trello Boards API
+│   └── ...                     # 15 templates total
 ├── mcp/
 │   └── server.ts               # Local MCP proxy server (stdio transport)
 ├── remote/
@@ -421,7 +427,7 @@ src/
 │   ├── server.test.ts          # Unit tests
 │   └── server.e2e.test.ts      # End-to-end tests
 └── shared/
-    ├── config.ts               # Config loading/saving, route resolution
+    ├── config.ts               # Config loading/saving, caller & route resolution
     ├── connections.ts           # Connection template loading
     ├── crypto/
     │   ├── keys.ts             # Ed25519 + X25519 key generation/serialization
@@ -440,8 +446,11 @@ src/
 - **End-to-end encryption** — all requests/responses are encrypted with AES-256-GCM session keys derived via X25519 ECDH
 - **Replay protection** — monotonic counters prevent replay attacks
 - **Session isolation** — each handshake produces unique session keys with a 30-minute TTL
+- **Per-caller access control** — each caller only sees and can use the connections explicitly assigned to them
+- **Per-caller credential isolation** — callers sharing the same connector can have different credentials via `env` overrides
 - **Endpoint allowlisting** — the remote server only proxies requests to explicitly configured URL patterns
 - **Rate limiting** — configurable per-session request rate limiting (default: 60/min)
+- **Audit logging** — all operations are logged with caller identity, session ID, and timestamps
 - **File permissions** — private keys are saved with `0600`, directories with `0700`
 
 ## License

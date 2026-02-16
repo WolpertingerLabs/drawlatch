@@ -1,20 +1,23 @@
 # Connections (Pre-built Route Templates)
 
-Instead of manually configuring routes for popular APIs, you can use **connections** — pre-built route templates that ship with the package. Reference them by name in `remote.config.json`:
+Instead of manually configuring connectors for popular APIs, you can use **connections** — pre-built route templates that ship with the package. Reference them by name in a caller's `connections` list in `remote.config.json`:
 
 ```json
 {
   "host": "0.0.0.0",
   "port": 9999,
   "localKeysDir": "/absolute/path/to/.mcp-secure-proxy/keys/remote",
-  "authorizedPeersDir": "/absolute/path/to/.mcp-secure-proxy/keys/peers/authorized-clients",
-  "connections": ["github", "stripe"],
-  "routes": [],
+  "callers": {
+    "my-laptop": {
+      "peerKeyDir": "/absolute/path/to/.mcp-secure-proxy/keys/peers/my-laptop",
+      "connections": ["github", "stripe"]
+    }
+  },
   "rateLimitPerMinute": 60
 }
 ```
 
-Connection routes are loaded at startup and appended **after** your manual routes. Since route matching returns the first match, your manual routes always take priority — you can override any connection by defining your own route with overlapping endpoint patterns.
+Connection templates are loaded when a caller's session is established. Custom connectors (defined in the top-level `connectors` array) with a matching `alias` take precedence over built-in templates — you can override any connection by defining a custom connector with the same alias.
 
 ## Available Connections
 
@@ -52,7 +55,7 @@ Connection routes are loaded at startup and appended **after** your manual route
 
 ## Example: Connections with environment variables
 
-Set the required environment variables on the remote server (via `.env` file, shell export, or your deployment platform), then reference the connections:
+Set the required environment variables on the remote server (via `.env` file, shell export, or your deployment platform), then reference the connections in a caller's config:
 
 ```bash
 # .env on the remote server
@@ -62,30 +65,65 @@ STRIPE_SECRET_KEY=sk_live_your_stripe_key_here
 
 ```json
 {
-  "connections": ["github", "stripe"],
-  "routes": []
+  "callers": {
+    "my-laptop": {
+      "peerKeyDir": "/keys/peers/my-laptop",
+      "connections": ["github", "stripe"]
+    }
+  }
 }
 ```
 
 That's it — the connection templates handle endpoint patterns, auth headers, docs URLs, and OpenAPI specs automatically.
 
-## Example: Mixing connections and custom routes
+## Example: Mixing connections and custom connectors
 
-You can use connections alongside manually defined routes. Manual routes are checked first, so they take priority:
+You can use built-in connections alongside custom connectors. Custom connectors are defined in the top-level `connectors` array with an `alias`, then referenced by name in caller `connections` lists:
 
 ```json
 {
-  "connections": ["github"],
-  "routes": [
+  "connectors": [
     {
+      "alias": "internal-api",
       "name": "Internal API",
       "allowedEndpoints": ["http://localhost:4567/**"],
       "headers": { "Authorization": "Bearer ${INTERNAL_TOKEN}" },
       "secrets": { "INTERNAL_TOKEN": "${INTERNAL_TOKEN}" }
     }
-  ]
+  ],
+  "callers": {
+    "my-laptop": {
+      "peerKeyDir": "/keys/peers/my-laptop",
+      "connections": ["github", "internal-api"]
+    }
+  }
 }
 ```
+
+Custom connectors with an `alias` that matches a built-in connection name take precedence over the built-in template.
+
+## Example: Per-caller env overrides
+
+When multiple callers share the same connection but need different credentials, use the `env` field to redirect environment variable resolution per caller:
+
+```json
+{
+  "callers": {
+    "alice": {
+      "peerKeyDir": "/keys/peers/alice",
+      "connections": ["github"],
+      "env": { "GITHUB_TOKEN": "${ALICE_GITHUB_TOKEN}" }
+    },
+    "bob": {
+      "peerKeyDir": "/keys/peers/bob",
+      "connections": ["github"],
+      "env": { "GITHUB_TOKEN": "${BOB_GITHUB_TOKEN}" }
+    }
+  }
+}
+```
+
+Both callers use the same `github` built-in connection, but Alice's requests resolve `GITHUB_TOKEN` from `process.env.ALICE_GITHUB_TOKEN` while Bob's resolve from `process.env.BOB_GITHUB_TOKEN`. Values can also be literal strings for direct injection (e.g., `"STRIPE_SECRET_KEY": "sk_test_hardcoded"`).
 
 Connection templates are stored as JSON files in `src/connections/`. You can inspect them to see exactly what headers, endpoints, and secrets each connection configures.
 
