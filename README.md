@@ -20,11 +20,39 @@ The system has two components:
 
 The crypto layer uses **Ed25519** signatures for authentication and **X25519 ECDH** for key exchange, deriving **AES-256-GCM** session keys — all built on Node.js native `crypto` with zero external crypto dependencies.
 
-## Quick Start (Claude Code Auto-Discovery)
+## Quick Start
+
+### Option 1: Install as a Claude Code Plugin (Recommended)
+
+This repo is structured as a **Claude Code plugin** with a marketplace. Install it directly:
+
+```shell
+# Add the marketplace (from a local clone)
+/plugin marketplace add ./path/to/mcp-secure-proxy
+
+# Install the plugin
+/plugin install mcp-secure-proxy@mcp-secure-proxy
+```
+
+Or load it directly during development:
+
+```shell
+claude --plugin-dir ./path/to/mcp-secure-proxy
+```
+
+Before using, set the `MCP_CONFIG_DIR` environment variable so the proxy can find its config and keys:
+
+```bash
+export MCP_CONFIG_DIR=/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy
+```
+
+The plugin's MCP server starts automatically when enabled. The `secure_request` and `list_routes` tools become available immediately.
+
+### Option 2: Auto-Discovery (opening this repo directly)
 
 This repo includes a `.mcp.json` file at the root, so Claude Code **automatically discovers** the MCP proxy server when you open the project. On first launch, Claude Code will prompt you to approve the server — accept, and the `secure_request` and `list_routes` tools become available immediately.
 
-Before approving, set the `MCP_CONFIG_DIR` environment variable so the proxy can find its config and keys:
+Before approving, set the `MCP_CONFIG_DIR` environment variable:
 
 ```bash
 export MCP_CONFIG_DIR=/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy
@@ -415,6 +443,23 @@ npm run format:check
 ```
 
 ## Architecture
+
+### Plugin Structure
+
+This repo is structured as a Claude Code plugin:
+
+```
+mcp-secure-proxy/
+├── .claude-plugin/              # Plugin metadata
+│   ├── plugin.json              # Plugin manifest (name, version, description)
+│   └── marketplace.json         # Marketplace catalog for distribution
+├── .mcp.json                    # MCP server config (used by plugin system + auto-discovery)
+├── dist/                        # Compiled JavaScript (pre-built, no build step needed)
+│   └── mcp/server.js            # MCP proxy entrypoint
+└── src/                         # TypeScript source
+```
+
+### Source Code
 
 ```
 src/

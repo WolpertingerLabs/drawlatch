@@ -4,7 +4,7 @@
   "description": "Encrypted MCP proxy with mutual authentication. Local MCP server forwards requests through an encrypted channel to a remote secrets-holding server.",
   "type": "module",
   "scripts": {
-    "build": "tsc && cp -r src/connections dist/connections",
+    "build": "tsc && rm -rf dist/connections && cp -r src/connections dist/connections",
     "dev:remote": "tsx src/remote/server.ts",
     "dev:mcp": "tsx src/mcp/server.ts",
     "generate-keys": "tsx src/cli/generate-keys.ts",

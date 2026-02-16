@@ -2,7 +2,7 @@
   "mcpServers": {
     "secure-proxy": {
       "command": "node",
-      "args": ["dist/mcp/server.js"],
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/mcp/server.js"],
       "env": {
         "MCP_CONFIG_DIR": "${MCP_CONFIG_DIR}"
       }

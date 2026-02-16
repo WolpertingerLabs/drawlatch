@@ -1,0 +1,11 @@
+{
+  "name": "mcp-secure-proxy",
+  "description": "Encrypted MCP proxy with mutual authentication. Makes authenticated HTTP requests through a secure, end-to-end encrypted channel to a remote server that holds API secrets — zero secrets on the client.",
+  "version": "1.0.0",
+  "author": {
+    "name": "cybil"
+  },
+  "homepage": "https://github.com/cybil/mcp-secure-proxy",
+  "license": "ISC",
+  "keywords": ["mcp", "security", "proxy", "encryption", "secrets", "api"]
+}
