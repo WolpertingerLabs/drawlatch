@@ -1896,3 +1896,206 @@ describe('Per-caller access control', () => {
     expect(respY.error).toContain('Endpoint not allowed');
   });
 });
+
+// ── Per-caller env overrides ───────────────────────────────────────────────
+
+describe('Per-caller env overrides', () => {
+  let echoServer: Server;
+  let echoUrl: string;
+  let envServer: Server;
+  let envUrl: string;
+
+  // Three separate clients
+  let aliceKeys: KeyBundle;
+  let alicePub: PublicKeyBundle;
+  let bobKeys: KeyBundle;
+  let bobPub: PublicKeyBundle;
+  let charlieKeys: KeyBundle;
+  let charliePub: PublicKeyBundle;
+
+  const originalEnv = process.env;
+
+  beforeAll(async () => {
+    // Set up env vars for the test
+    process.env = { ...originalEnv };
+    process.env.ALICE_GH_TOKEN = 'ghp_alice';
+    process.env.BOB_GH_TOKEN = 'ghp_bob';
+
+    aliceKeys = generateKeyBundle();
+    alicePub = extractPublicKeys(aliceKeys);
+    bobKeys = generateKeyBundle();
+    bobPub = extractPublicKeys(bobKeys);
+    charlieKeys = generateKeyBundle();
+    charliePub = extractPublicKeys(charlieKeys);
+
+    // Echo server that returns the Authorization header it receives
+    echoServer = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ auth: req.headers.authorization ?? null }));
+    });
+
+    await new Promise<void>((resolve) => {
+      echoServer.listen(0, '127.0.0.1', () => {
+        const addr = echoServer.address() as AddressInfo;
+        echoUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+
+    // Config: one connector, three callers with different env overrides
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      localKeysDir: '',
+      connectors: [
+        {
+          alias: 'api',
+          name: 'Shared API',
+          secrets: { GH_TOKEN: '${GH_TOKEN}' },
+          headers: { Authorization: 'Bearer ${GH_TOKEN}' },
+          allowedEndpoints: [`${echoUrl}/**`],
+        },
+      ],
+      callers: {
+        alice: {
+          peerKeyDir: '',
+          connections: ['api'],
+          env: { GH_TOKEN: '${ALICE_GH_TOKEN}' },
+        },
+        bob: {
+          peerKeyDir: '',
+          connections: ['api'],
+          env: { GH_TOKEN: '${BOB_GH_TOKEN}' },
+        },
+        charlie: {
+          peerKeyDir: '',
+          connections: ['api'],
+          env: { GH_TOKEN: 'literal-hardcoded-token' },
+        },
+      },
+      rateLimitPerMinute: 60,
+    };
+
+    const authorizedPeers: AuthorizedPeer[] = [
+      { alias: 'alice', keys: alicePub },
+      { alias: 'bob', keys: bobPub },
+      { alias: 'charlie', keys: charliePub },
+    ];
+
+    const app = createApp({
+      config,
+      ownKeys: serverKeys,
+      authorizedPeers,
+    });
+
+    await new Promise<void>((resolve) => {
+      envServer = app.listen(0, '127.0.0.1', () => {
+        const addr = envServer.address() as AddressInfo;
+        envUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(async () => {
+    process.env = originalEnv;
+    await Promise.all([
+      new Promise<void>((resolve, reject) => {
+        echoServer.close((err) => (err ? reject(err) : resolve()));
+      }),
+      new Promise<void>((resolve, reject) => {
+        envServer.close((err) => (err ? reject(err) : resolve()));
+      }),
+    ]);
+  });
+
+  async function handshakeAs(keys: KeyBundle): Promise<EncryptedChannel> {
+    const initiator = new HandshakeInitiator(keys, serverPub);
+    const initMsg = initiator.createInit();
+    const initResp = await fetch(`${envUrl}/handshake/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(initMsg),
+    });
+    expect(initResp.ok).toBe(true);
+    const reply = (await initResp.json()) as HandshakeReply;
+    const sessionKeys = initiator.processReply(reply);
+    const channel = new EncryptedChannel(sessionKeys);
+
+    const finishMsg = initiator.createFinish(sessionKeys);
+    await fetch(`${envUrl}/handshake/finish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Id': sessionKeys.sessionId,
+      },
+      body: JSON.stringify(finishMsg),
+    });
+
+    return channel;
+  }
+
+  async function sendEnvRequest(
+    channel: EncryptedChannel,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+  ): Promise<ProxyResponse> {
+    const request: ProxyRequest = {
+      type: 'proxy_request',
+      id: crypto.randomUUID(),
+      toolName,
+      toolInput,
+      timestamp: Date.now(),
+    };
+    const encrypted = channel.encryptJSON(request);
+    const resp = await fetch(`${envUrl}/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Session-Id': channel.sessionId,
+      },
+      body: new Uint8Array(encrypted),
+    });
+    expect(resp.ok).toBe(true);
+    return channel.decryptJSON<ProxyResponse>(Buffer.from(await resp.arrayBuffer()));
+  }
+
+  it('should give alice her own GitHub token via env redirect', async () => {
+    const channel = await handshakeAs(aliceKeys);
+    const response = await sendEnvRequest(channel, 'http_request', {
+      method: 'GET',
+      url: `${echoUrl}/test`,
+      headers: {},
+    });
+
+    expect(response.success).toBe(true);
+    const result = response.result as { body: { auth: string } };
+    expect(result.body.auth).toBe('Bearer ghp_alice');
+  });
+
+  it('should give bob his own GitHub token via env redirect', async () => {
+    const channel = await handshakeAs(bobKeys);
+    const response = await sendEnvRequest(channel, 'http_request', {
+      method: 'GET',
+      url: `${echoUrl}/test`,
+      headers: {},
+    });
+
+    expect(response.success).toBe(true);
+    const result = response.result as { body: { auth: string } };
+    expect(result.body.auth).toBe('Bearer ghp_bob');
+  });
+
+  it('should give charlie a literal hardcoded token via env injection', async () => {
+    const channel = await handshakeAs(charlieKeys);
+    const response = await sendEnvRequest(channel, 'http_request', {
+      method: 'GET',
+      url: `${echoUrl}/test`,
+      headers: {},
+    });
+
+    expect(response.success).toBe(true);
+    const result = response.result as { body: { auth: string } };
+    expect(result.body.auth).toBe('Bearer literal-hardcoded-token');
+  });
+});

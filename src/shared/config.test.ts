@@ -163,6 +163,44 @@ describe('resolveSecrets', () => {
 
     expect(result).toEqual({ special: 'p@$$w0rd!#%^&*()' });
   });
+
+  it('should use envOverrides before process.env', () => {
+    process.env.GITHUB_TOKEN = 'from-process-env';
+
+    const result = resolveSecrets(
+      { GITHUB_TOKEN: '${GITHUB_TOKEN}' },
+      { GITHUB_TOKEN: 'from-caller-override' },
+    );
+
+    expect(result).toEqual({ GITHUB_TOKEN: 'from-caller-override' });
+  });
+
+  it('should fall back to process.env when envOverrides lacks the key', () => {
+    process.env.OTHER_TOKEN = 'from-env';
+
+    const result = resolveSecrets(
+      { OTHER_TOKEN: '${OTHER_TOKEN}' },
+      { GITHUB_TOKEN: 'only-this-one' },
+    );
+
+    expect(result).toEqual({ OTHER_TOKEN: 'from-env' });
+  });
+
+  it('should work normally with empty envOverrides', () => {
+    process.env.MY_VAR = 'hello';
+
+    const result = resolveSecrets({ MY_VAR: '${MY_VAR}' }, {});
+
+    expect(result).toEqual({ MY_VAR: 'hello' });
+  });
+
+  it('should work normally with undefined envOverrides', () => {
+    process.env.MY_VAR = 'hello';
+
+    const result = resolveSecrets({ MY_VAR: '${MY_VAR}' }, undefined);
+
+    expect(result).toEqual({ MY_VAR: 'hello' });
+  });
 });
 
 describe('resolveRoutes', () => {
@@ -282,6 +320,47 @@ describe('resolveRoutes', () => {
 
     expect(routes[0].secrets).toEqual({ TOKEN: 'env-resolved-value' });
     expect(routes[0].headers).toEqual({ Authorization: 'Bearer env-resolved-value' });
+  });
+
+  it('should apply envOverrides during route resolution', () => {
+    process.env.GITHUB_TOKEN = 'default-token';
+
+    const routes = resolveRoutes(
+      [
+        {
+          secrets: { GITHUB_TOKEN: '${GITHUB_TOKEN}' },
+          headers: { Authorization: 'Bearer ${GITHUB_TOKEN}' },
+          allowedEndpoints: ['https://api.github.com/**'],
+        },
+      ],
+      { GITHUB_TOKEN: 'caller-specific-token' },
+    );
+
+    expect(routes[0].secrets).toEqual({ GITHUB_TOKEN: 'caller-specific-token' });
+    expect(routes[0].headers).toEqual({ Authorization: 'Bearer caller-specific-token' });
+  });
+
+  it('should apply envOverrides to multiple routes independently', () => {
+    const routes = resolveRoutes(
+      [
+        {
+          secrets: { TOKEN: '${TOKEN}' },
+          headers: { Authorization: 'Bearer ${TOKEN}' },
+          allowedEndpoints: ['https://api.a.com/**'],
+        },
+        {
+          secrets: { OTHER_KEY: '${OTHER_KEY}' },
+          headers: { 'X-Key': '${OTHER_KEY}' },
+          allowedEndpoints: ['https://api.b.com/**'],
+        },
+      ],
+      { TOKEN: 'overridden-token', OTHER_KEY: 'overridden-key' },
+    );
+
+    expect(routes[0].secrets).toEqual({ TOKEN: 'overridden-token' });
+    expect(routes[0].headers).toEqual({ Authorization: 'Bearer overridden-token' });
+    expect(routes[1].secrets).toEqual({ OTHER_KEY: 'overridden-key' });
+    expect(routes[1].headers).toEqual({ 'X-Key': 'overridden-key' });
   });
 
   it('should not leak secrets across routes when resolving headers', () => {

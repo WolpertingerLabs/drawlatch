@@ -21,6 +21,7 @@ import {
   loadRemoteConfig,
   resolveRoutes,
   resolveCallerRoutes,
+  resolveSecrets,
   resolvePlaceholders,
   type RemoteServerConfig,
   type CallerConfig,
@@ -438,9 +439,11 @@ export function createApp(options: CreateAppOptions = {}) {
       const matchedPeer = authorizedPeers.find((p) => p.keys === initiatorPubKey);
       const callerAlias = matchedPeer?.alias ?? 'unknown';
 
-      // Resolve per-caller routes
+      // Resolve per-caller routes (with optional env overrides)
       const callerRoutes = resolveCallerRoutes(config, callerAlias);
-      const callerResolvedRoutes = resolveRoutes(callerRoutes);
+      const caller = config.callers[callerAlias];
+      const callerEnvResolved = resolveSecrets(caller?.env ?? {});
+      const callerResolvedRoutes = resolveRoutes(callerRoutes, callerEnvResolved);
 
       // Store pending handshake for the finish step
       pendingHandshakes.set(sessionKeys.sessionId, {
