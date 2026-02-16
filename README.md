@@ -20,6 +20,20 @@ The system has two components:
 
 The crypto layer uses **Ed25519** signatures for authentication and **X25519 ECDH** for key exchange, deriving **AES-256-GCM** session keys — all built on Node.js native `crypto` with zero external crypto dependencies.
 
+## Quick Start (Claude Code Auto-Discovery)
+
+This repo includes a `.mcp.json` file at the root, so Claude Code **automatically discovers** the MCP proxy server when you open the project. On first launch, Claude Code will prompt you to approve the server — accept, and the `secure_request` and `list_routes` tools become available immediately.
+
+Before approving, set the `MCP_CONFIG_DIR` environment variable so the proxy can find its config and keys:
+
+```bash
+export MCP_CONFIG_DIR=/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy
+```
+
+The `.mcp.json` passes this through to the MCP server process. You also need a working setup (keys generated, public keys exchanged, configs in place, remote server running). See [Setup](#setup) below for the full walkthrough.
+
+> **Note:** Auto-discovery uses the pre-built `dist/mcp/server.js` entrypoint. The compiled `dist/` directory is included in the repo, so no build step is needed. If you modify the source, run `npm run build` to recompile.
+
 ## Setup
 
 ### Prerequisites
@@ -337,25 +351,28 @@ npm run dev:remote
 npm run start:remote
 ```
 
-**Register the local MCP proxy with Claude Code:**
+**Connect the local MCP proxy to Claude Code:**
+
+The repo includes a `.mcp.json` at the root, so Claude Code auto-discovers the proxy when you open the project directory. Just approve the server when prompted — no manual registration needed.
+
+The `.mcp.json` requires the `MCP_CONFIG_DIR` environment variable to be set so the proxy can locate its config and keys. Set it to the absolute path of your `.mcp-secure-proxy/` directory:
 
 ```bash
-# Development (tsx)
-claude mcp add secure-proxy \
-  --transport stdio --scope local \
-  -e MCP_CONFIG_DIR=/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy \
-  -- npx tsx /absolute/path/to/mcp-secure-proxy/src/mcp/server.ts
+export MCP_CONFIG_DIR=/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy
+```
 
-# Production (compiled)
+**Alternative: manual registration**
+
+If you prefer not to use auto-discovery, register the MCP server directly:
+
+```bash
 claude mcp add secure-proxy \
   --transport stdio --scope local \
   -e MCP_CONFIG_DIR=/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy \
   -- node /absolute/path/to/mcp-secure-proxy/dist/mcp/server.js
 ```
 
-> **Note:** The `MCP_CONFIG_DIR` environment variable tells the proxy where to find its config and keys. Use absolute paths so it works regardless of the working directory Claude Code spawns the process from.
-
-After adding the MCP server, restart Claude Code. The proxy will automatically perform the encrypted handshake with the remote server on first use.
+After connecting (either via auto-discovery or manual registration), the proxy will automatically perform the encrypted handshake with the remote server on first use.
 
 ## MCP Tools
 

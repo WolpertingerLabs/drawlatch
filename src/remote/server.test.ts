@@ -112,11 +112,13 @@ describe('matchRoute', () => {
       headers: { Authorization: 'Bearer token-a' },
       secrets: { KEY_A: 'value-a' },
       allowedEndpoints: ['https://api.a.com/**'],
+      resolveSecretsInBody: false,
     },
     {
       headers: { Authorization: 'Bearer token-b' },
       secrets: { KEY_B: 'value-b' },
       allowedEndpoints: ['https://api.b.com/**'],
+      resolveSecretsInBody: false,
     },
   ];
 
@@ -137,8 +139,8 @@ describe('matchRoute', () => {
 
   it('should return the first match when multiple routes could match', () => {
     const overlappingRoutes: ResolvedRoute[] = [
-      { headers: {}, secrets: { A: '1' }, allowedEndpoints: ['https://api.example.com/**'] },
-      { headers: {}, secrets: { B: '2' }, allowedEndpoints: ['https://api.example.com/v1/**'] },
+      { headers: {}, secrets: { A: '1' }, allowedEndpoints: ['https://api.example.com/**'], resolveSecretsInBody: false },
+      { headers: {}, secrets: { B: '2' }, allowedEndpoints: ['https://api.example.com/v1/**'], resolveSecretsInBody: false },
     ];
     const match = matchRoute('https://api.example.com/v1/data', overlappingRoutes);
     expect(match).toBe(overlappingRoutes[0]);
@@ -146,8 +148,8 @@ describe('matchRoute', () => {
 
   it('should skip routes with empty allowedEndpoints', () => {
     const routesWithEmpty: ResolvedRoute[] = [
-      { headers: {}, secrets: {}, allowedEndpoints: [] },
-      { headers: {}, secrets: { KEY: 'val' }, allowedEndpoints: ['https://api.example.com/**'] },
+      { headers: {}, secrets: {}, allowedEndpoints: [], resolveSecretsInBody: false },
+      { headers: {}, secrets: { KEY: 'val' }, allowedEndpoints: ['https://api.example.com/**'], resolveSecretsInBody: false },
     ];
     const match = matchRoute('https://api.example.com/data', routesWithEmpty);
     expect(match).toBe(routesWithEmpty[1]);
@@ -155,8 +157,8 @@ describe('matchRoute', () => {
 
   it('should return null when all routes have empty allowedEndpoints', () => {
     const emptyRoutes: ResolvedRoute[] = [
-      { headers: {}, secrets: {}, allowedEndpoints: [] },
-      { headers: {}, secrets: {}, allowedEndpoints: [] },
+      { headers: {}, secrets: {}, allowedEndpoints: [], resolveSecretsInBody: false },
+      { headers: {}, secrets: {}, allowedEndpoints: [], resolveSecretsInBody: false },
     ];
     const match = matchRoute('https://anything.com', emptyRoutes);
     expect(match).toBeNull();
