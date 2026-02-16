@@ -20,26 +20,7 @@ The system has two components:
 
 The crypto layer uses **Ed25519** signatures for authentication and **X25519 ECDH** for key exchange, deriving **AES-256-GCM** session keys — all built on Node.js native `crypto` with zero external crypto dependencies.
 
-## Quick Start (Setup Scripts)
-
-The fastest way to get started is using the interactive setup scripts:
-
-```bash
-npm install
-npm run build
-
-# On the remote server machine:
-npm run setup:remote
-
-# On your local machine:
-npm run setup:local
-```
-
-The scripts will generate keys, configure connectors and callers, and print the `claude mcp add` command to register the MCP server.
-
-## Manual Setup
-
-If you prefer to configure everything manually (or need to automate the setup), follow the steps below.
+## Setup
 
 ### Prerequisites
 
@@ -139,7 +120,13 @@ cp .mcp-secure-proxy/keys/remote/exchange.pub.pem \
 
 ### Step 3: Create the Local Proxy Config
 
-Create `.mcp-secure-proxy/proxy.config.json`:
+Copy the example and edit the paths to match your setup:
+
+```bash
+cp proxy.config.example.json .mcp-secure-proxy/proxy.config.json
+```
+
+Edit `.mcp-secure-proxy/proxy.config.json`:
 
 ```json
 {
@@ -161,7 +148,13 @@ Create `.mcp-secure-proxy/proxy.config.json`:
 
 ### Step 4: Create the Remote Server Config
 
-Create `.mcp-secure-proxy/remote.config.json`. This is where you define your callers, their connections, custom connectors, and secrets.
+Copy the example and edit it to match your setup:
+
+```bash
+cp remote.config.example.json .mcp-secure-proxy/remote.config.json
+```
+
+Edit `.mcp-secure-proxy/remote.config.json`. This is where you define your callers, their connections, custom connectors, and secrets.
 
 The config is **caller-centric** — each caller is identified by their public key and explicitly declares which connections they can access.
 
@@ -411,11 +404,8 @@ npm run format:check
 
 ```
 src/
-├── cli/                        # Setup and key generation CLIs
-│   ├── generate-keys.ts        # Standalone key generation
-│   ├── helpers.ts              # Shared CLI utilities
-│   ├── setup-local.ts          # Interactive local proxy setup
-│   └── setup-remote.ts         # Interactive remote server setup (caller-centric)
+├── cli/                        # Key generation CLI
+│   └── generate-keys.ts        # Ed25519 + X25519 keypair generation
 ├── connections/                 # Pre-built route templates (JSON)
 │   ├── github.json             # GitHub REST API
 │   ├── stripe.json             # Stripe Payments API
