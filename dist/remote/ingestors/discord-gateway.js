@@ -48,6 +48,11 @@ export const DiscordIntents = {
     AUTO_MODERATION_CONFIGURATION: 1 << 20,
     AUTO_MODERATION_EXECUTION: 1 << 21,
 };
+/** All defined intents OR'd together (includes privileged: GUILD_MEMBERS, GUILD_PRESENCES, MESSAGE_CONTENT). */
+export const ALL_INTENTS = Object.values(DiscordIntents).reduce((acc, v) => acc | v, 0);
+/** All non-privileged intents OR'd together. */
+export const ALL_NON_PRIVILEGED_INTENTS = ALL_INTENTS &
+    ~(DiscordIntents.GUILD_MEMBERS | DiscordIntents.GUILD_PRESENCES | DiscordIntents.MESSAGE_CONTENT);
 /** Default intents: guilds + guild messages + DMs (no privileged intents). */
 const DEFAULT_INTENTS = DiscordIntents.GUILDS | DiscordIntents.GUILD_MESSAGES | DiscordIntents.DIRECT_MESSAGES;
 // Discord close codes that are non-recoverable (do NOT reconnect)

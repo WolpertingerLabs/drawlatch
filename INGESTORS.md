@@ -136,11 +136,13 @@ Full implementation of the [Discord Gateway v10](https://discord.com/developers/
 - **Close code handling**: Non-recoverable codes (4004, 4010-4014) → permanent error. Session-invalidating codes (4007, 4009) → clear session, re-identify
 - **Invalid Session**: Resumable → wait 1-5s then resume. Not resumable → clear session, re-identify
 - **Event filtering**: `eventFilter` array in config; empty = capture all
-- **Intents**: Configurable via config, default `4609` = `GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES`
+- **Intents**: Configurable via config, default `4609` = `GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES`. The `discord-bot.json` template uses `3276799` (all intents including privileged)
 
 **Exported:**
 - `DiscordGatewayIngestor` class
 - `DiscordIntents` const (all intent flags for easy composition)
+- `ALL_INTENTS` const (all intents OR'd together, including privileged: `3276799`)
+- `ALL_NON_PRIVILEGED_INTENTS` const (all non-privileged intents OR'd together)
 
 ### MCP Tool Registrations
 
@@ -168,13 +170,13 @@ Added `ingestor` block:
     "websocket": {
       "gatewayUrl": "wss://gateway.discord.gg/?v=10&encoding=json",
       "protocol": "discord",
-      "intents": 4609
+      "intents": 3276799
     }
   }
 }
 ```
 
-The intents value `4609` represents non-privileged intents: `GUILDS (1) | GUILD_MESSAGES (512) | DIRECT_MESSAGES (4096)`. Users needing `MESSAGE_CONTENT` (privileged) would use `4609 | 32768 = 37377` and enable the intent in their Discord Developer Portal.
+The intents value `3276799` includes all Discord Gateway intents, including the three privileged intents (`GUILD_MEMBERS`, `GUILD_PRESENCES`, `MESSAGE_CONTENT`). This requires enabling all three privileged intents in the Discord Developer Portal. For a non-privileged-only configuration, use `3243775`. The code default (when `intents` is omitted) remains `4609` = `GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES`.
 
 ---
 
@@ -360,7 +362,7 @@ Currently, if Claude's session restarts, it loses its `after_id` cursor and may 
       "gatewayUrl": "wss://...",
       "protocol": "discord",
       "eventFilter": ["MESSAGE_CREATE", "MESSAGE_UPDATE"],
-      "intents": 4609
+      "intents": 3276799
     }
   }
 }
@@ -390,9 +392,16 @@ Currently, if Claude's session restarts, it loses its `after_id` cursor and may 
 | `AUTO_MODERATION_CONFIGURATION` | `1048576` | No |
 | `AUTO_MODERATION_EXECUTION` | `2097152` | No |
 
-**Default:** `4609` = `GUILDS (1) + GUILD_MESSAGES (512) + DIRECT_MESSAGES (4096)`
+**Code default (when omitted):** `4609` = `GUILDS (1) + GUILD_MESSAGES (512) + DIRECT_MESSAGES (4096)`
 
-To include message content (privileged): `4609 | 32768 = 37377`
+**Template value:** `3276799` = all intents (including privileged)
+
+**All non-privileged:** `3243775` = all intents except `GUILD_MEMBERS`, `GUILD_PRESENCES`, `MESSAGE_CONTENT`
+
+To use all intents, enable the three privileged intents in the Discord Developer Portal:
+- Server Members Intent (`GUILD_MEMBERS`)
+- Presence Intent (`GUILD_PRESENCES`)
+- Message Content Intent (`MESSAGE_CONTENT`)
 
 ### Common Event Filters
 

@@ -13,4 +13,9 @@ export {
 export { RingBuffer } from './ring-buffer.js';
 export { BaseIngestor } from './base-ingestor.js';
 export { IngestorManager } from './manager.js';
-export { DiscordGatewayIngestor } from './discord-gateway.js';
+export {
+  DiscordGatewayIngestor,
+  DiscordIntents,
+  ALL_INTENTS,
+  ALL_NON_PRIVILEGED_INTENTS,
+} from './discord-gateway.js';

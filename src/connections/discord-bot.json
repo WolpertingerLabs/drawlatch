@@ -18,7 +18,7 @@
     "websocket": {
       "gatewayUrl": "wss://gateway.discord.gg/?v=10&encoding=json",
       "protocol": "discord",
-      "intents": 4609
+      "intents": 3276799
     }
   }
 }

@@ -37,6 +37,10 @@ export declare const DiscordIntents: {
     readonly AUTO_MODERATION_CONFIGURATION: number;
     readonly AUTO_MODERATION_EXECUTION: number;
 };
+/** All defined intents OR'd together (includes privileged: GUILD_MEMBERS, GUILD_PRESENCES, MESSAGE_CONTENT). */
+export declare const ALL_INTENTS: number;
+/** All non-privileged intents OR'd together. */
+export declare const ALL_NON_PRIVILEGED_INTENTS: number;
 export declare class DiscordGatewayIngestor extends BaseIngestor {
     private readonly wsConfig;
     private ws;
