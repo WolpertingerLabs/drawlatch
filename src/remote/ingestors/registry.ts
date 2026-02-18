@@ -26,7 +26,8 @@ const factories = new Map<string, IngestorFactory>();
  *
  * Convention for keys:
  * - WebSocket protocols: `websocket:<protocol>` (e.g., `websocket:discord`, `websocket:slack`)
- * - Other types: the type name directly (e.g., `webhook`, `poll`)
+ * - Webhook protocols: `webhook:<protocol>` (e.g., `webhook:generic` for GitHub, `webhook:stripe`)
+ * - Other types: the type name directly (e.g., `poll`)
  */
 export function registerIngestorFactory(key: string, factory: IngestorFactory): void {
   factories.set(key, factory);
@@ -36,6 +37,7 @@ export function registerIngestorFactory(key: string, factory: IngestorFactory): 
  * Create an ingestor instance using the registered factory for its config type.
  *
  * For WebSocket ingestors, the key is `websocket:<protocol>`.
+ * For Webhook ingestors, the key is `webhook:<protocol>` (default: `webhook:generic`).
  * For other types, the key is just the type name.
  *
  * Returns `null` if no factory is registered or if the factory declines to create.
@@ -49,7 +51,9 @@ export function createIngestor(
   const key =
     config.type === 'websocket'
       ? `websocket:${config.websocket?.protocol ?? 'generic'}`
-      : config.type;
+      : config.type === 'webhook'
+        ? `webhook:${config.webhook?.protocol ?? 'generic'}`
+        : config.type;
 
   const factory = factories.get(key);
   if (!factory) {

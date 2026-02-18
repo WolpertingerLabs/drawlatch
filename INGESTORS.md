@@ -1,6 +1,6 @@
 # Ingestors: Real-Time Data Collection for MCP Secure Proxy
 
-> **Status:** Phase 2 (Webhook Ingestor Infrastructure + GitHub) — **Complete**
+> **Status:** Phase 2b (Stripe Webhook Ingestor + Generic Webhook Base Class) — **Complete**
 > **Date:** 2026-02-18
 
 ---
@@ -267,7 +267,74 @@ Added support for receiving HTTP webhooks. GitHub is the first webhook provider,
 - The remote server needs to be publicly accessible for webhooks (or behind a tunnel like ngrok/Cloudflare Tunnel)
 - Point the GitHub webhook URL to `https://<server>/webhooks/github`
 
-**Future webhook providers:** Stripe, Linear, and Trello can be added by creating new ingestor classes or by extending the generic `GitHubWebhookIngestor` to a service-agnostic `WebhookIngestor` with pluggable signature verification strategies.
+**Future webhook providers:** Linear and Trello can be added by creating thin subclasses of the generic `WebhookIngestor` base class (see Phase 2b below).
+
+### Phase 2b: Stripe Webhook Ingestor + Generic Webhook Base Class — **Complete**
+
+Refactored the webhook ingestor into a generic `WebhookIngestor` base class with pluggable signature verification and event extraction. GitHub and Stripe are now thin subclasses. This sets the pattern for future webhook providers (Linear, Trello, etc.).
+
+**Architecture:** The `WebhookIngestor` abstract base class extends `BaseIngestor` and provides the common webhook handling pipeline (`handleWebhook()` → verify → parse → extract → filter → buffer). Subclasses override three abstract methods:
+- `verifySignature(headers, rawBody)` — service-specific signature verification
+- `extractEventType(headers, body)` — how to determine the event type
+- `extractEventData(headers, body)` — what data shape to store in the ring buffer
+
+The factory registry now uses `webhook:<protocol>` keys (mirroring `websocket:<protocol>`), where the default is `webhook:generic` (GitHub) and Stripe registers as `webhook:stripe`.
+
+**New Files:**
+
+| File | Purpose |
+|---|---|
+| `src/remote/ingestors/webhook/base-webhook-ingestor.ts` | `WebhookIngestor` abstract base class. Owns `webhookPath`, `eventFilter`, passive `start()`/`stop()`, and concrete `handleWebhook()` pipeline. Defines abstract `verifySignature()`, `extractEventType()`, `extractEventData()`. |
+| `src/remote/ingestors/webhook/stripe-types.ts` | Stripe-specific types, signature verification (`verifyStripeSignature`), header parsing (`parseStripeSignatureHeader`), `STRIPE_SIGNATURE_HEADER` constant, `DEFAULT_TIMESTAMP_TOLERANCE` (300s) |
+| `src/remote/ingestors/webhook/stripe-webhook-ingestor.ts` | `StripeWebhookIngestor` class extending `WebhookIngestor`. Implements Stripe `Stripe-Signature` verification with timestamp tolerance and replay protection. Extracts event type from JSON body `type` field. Self-registers as `'webhook:stripe'` factory. |
+| `src/remote/ingestors/webhook/stripe-webhook-ingestor.test.ts` | 39 unit tests covering signature parsing, verification (valid, invalid, expired, malformed), lifecycle, event extraction, factory registration |
+
+**Modified Files:**
+
+| File | Changes |
+|---|---|
+| `src/remote/ingestors/webhook/webhook-ingestor.ts` | Refactored `GitHubWebhookIngestor` to extend `WebhookIngestor` instead of `BaseIngestor`. Signature verification, event type extraction, and data shaping now implemented as overrides. Factory key changed from `'webhook'` to `'webhook:generic'`. |
+| `src/remote/ingestors/types.ts` | Added optional `protocol?: string` field to `WebhookIngestorConfig` |
+| `src/remote/ingestors/registry.ts` | Updated `createIngestor()` key logic to use `webhook:<protocol>` keys (matching the `websocket:<protocol>` convention) |
+| `src/remote/ingestors/manager.ts` | `getWebhookIngestors()` now checks `instanceof WebhookIngestor` (base class) instead of `GitHubWebhookIngestor`. Added Stripe factory self-registration import. |
+| `src/remote/ingestors/webhook/index.ts` | Added `WebhookIngestor`, `StripeWebhookIngestor`, and Stripe utility exports |
+| `src/remote/ingestors/index.ts` | Added `WebhookIngestor`, `StripeWebhookIngestor`, and Stripe-related exports |
+| `src/connections/stripe.json` | Added `STRIPE_WEBHOOK_SECRET` to secrets. Added `ingestor` block with `type: "webhook"`, `protocol: "stripe"`, and Stripe signature verification config. |
+
+**Stripe Signature Verification:**
+- Stripe uses the `Stripe-Signature` header with format: `t=<unix_timestamp>,v1=<hex_sig>,v1=<hex_sig>,...`
+- HMAC-SHA256 is computed over `${timestamp}.${rawBody}` (not the raw body alone)
+- Timing-safe comparison against each `v1` signature (accept if ANY match)
+- **Replay protection:** Rejects events older than a configurable tolerance (default 300 seconds / 5 minutes). Set tolerance to 0 to disable.
+- If the secret name is configured but the resolved value is missing, the webhook is rejected (config error)
+
+**Config example (Stripe):**
+```json
+{
+  "ingestor": {
+    "type": "webhook",
+    "webhook": {
+      "path": "stripe",
+      "protocol": "stripe",
+      "signatureHeader": "Stripe-Signature",
+      "signatureSecret": "STRIPE_WEBHOOK_SECRET"
+    }
+  }
+}
+```
+
+**Setup requirements:**
+- Set `STRIPE_WEBHOOK_SECRET` env var on the remote server (the `whsec_...` signing secret from the Stripe Dashboard → Developers → Webhooks)
+- Set `STRIPE_SECRET_KEY` env var for API access
+- The remote server needs to be publicly accessible for webhooks (or behind a tunnel like ngrok/Cloudflare Tunnel)
+- Point the Stripe webhook URL to `https://<server>/webhooks/stripe`
+
+**Factory Key Convention (Updated):**
+```
+websocket:<protocol>  → websocket:discord, websocket:slack
+webhook:<protocol>    → webhook:generic (GitHub, no protocol), webhook:stripe
+poll                  → poll (no protocol needed yet)
+```
 
 ### Phase 3: Polling Ingestor
 
