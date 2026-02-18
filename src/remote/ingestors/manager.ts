@@ -24,7 +24,11 @@ import type {
   WebSocketIngestorConfig,
 } from './types.js';
 import type { BaseIngestor } from './base-ingestor.js';
-import { DiscordGatewayIngestor } from './discord-gateway.js';
+import { createIngestor } from './registry.js';
+
+// Import providers so they self-register their factories.
+// Each provider calls registerIngestorFactory() at module load time.
+import './discord/discord-gateway.js';
 
 export class IngestorManager {
   /** Active ingestor instances, keyed by `callerAlias:connectionAlias`. */
@@ -68,7 +72,7 @@ export class IngestorManager {
         // Merge caller overrides into a copy of the template config
         const effectiveConfig = IngestorManager.mergeIngestorConfig(rawRoute.ingestor, overrides);
 
-        const ingestor = this.createIngestor(
+        const ingestor = createIngestor(
           connectionAlias,
           effectiveConfig,
           resolvedRoute.secrets,
@@ -192,40 +196,5 @@ export class IngestorManager {
     }
 
     return merged;
-  }
-
-  /**
-   * Factory: create the appropriate ingestor instance based on config.
-   */
-  private createIngestor(
-    connectionAlias: string,
-    config: IngestorConfig,
-    secrets: Record<string, string>,
-    bufferSize?: number,
-  ): BaseIngestor | null {
-    switch (config.type) {
-      case 'websocket': {
-        if (!config.websocket) {
-          console.error(`[ingestor] Missing websocket config for ${connectionAlias}`);
-          return null;
-        }
-        if (config.websocket.protocol === 'discord') {
-          return new DiscordGatewayIngestor(connectionAlias, secrets, config.websocket, bufferSize);
-        }
-        console.error(
-          `[ingestor] Unsupported websocket protocol "${config.websocket.protocol}" for ${connectionAlias}`,
-        );
-        return null;
-      }
-      case 'webhook':
-        console.error(`[ingestor] Webhook ingestors not yet implemented (${connectionAlias})`);
-        return null;
-      case 'poll':
-        console.error(`[ingestor] Poll ingestors not yet implemented (${connectionAlias})`);
-        return null;
-      default:
-        console.error(`[ingestor] Unknown ingestor type for ${connectionAlias}`);
-        return null;
-    }
   }
 }

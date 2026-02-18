@@ -12,7 +12,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DiscordGatewayIngestor } from './discord-gateway.js';
-import type { WebSocketIngestorConfig } from './types.js';
+import type { WebSocketIngestorConfig } from '../types.js';
 
 // Mock WebSocket so we don't actually connect
 vi.stubGlobal(

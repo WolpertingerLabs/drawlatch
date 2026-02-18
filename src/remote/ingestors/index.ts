@@ -1,3 +1,4 @@
+// ── Shared infrastructure ────────────────────────────────────────────────
 export {
   type IngestorConfig,
   type WebSocketIngestorConfig,
@@ -13,9 +14,12 @@ export {
 export { RingBuffer } from './ring-buffer.js';
 export { BaseIngestor } from './base-ingestor.js';
 export { IngestorManager } from './manager.js';
+export { registerIngestorFactory, createIngestor } from './registry.js';
+
+// ── Providers (each self-registers on import) ────────────────────────────
 export {
   DiscordGatewayIngestor,
   DiscordIntents,
   ALL_INTENTS,
   ALL_NON_PRIVILEGED_INTENTS,
-} from './discord-gateway.js';
+} from './discord/index.js';
