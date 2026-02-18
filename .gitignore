@@ -1,6 +1,7 @@
 node_modules/
 *.tsbuildinfo
 coverage/
+dist/
 
 # Never commit keys or config with secrets
 .mcp-secure-proxy/

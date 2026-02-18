@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc && rm -rf dist/connections && cp -r src/connections dist/connections",
+    "postinstall": "npm run build",
     "dev:remote": "tsx src/remote/server.ts",
     "dev:mcp": "tsx src/mcp/server.ts",
     "generate-keys": "tsx src/cli/generate-keys.ts",
