@@ -21,3 +21,15 @@ export {
   STRIPE_SIGNATURE_HEADER,
   DEFAULT_TIMESTAMP_TOLERANCE,
 } from './stripe-types.js';
+
+// ── Trello provider ─────────────────────────────────────────────────────
+export { TrelloWebhookIngestor } from './trello-webhook-ingestor.js';
+export {
+  verifyTrelloSignature,
+  extractTrelloActionType,
+  extractTrelloActionId,
+  type TrelloWebhookPayload,
+  type TrelloWebhookAction,
+  type TrelloWebhookInfo,
+  TRELLO_SIGNATURE_HEADER,
+} from './trello-types.js';

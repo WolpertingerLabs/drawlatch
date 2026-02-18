@@ -55,13 +55,13 @@ export interface WebSocketIngestorConfig {
   userIds?: string[];
 }
 
-/** Configuration for webhook-based ingestors (e.g., GitHub, Stripe). */
+/** Configuration for webhook-based ingestors (e.g., GitHub, Stripe, Trello). */
 export interface WebhookIngestorConfig {
   /** Path segment for the webhook endpoint (e.g., 'github' -> /webhooks/github). */
   path: string;
 
   /** Protocol identifier for service-specific signature verification and event extraction.
-   *  E.g., 'stripe' for Stripe webhooks. Omitted = generic (GitHub-compatible). */
+   *  E.g., 'stripe' for Stripe webhooks, 'trello' for Trello. Omitted = generic (GitHub-compatible). */
   protocol?: string;
 
   /** HTTP header containing the webhook signature for verification. */
@@ -69,6 +69,11 @@ export interface WebhookIngestorConfig {
 
   /** Secret name (from route secrets) used to verify webhook signatures. */
   signatureSecret?: string;
+
+  /** Callback URL used during webhook registration.
+   *  Required for services like Trello that include the callback URL in their
+   *  signature computation. May contain ${VAR} placeholders resolved from secrets. */
+  callbackUrl?: string;
 }
 
 /** Configuration for polling-based ingestors (e.g., Notion search). */

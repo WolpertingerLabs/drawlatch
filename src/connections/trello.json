@@ -1,13 +1,25 @@
 {
   "name": "Trello API",
-  "description": "Trello boards, lists, and cards API. Authentication uses query parameters — include ?key=${TRELLO_API_KEY}&token=${TRELLO_TOKEN} in your request URLs. The placeholders are resolved automatically from the route's secrets.",
+  "description": "Trello boards, lists, and cards API. Authentication uses query parameters — include ?key=${TRELLO_API_KEY}&token=${TRELLO_TOKEN} in your request URLs. The placeholders are resolved automatically from the route's secrets. Includes a webhook ingestor for real-time events (card updates, list changes, board activity, etc.) — set TRELLO_API_SECRET and TRELLO_CALLBACK_URL, then use poll_events to retrieve them.",
   "docsUrl": "https://developer.atlassian.com/cloud/trello/rest/",
   "headers": {},
   "secrets": {
     "TRELLO_API_KEY": "${TRELLO_API_KEY}",
-    "TRELLO_TOKEN": "${TRELLO_TOKEN}"
+    "TRELLO_TOKEN": "${TRELLO_TOKEN}",
+    "TRELLO_API_SECRET": "${TRELLO_API_SECRET}",
+    "TRELLO_CALLBACK_URL": "${TRELLO_CALLBACK_URL}"
   },
   "allowedEndpoints": [
     "https://api.trello.com/**"
-  ]
+  ],
+  "ingestor": {
+    "type": "webhook",
+    "webhook": {
+      "path": "trello",
+      "protocol": "trello",
+      "signatureHeader": "X-Trello-Webhook",
+      "signatureSecret": "TRELLO_API_SECRET",
+      "callbackUrl": "${TRELLO_CALLBACK_URL}"
+    }
+  }
 }
