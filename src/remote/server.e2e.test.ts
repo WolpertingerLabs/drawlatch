@@ -1932,3 +1932,279 @@ describe('Ingestor tools', () => {
     expect(response.result).toEqual([]);
   });
 });
+
+// ── Webhook ingestor (POST /webhooks/:path → poll_events) ───────────────
+
+describe('Webhook ingestor', () => {
+  let webhookServer: Server;
+  let webhookBaseUrl: string;
+  let webhookClientKeys: KeyBundle;
+  let webhookServerKeys: KeyBundle;
+
+  const webhookSecret = 'e2e-test-webhook-secret';
+
+  beforeAll(async () => {
+    webhookClientKeys = generateKeyBundle();
+    webhookServerKeys = generateKeyBundle();
+    const clientPub = extractPublicKeys(webhookClientKeys);
+
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      localKeysDir: '',
+      connectors: [
+        {
+          alias: 'github',
+          secrets: {
+            GITHUB_TOKEN: 'ghp_test_token',
+            GITHUB_WEBHOOK_SECRET: webhookSecret,
+          },
+          allowedEndpoints: ['https://api.github.com/**'],
+          ingestor: {
+            type: 'webhook',
+            webhook: {
+              path: 'github',
+              signatureHeader: 'X-Hub-Signature-256',
+              signatureSecret: 'GITHUB_WEBHOOK_SECRET',
+            },
+          },
+        },
+      ],
+      callers: {
+        'webhook-client': { peerKeyDir: '', connections: ['github'] },
+      },
+      rateLimitPerMinute: 60,
+    };
+
+    const app = createApp({
+      config,
+      ownKeys: webhookServerKeys,
+      authorizedPeers: [{ alias: 'webhook-client', keys: clientPub }],
+    });
+
+    // Start ingestors (creates the webhook ingestor instance)
+    const mgr = app.locals.ingestorManager as import('./ingestors/index.js').IngestorManager;
+    await mgr.startAll();
+
+    await new Promise<void>((resolve) => {
+      webhookServer = app.listen(0, '127.0.0.1', () => {
+        const addr = webhookServer.address() as AddressInfo;
+        webhookBaseUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) => {
+      webhookServer.close((err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  });
+
+  function signPayload(payload: string, secret: string): string {
+    const hmac = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+    return `sha256=${hmac}`;
+  }
+
+  async function webhookHandshake(): Promise<{
+    channel: EncryptedChannel;
+    sessionId: string;
+  }> {
+    const initiator = new HandshakeInitiator(
+      webhookClientKeys,
+      extractPublicKeys(webhookServerKeys),
+    );
+
+    const initMsg = initiator.createInit();
+    const initResp = await fetch(`${webhookBaseUrl}/handshake/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(initMsg),
+    });
+    expect(initResp.ok).toBe(true);
+
+    const reply = (await initResp.json()) as HandshakeReply;
+    const sessionKeys = initiator.processReply(reply);
+    const channel = new EncryptedChannel(sessionKeys);
+
+    const finishMsg = initiator.createFinish(sessionKeys);
+    const finishResp = await fetch(`${webhookBaseUrl}/handshake/finish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Id': sessionKeys.sessionId,
+      },
+      body: JSON.stringify(finishMsg),
+    });
+    expect(finishResp.ok).toBe(true);
+
+    return { channel, sessionId: sessionKeys.sessionId };
+  }
+
+  async function sendWebhookToolRequest(
+    channel: EncryptedChannel,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+  ): Promise<ProxyResponse> {
+    const request: ProxyRequest = {
+      type: 'proxy_request',
+      id: crypto.randomUUID(),
+      toolName,
+      toolInput,
+      timestamp: Date.now(),
+    };
+
+    const encrypted = channel.encryptJSON(request);
+    const resp = await fetch(`${webhookBaseUrl}/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Session-Id': channel.sessionId,
+      },
+      body: new Uint8Array(encrypted),
+    });
+
+    expect(resp.ok).toBe(true);
+    return channel.decryptJSON<ProxyResponse>(Buffer.from(await resp.arrayBuffer()));
+  }
+
+  it('should accept a webhook with valid signature and make event available via poll_events', async () => {
+    const body = JSON.stringify({ action: 'opened', number: 1 });
+    const sig = signPayload(body, webhookSecret);
+
+    const webhookResp = await fetch(`${webhookBaseUrl}/webhooks/github`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-GitHub-Event': 'pull_request',
+        'X-Hub-Signature-256': sig,
+        'X-GitHub-Delivery': 'delivery-001',
+      },
+      body,
+    });
+
+    expect(webhookResp.status).toBe(200);
+    const webhookResult = (await webhookResp.json()) as { received: boolean };
+    expect(webhookResult.received).toBe(true);
+
+    // Now retrieve the event via poll_events
+    const { channel } = await webhookHandshake();
+    const response = await sendWebhookToolRequest(channel, 'poll_events', {
+      connection: 'github',
+    });
+
+    expect(response.success).toBe(true);
+    const events = response.result as Array<{
+      id: number;
+      source: string;
+      eventType: string;
+      data: { deliveryId: string; event: string; payload: unknown };
+    }>;
+    expect(events.length).toBeGreaterThanOrEqual(1);
+
+    const event = events[0];
+    expect(event.source).toBe('github');
+    expect(event.eventType).toBe('pull_request');
+    expect(event.data.deliveryId).toBe('delivery-001');
+    expect(event.data.event).toBe('pull_request');
+    expect(event.data.payload).toEqual({ action: 'opened', number: 1 });
+  });
+
+  it('should reject a webhook with invalid signature (403)', async () => {
+    const body = JSON.stringify({ action: 'closed' });
+    const badSig = signPayload(body, 'wrong-secret');
+
+    const resp = await fetch(`${webhookBaseUrl}/webhooks/github`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-GitHub-Event': 'pull_request',
+        'X-Hub-Signature-256': badSig,
+      },
+      body,
+    });
+
+    expect(resp.status).toBe(403);
+  });
+
+  it('should reject a webhook with missing signature header (403)', async () => {
+    const body = JSON.stringify({ action: 'opened' });
+
+    const resp = await fetch(`${webhookBaseUrl}/webhooks/github`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-GitHub-Event': 'push',
+        // No X-Hub-Signature-256 header
+      },
+      body,
+    });
+
+    expect(resp.status).toBe(403);
+  });
+
+  it('should return 404 for an unregistered webhook path', async () => {
+    const resp = await fetch(`${webhookBaseUrl}/webhooks/nonexistent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(resp.status).toBe(404);
+  });
+
+  it('should report webhook ingestor in ingestor_status', async () => {
+    const { channel } = await webhookHandshake();
+    const response = await sendWebhookToolRequest(channel, 'ingestor_status', {});
+
+    expect(response.success).toBe(true);
+    const statuses = response.result as Array<{
+      connection: string;
+      type: string;
+      state: string;
+    }>;
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0].connection).toBe('github');
+    expect(statuses[0].type).toBe('webhook');
+    expect(statuses[0].state).toBe('connected');
+  });
+
+  it('should support cursor-based polling with after_id', async () => {
+    // Send two more webhook events
+    for (let i = 0; i < 2; i++) {
+      const body = JSON.stringify({ index: i });
+      const sig = signPayload(body, webhookSecret);
+      await fetch(`${webhookBaseUrl}/webhooks/github`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-GitHub-Event': `test_event_${i}`,
+          'X-Hub-Signature-256': sig,
+        },
+        body,
+      });
+    }
+
+    const { channel } = await webhookHandshake();
+
+    // Get all events first
+    const allResponse = await sendWebhookToolRequest(channel, 'poll_events', {
+      connection: 'github',
+    });
+    const allEvents = allResponse.result as Array<{ id: number }>;
+    expect(allEvents.length).toBeGreaterThanOrEqual(2);
+
+    // Now poll with a cursor to get only newer events
+    const lastButOneId = allEvents[allEvents.length - 2].id;
+    const cursorResponse = await sendWebhookToolRequest(channel, 'poll_events', {
+      connection: 'github',
+      after_id: lastButOneId,
+    });
+    const cursorEvents = cursorResponse.result as Array<{ id: number }>;
+    expect(cursorEvents.length).toBeGreaterThanOrEqual(1);
+    expect(cursorEvents.every((e) => e.id > lastButOneId)).toBe(true);
+  });
+});

@@ -27,7 +27,7 @@ Connection templates are loaded when a caller's session is established. Custom c
 | `devin`         | [Devin AI API](https://docs.devin.ai/api-reference/overview)                                  | `DEVIN_API_KEY`                  | Bearer token header              |
 | `discord-bot`   | [Discord Bot API](https://discord.com/developers/docs/intro)                                  | `DISCORD_BOT_TOKEN`              | Bot token header (see note)      |
 | `discord-oauth` | [Discord OAuth2 API](https://discord.com/developers/docs/topics/oauth2)                       | `DISCORD_OAUTH_TOKEN`            | Bearer token header (see note)   |
-| `github`        | [GitHub REST API](https://docs.github.com/en/rest)                                            | `GITHUB_TOKEN`                   | Bearer token header              |
+| `github`        | [GitHub REST API](https://docs.github.com/en/rest)                                            | `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET` | Bearer token header (see note) |
 | `google`        | [Google APIs](https://developers.google.com/apis-explorer)                                    | `GOOGLE_API_TOKEN`               | Bearer token header (see note)   |
 | `google-ai`     | [Google AI Gemini API](https://ai.google.dev/api)                                             | `GOOGLE_AI_API_KEY`              | x-goog-api-key header (see note) |
 | `hex`           | [Hex API](https://learn.hex.tech/docs/api/api-overview)                                       | `HEX_TOKEN`                      | Bearer token header              |
@@ -40,6 +40,8 @@ Connection templates are loaded when a caller's session is established. Custom c
 | `trello`        | [Trello Boards API](https://developer.atlassian.com/cloud/trello/rest/)                       | `TRELLO_API_KEY`, `TRELLO_TOKEN` | Query parameters (see note)      |
 
 > **Anthropic note:** The Anthropic API uses a custom `x-api-key` header instead of the standard `Authorization: Bearer` pattern. The `anthropic-version` header is pinned to `2023-06-01`. To use a different API version, override with a custom route.
+
+> **GitHub note:** The `github` connection includes a **webhook ingestor** for real-time events (push, pull_request, issues, etc.). Set `GITHUB_WEBHOOK_SECRET` to the webhook signing secret configured in your GitHub repository's webhook settings, then point the webhook URL to `https://<your-server>/webhooks/github`. Events are buffered and retrievable via `poll_events`. The server must be publicly accessible (or behind a tunnel like ngrok/Cloudflare Tunnel) to receive webhook POSTs. If you don't need webhook ingestion, the `GITHUB_WEBHOOK_SECRET` env var can be left unset — the REST API functionality works independently.
 
 > **Discord note:** Discord has two connection types. `discord-bot` uses the `Bot` authorization prefix for bot tokens, which have full access to most API routes (guilds, channels, messages, etc.). `discord-oauth` uses a standard `Bearer` token obtained via OAuth2, which provides user-scoped access limited to the authorized scopes (identity, guilds list, email, etc.). Both target the same v10 API base URL.
 

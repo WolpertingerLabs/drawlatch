@@ -25,3 +25,11 @@ export {
 } from './discord/index.js';
 
 export { SlackSocketModeIngestor } from './slack/index.js';
+
+// ── Webhook providers ────────────────────────────────────────────────────
+export { GitHubWebhookIngestor } from './webhook/index.js';
+export {
+  verifyGitHubSignature,
+  extractGitHubHeaders,
+  type GitHubWebhookHeaders,
+} from './webhook/index.js';
