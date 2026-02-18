@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import { loadRemoteConfig, resolveRoutes, resolveCallerRoutes, resolveSecrets, resolvePlaceholders, } from '../shared/config.js';
 import { loadKeyBundle, loadPublicKeys, EncryptedChannel, } from '../shared/crypto/index.js';
 import { HandshakeResponder, } from '../shared/protocol/index.js';
+import { IngestorManager } from './ingestors/index.js';
 // ── State ──────────────────────────────────────────────────────────────────
 const sessions = new Map();
 const pendingHandshakes = new Map();
@@ -121,7 +122,7 @@ const toolHandlers = {
     /**
      * Proxied HTTP request with route-scoped secret injection.
      */
-    async http_request(input, routes) {
+    async http_request(input, routes, _context) {
         const { method, url, headers, body } = input;
         // Step 1: Find matching route — try raw URL first
         let matched = matchRoute(url, routes);
@@ -211,7 +212,7 @@ const toolHandlers = {
      * List available routes with metadata, endpoint patterns, and secret names (not values).
      * Provides full disclosure of available routes for the local agent.
      */
-    list_routes(_input, routes) {
+    list_routes(_input, routes, _context) {
         const routeList = routes.map((route, index) => {
             const info = { index };
             if (route.name)
@@ -229,6 +230,24 @@ const toolHandlers = {
         });
         return Promise.resolve(routeList);
     },
+    /**
+     * Poll for new events from ingestors (Discord Gateway, webhooks, pollers).
+     * Returns events since a cursor, optionally filtered by connection.
+     */
+    poll_events(input, _routes, context) {
+        const { connection, after_id } = input;
+        const afterId = after_id ?? -1;
+        if (connection) {
+            return Promise.resolve(context.ingestorManager.getEvents(context.callerAlias, connection, afterId));
+        }
+        return Promise.resolve(context.ingestorManager.getAllEvents(context.callerAlias, afterId));
+    },
+    /**
+     * Get the status of all active ingestors for this caller.
+     */
+    ingestor_status(_input, _routes, context) {
+        return Promise.resolve(context.ingestorManager.getStatuses(context.callerAlias));
+    },
 };
 export function createApp(options = {}) {
     const app = express();
@@ -240,6 +259,9 @@ export function createApp(options = {}) {
     const ownKeys = options.ownKeys ?? loadKeyBundle(config.localKeysDir);
     const authorizedPeers = options.authorizedPeers ?? loadCallerPeers(config.callers);
     rateLimitPerMinute = config.rateLimitPerMinute;
+    // Create or use the provided ingestor manager
+    const ingestorManager = options.ingestorManager ?? new IngestorManager(config);
+    app.locals.ingestorManager = ingestorManager;
     // Log connector and caller summary
     const connectorCount = config.connectors?.length ?? 0;
     const callerCount = Object.keys(config.callers).length;
@@ -359,7 +381,11 @@ export function createApp(options = {}) {
             if (!handler) {
                 throw new Error(`Unknown tool: ${request.toolName}`);
             }
-            const result = await handler(request.toolInput, session.resolvedRoutes);
+            const context = {
+                callerAlias: session.callerAlias,
+                ingestorManager: app.locals.ingestorManager,
+            };
+            const result = await handler(request.toolInput, session.resolvedRoutes, context);
             // Build and encrypt response
             const response = {
                 type: 'proxy_response',
@@ -414,15 +440,27 @@ export function createApp(options = {}) {
 function main() {
     const config = loadRemoteConfig();
     const app = createApp();
+    const ingestorManager = app.locals.ingestorManager;
     const server = app.listen(config.port, config.host, () => {
         console.log(`[remote] Secure remote server listening on ${config.host}:${config.port}`);
+        // Start ingestors after the server is listening
+        ingestorManager.startAll().catch((err) => {
+            console.error('[remote] Failed to start ingestors:', err);
+        });
     });
-    // Graceful shutdown: close the server when the process receives SIGTERM or SIGINT.
+    // Graceful shutdown: stop ingestors, then close the server.
     const shutdown = () => {
         console.log('[remote] Shutting down gracefully...');
-        server.close(() => {
-            console.log('[remote] Server closed.');
-            process.exit(0);
+        ingestorManager
+            .stopAll()
+            .catch((err) => {
+            console.error('[remote] Error stopping ingestors:', err);
+        })
+            .finally(() => {
+            server.close(() => {
+                console.log('[remote] Server closed.');
+                process.exit(0);
+            });
         });
         // Force exit after 10 seconds if connections don't drain
         setTimeout(() => {

@@ -40,6 +40,7 @@ import {
   type ProxyRequest,
   type ProxyResponse,
 } from '../shared/protocol/index.js';
+import { IngestorManager } from './ingestors/index.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -201,13 +202,25 @@ setInterval(() => {
 
 // ── Tool handlers ──────────────────────────────────────────────────────────
 
-type ToolHandler = (input: Record<string, unknown>, routes: ResolvedRoute[]) => Promise<unknown>;
+/** Context passed to every tool handler, providing caller identity and shared services. */
+export interface ToolContext {
+  /** The caller alias for the session making this request. */
+  callerAlias: string;
+  /** The shared ingestor manager (for poll_events / ingestor_status). */
+  ingestorManager: IngestorManager;
+}
+
+type ToolHandler = (
+  input: Record<string, unknown>,
+  routes: ResolvedRoute[],
+  context: ToolContext,
+) => Promise<unknown>;
 
 const toolHandlers: Record<string, ToolHandler> = {
   /**
    * Proxied HTTP request with route-scoped secret injection.
    */
-  async http_request(input, routes) {
+  async http_request(input, routes, _context) {
     const { method, url, headers, body } = input as {
       method: string;
       url: string;
@@ -313,7 +326,7 @@ const toolHandlers: Record<string, ToolHandler> = {
    * List available routes with metadata, endpoint patterns, and secret names (not values).
    * Provides full disclosure of available routes for the local agent.
    */
-  list_routes(_input, routes) {
+  list_routes(_input, routes, _context) {
     const routeList = routes.map((route, index) => {
       const info: Record<string, unknown> = { index };
 
@@ -332,6 +345,33 @@ const toolHandlers: Record<string, ToolHandler> = {
     return Promise.resolve(routeList);
   },
 
+  /**
+   * Poll for new events from ingestors (Discord Gateway, webhooks, pollers).
+   * Returns events since a cursor, optionally filtered by connection.
+   */
+  poll_events(input, _routes, context) {
+    const { connection, after_id } = input as {
+      connection?: string;
+      after_id?: number;
+    };
+    const afterId = after_id ?? -1;
+
+    if (connection) {
+      return Promise.resolve(
+        context.ingestorManager.getEvents(context.callerAlias, connection, afterId),
+      );
+    }
+    return Promise.resolve(
+      context.ingestorManager.getAllEvents(context.callerAlias, afterId),
+    );
+  },
+
+  /**
+   * Get the status of all active ingestors for this caller.
+   */
+  ingestor_status(_input, _routes, context) {
+    return Promise.resolve(context.ingestorManager.getStatuses(context.callerAlias));
+  },
 };
 
 // ── Express app ────────────────────────────────────────────────────────────
@@ -344,6 +384,8 @@ export interface CreateAppOptions {
   ownKeys?: import('../shared/crypto/index.js').KeyBundle;
   /** Override authorized peers instead of loading from disk */
   authorizedPeers?: AuthorizedPeer[];
+  /** Override the ingestor manager instead of creating one from config */
+  ingestorManager?: IngestorManager;
 }
 
 export function createApp(options: CreateAppOptions = {}) {
@@ -360,6 +402,10 @@ export function createApp(options: CreateAppOptions = {}) {
   const authorizedPeers = options.authorizedPeers ?? loadCallerPeers(config.callers);
 
   rateLimitPerMinute = config.rateLimitPerMinute;
+
+  // Create or use the provided ingestor manager
+  const ingestorManager = options.ingestorManager ?? new IngestorManager(config);
+  app.locals.ingestorManager = ingestorManager;
 
   // Log connector and caller summary
   const connectorCount = config.connectors?.length ?? 0;
@@ -505,7 +551,11 @@ export function createApp(options: CreateAppOptions = {}) {
         throw new Error(`Unknown tool: ${request.toolName}`);
       }
 
-      const result = await handler(request.toolInput, session.resolvedRoutes);
+      const context: ToolContext = {
+        callerAlias: session.callerAlias,
+        ingestorManager: app.locals.ingestorManager as IngestorManager,
+      };
+      const result = await handler(request.toolInput, session.resolvedRoutes, context);
 
       // Build and encrypt response
       const response: ProxyResponse = {
@@ -568,18 +618,32 @@ export function createApp(options: CreateAppOptions = {}) {
 function main(): void {
   const config = loadRemoteConfig();
   const app = createApp();
+  const ingestorManager = app.locals.ingestorManager as IngestorManager;
 
   const server = app.listen(config.port, config.host, () => {
     console.log(`[remote] Secure remote server listening on ${config.host}:${config.port}`);
+
+    // Start ingestors after the server is listening
+    ingestorManager.startAll().catch((err: unknown) => {
+      console.error('[remote] Failed to start ingestors:', err);
+    });
   });
 
-  // Graceful shutdown: close the server when the process receives SIGTERM or SIGINT.
+  // Graceful shutdown: stop ingestors, then close the server.
   const shutdown = () => {
     console.log('[remote] Shutting down gracefully...');
-    server.close(() => {
-      console.log('[remote] Server closed.');
-      process.exit(0);
-    });
+
+    ingestorManager
+      .stopAll()
+      .catch((err: unknown) => {
+        console.error('[remote] Error stopping ingestors:', err);
+      })
+      .finally(() => {
+        server.close(() => {
+          console.log('[remote] Server closed.');
+          process.exit(0);
+        });
+      });
 
     // Force exit after 10 seconds if connections don't drain
     setTimeout(() => {

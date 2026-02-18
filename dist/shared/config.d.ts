@@ -10,6 +10,7 @@
  *
  * Keys directory: .mcp-secure-proxy/keys/
  */
+import type { IngestorConfig } from '../remote/ingestors/types.js';
 /** Base directory for all config and keys.
  *  Defaults to .mcp-secure-proxy/ in the current working directory (repo-local).
  *  Override with MCP_CONFIG_DIR env var for custom deployments. */
@@ -65,6 +66,10 @@ export interface Route {
      *  Defaults to false — prevents agents from exfiltrating secrets by
      *  writing placeholder strings into API resources and reading them back. */
     resolveSecretsInBody?: boolean;
+    /** Optional ingestor configuration for real-time event ingestion.
+     *  When present, the remote server can start a long-lived ingestor
+     *  (WebSocket, webhook listener, or poller) for this connection. */
+    ingestor?: IngestorConfig;
 }
 /** A route after secret/header resolution — used at runtime */
 export interface ResolvedRoute {
