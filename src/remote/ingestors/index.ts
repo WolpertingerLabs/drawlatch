@@ -27,9 +27,19 @@ export {
 export { SlackSocketModeIngestor } from './slack/index.js';
 
 // ── Webhook providers ────────────────────────────────────────────────────
+export { WebhookIngestor } from './webhook/index.js';
 export { GitHubWebhookIngestor } from './webhook/index.js';
 export {
   verifyGitHubSignature,
   extractGitHubHeaders,
   type GitHubWebhookHeaders,
+} from './webhook/index.js';
+
+export { StripeWebhookIngestor } from './webhook/index.js';
+export {
+  verifyStripeSignature,
+  parseStripeSignatureHeader,
+  type StripeSignatureComponents,
+  STRIPE_SIGNATURE_HEADER,
+  DEFAULT_TIMESTAMP_TOLERANCE,
 } from './webhook/index.js';

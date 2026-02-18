@@ -25,13 +25,14 @@ import type {
 } from './types.js';
 import type { BaseIngestor } from './base-ingestor.js';
 import { createIngestor } from './registry.js';
-import { GitHubWebhookIngestor } from './webhook/webhook-ingestor.js';
+import { WebhookIngestor } from './webhook/base-webhook-ingestor.js';
 
 // Import providers so they self-register their factories.
 // Each provider calls registerIngestorFactory() at module load time.
 import './discord/discord-gateway.js';
 import './slack/socket-mode.js';
 import './webhook/webhook-ingestor.js';
+import './webhook/stripe-webhook-ingestor.js';
 
 export class IngestorManager {
   /** Active ingestor instances, keyed by `callerAlias:connectionAlias`. */
@@ -170,10 +171,10 @@ export class IngestorManager {
    *
    * @param path - The webhook path segment (e.g., 'github' from /webhooks/github).
    */
-  getWebhookIngestors(path: string): GitHubWebhookIngestor[] {
-    const matches: GitHubWebhookIngestor[] = [];
+  getWebhookIngestors(path: string): WebhookIngestor[] {
+    const matches: WebhookIngestor[] = [];
     for (const ingestor of this.ingestors.values()) {
-      if (ingestor instanceof GitHubWebhookIngestor && ingestor.webhookPath === path) {
+      if (ingestor instanceof WebhookIngestor && ingestor.webhookPath === path) {
         matches.push(ingestor);
       }
     }

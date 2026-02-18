@@ -60,6 +60,10 @@ export interface WebhookIngestorConfig {
   /** Path segment for the webhook endpoint (e.g., 'github' -> /webhooks/github). */
   path: string;
 
+  /** Protocol identifier for service-specific signature verification and event extraction.
+   *  E.g., 'stripe' for Stripe webhooks. Omitted = generic (GitHub-compatible). */
+  protocol?: string;
+
   /** HTTP header containing the webhook signature for verification. */
   signatureHeader?: string;
 
