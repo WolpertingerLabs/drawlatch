@@ -1627,4 +1627,35 @@ describe('Per-caller env overrides', () => {
         expect(result.body.auth).toBe('Bearer literal-hardcoded-token');
     });
 });
+// ── Ingestor tools (poll_events / ingestor_status) ──────────────────────
+describe('Ingestor tools', () => {
+    it('should return empty array from poll_events when no ingestors configured', async () => {
+        const { channel } = await performHttpHandshake();
+        const response = await sendToolRequest(channel, 'poll_events', {});
+        expect(response.success).toBe(true);
+        expect(response.result).toEqual([]);
+    });
+    it('should return empty array from poll_events with connection filter', async () => {
+        const { channel } = await performHttpHandshake();
+        const response = await sendToolRequest(channel, 'poll_events', {
+            connection: 'discord-bot',
+        });
+        expect(response.success).toBe(true);
+        expect(response.result).toEqual([]);
+    });
+    it('should return empty array from poll_events with after_id cursor', async () => {
+        const { channel } = await performHttpHandshake();
+        const response = await sendToolRequest(channel, 'poll_events', {
+            after_id: 5,
+        });
+        expect(response.success).toBe(true);
+        expect(response.result).toEqual([]);
+    });
+    it('should return empty array from ingestor_status when no ingestors configured', async () => {
+        const { channel } = await performHttpHandshake();
+        const response = await sendToolRequest(channel, 'ingestor_status', {});
+        expect(response.success).toBe(true);
+        expect(response.result).toEqual([]);
+    });
+});
 //# sourceMappingURL=server.e2e.test.js.map

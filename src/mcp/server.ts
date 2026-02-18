@@ -218,6 +218,79 @@ server.tool(
   },
 );
 
+/**
+ * Poll for new events from ingestors on the remote server.
+ * Returns events received from real-time sources (Discord Gateway, webhooks, etc.)
+ * since the last poll cursor.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'poll_events',
+  'Poll for new events from ingestors (Discord messages, GitHub webhooks, etc.). Returns events received since the given cursor. Pass after_id from the last event you received to get only new events. Omit connection to get events from all ingestors.',
+  {
+    connection: z
+      .string()
+      .optional()
+      .describe('Connection alias to poll (e.g., "discord-bot"). Omit for all.'),
+    after_id: z
+      .number()
+      .optional()
+      .describe('Return events with id > after_id. Omit or -1 for all buffered events.'),
+  },
+  async ({ connection, after_id }) => {
+    try {
+      const result = await sendEncryptedRequest('poll_events', {
+        connection,
+        after_id,
+      });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
+ * Get the status of all active ingestors for this caller.
+ * Shows connection state, buffer sizes, event counts, and any errors.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'ingestor_status',
+  'Get the status of all active ingestors for this caller. Shows connection state, buffer sizes, event counts, and any errors.',
+  { _: z.string().optional().describe('unused') },
+  async () => {
+    try {
+      const result = await sendEncryptedRequest('ingestor_status', {});
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
 // ── Start ──────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {

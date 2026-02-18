@@ -16,6 +16,7 @@ import 'dotenv/config';
 import { type RemoteServerConfig, type ResolvedRoute } from '../shared/config.js';
 import { EncryptedChannel, type PublicKeyBundle } from '../shared/crypto/index.js';
 import { HandshakeResponder, type HandshakeInit } from '../shared/protocol/index.js';
+import { IngestorManager } from './ingestors/index.js';
 /** An authorized peer with its alias and optional display name */
 export interface AuthorizedPeer {
     /** Caller alias — the key from the callers config object */
@@ -57,6 +58,13 @@ export declare function cleanupSessions(sessionsMap: Map<string, Pick<Session, '
     expiredSessions: string[];
     expiredHandshakes: string[];
 };
+/** Context passed to every tool handler, providing caller identity and shared services. */
+export interface ToolContext {
+    /** The caller alias for the session making this request. */
+    callerAlias: string;
+    /** The shared ingestor manager (for poll_events / ingestor_status). */
+    ingestorManager: IngestorManager;
+}
 /** Options for creating the app — allows dependency injection for tests */
 export interface CreateAppOptions {
     /** Override config instead of loading from disk */
@@ -65,6 +73,8 @@ export interface CreateAppOptions {
     ownKeys?: import('../shared/crypto/index.js').KeyBundle;
     /** Override authorized peers instead of loading from disk */
     authorizedPeers?: AuthorizedPeer[];
+    /** Override the ingestor manager instead of creating one from config */
+    ingestorManager?: IngestorManager;
 }
 export declare function createApp(options?: CreateAppOptions): import("express-serve-static-core").Express;
 //# sourceMappingURL=server.d.ts.map
