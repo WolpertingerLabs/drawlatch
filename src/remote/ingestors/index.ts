@@ -54,3 +54,6 @@ export {
   type TrelloWebhookInfo,
   TRELLO_SIGNATURE_HEADER,
 } from './webhook/index.js';
+
+// ── Poll provider ──────────────────────────────────────────────────────
+export { PollIngestor } from './poll/index.js';

@@ -1,6 +1,6 @@
 {
   "name": "Notion API",
-  "description": "Notion API — pages, databases, blocks, users, search, and more. Auth is handled automatically via the NOTION_API_KEY environment variable (internal integration token). The Notion-Version header is set to 2022-06-28.",
+  "description": "Notion API — pages, databases, blocks, users, search, and more. Auth is handled automatically via the NOTION_API_KEY environment variable (internal integration token). The Notion-Version header is set to 2022-06-28. Includes a poll ingestor that periodically searches for recently edited pages — use poll_events to retrieve them.",
   "docsUrl": "https://developers.notion.com/reference",
   "headers": {
     "Authorization": "Bearer ${NOTION_API_KEY}",
@@ -12,5 +12,22 @@
   },
   "allowedEndpoints": [
     "https://api.notion.com/**"
-  ]
+  ],
+  "ingestor": {
+    "type": "poll",
+    "poll": {
+      "url": "https://api.notion.com/v1/search",
+      "intervalMs": 60000,
+      "method": "POST",
+      "body": {
+        "sort": {
+          "direction": "descending",
+          "timestamp": "last_edited_time"
+        }
+      },
+      "responsePath": "results",
+      "deduplicateBy": "id",
+      "eventType": "page_updated"
+    }
+  }
 }

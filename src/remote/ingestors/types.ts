@@ -87,11 +87,26 @@ export interface PollIngestorConfig {
   /** HTTP method to use (default: 'GET'). */
   method?: string;
 
-  /** Optional request body for POST polls. */
+  /** Optional request body for POST polls. May contain ${VAR} placeholders. */
   body?: unknown;
 
   /** Field to use for deduplication (e.g., 'id'). */
   deduplicateBy?: string;
+
+  /** Dot-separated path to extract the items array from the response.
+   *  E.g., 'results' for Notion, 'data.issues.nodes' for Linear.
+   *  Omit for responses that are already a top-level array. */
+  responsePath?: string;
+
+  /** Static event type string to assign to all items from this poll.
+   *  E.g., 'page_updated' for Notion, 'issue_updated' for Linear.
+   *  Default: 'poll' */
+  eventType?: string;
+
+  /** Additional headers to send with the poll request.
+   *  Values may contain ${VAR} placeholders.
+   *  These are merged UNDER the connection's route headers (route headers take precedence). */
+  headers?: Record<string, string>;
 }
 
 // ── Buffered event ──────────────────────────────────────────────────────

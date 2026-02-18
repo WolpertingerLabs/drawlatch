@@ -333,18 +333,39 @@ The factory registry now uses `webhook:<protocol>` keys (mirroring `websocket:<p
 ```
 websocket:<protocol>  → websocket:discord, websocket:slack
 webhook:<protocol>    → webhook:generic (GitHub, no protocol), webhook:stripe
-poll                  → poll (no protocol needed yet)
+poll                  → poll (no protocol sub-key needed)
 ```
 
-### Phase 3: Polling Ingestor
+### Phase 3: Polling Ingestor — **Complete**
 
-Generic interval-based HTTP polling for APIs without real-time support (e.g., Notion, Jira, RSS feeds).
+Added support for interval-based HTTP polling for APIs that lack real-time push mechanisms (WebSocket or webhooks). Notion and Linear are the first poll providers.
 
-**Implementation:**
-- Create `src/remote/ingestors/poll-ingestor.ts`
-- Configurable interval, HTTP method, request body, and deduplication field
-- Uses the existing `fetch` infrastructure with resolved secrets/headers from the connection
-- Deduplication: track seen IDs to avoid pushing duplicate events
+**Architecture:** Unlike WebSocket ingestors (which maintain persistent outbound connections) or webhook ingestors (which passively receive POSTs), poll ingestors are active HTTP requesters on a timer. Each poll cycle:
+1. Makes an HTTP request (GET or POST) using the connection's resolved headers
+2. Parses the JSON response and extracts an array of items via `responsePath`
+3. Deduplicates items by a configurable field (`deduplicateBy`)
+4. Pushes new items into the ring buffer
+
+The PollIngestor is a single concrete class (not an abstract base with subclasses) because all service-specific behavior is fully parameterized through config fields. No custom code is needed per service.
+
+**New Files:**
+
+| File | Purpose |
+|---|---|
+| `src/remote/ingestors/poll/poll-ingestor.ts` | `PollIngestor` class. Interval management, HTTP fetch, response parsing via `responsePath`, deduplication via seen-ID Set with pruning, error tolerance with consecutive error tracking. Self-registers as `'poll'` factory. |
+| `src/remote/ingestors/poll/poll-ingestor.test.ts` | ~25 unit tests covering lifecycle, polling, response parsing, deduplication, error handling, factory registration |
+| `src/remote/ingestors/poll/index.ts` | Barrel exports |
+
+**Modified Files:**
+
+| File | Changes |
+|---|---|
+| `src/remote/ingestors/types.ts` | Added `responsePath`, `eventType`, and `headers` fields to `PollIngestorConfig` |
+| `src/remote/ingestors/manager.ts` | Added poll factory self-registration import. `startAll()` injects resolved route headers for poll ingestors. `mergeIngestorConfig()` handles `intervalMs` override for poll. |
+| `src/remote/ingestors/index.ts` | Added `PollIngestor` export |
+| `src/shared/config.ts` | Added `intervalMs` field to `IngestorOverrides` |
+| `src/connections/notion.json` | Added poll ingestor config: POST to `/v1/search`, 60s interval, `responsePath: "results"`, dedup by `id` |
+| `src/connections/linear.json` | Added poll ingestor config: POST GraphQL, 60s interval, `responsePath: "data.issues.nodes"`, dedup by `id` |
 
 **Config example (Notion):**
 ```json
@@ -356,11 +377,61 @@ Generic interval-based HTTP polling for APIs without real-time support (e.g., No
       "intervalMs": 60000,
       "method": "POST",
       "body": { "sort": { "direction": "descending", "timestamp": "last_edited_time" } },
-      "deduplicateBy": "id"
+      "responsePath": "results",
+      "deduplicateBy": "id",
+      "eventType": "page_updated"
     }
   }
 }
 ```
+
+**Config example (Linear):**
+```json
+{
+  "ingestor": {
+    "type": "poll",
+    "poll": {
+      "url": "https://api.linear.app/graphql",
+      "intervalMs": 60000,
+      "method": "POST",
+      "body": { "query": "{ issues(orderBy: updatedAt, first: 50) { nodes { id identifier title state { name } priority updatedAt createdAt assignee { name } } } }" },
+      "responsePath": "data.issues.nodes",
+      "deduplicateBy": "id",
+      "eventType": "issue_updated"
+    }
+  }
+}
+```
+
+**Caller overrides (poll-specific):**
+```json
+{
+  "ingestorOverrides": {
+    "notion": {
+      "intervalMs": 30000,
+      "bufferSize": 500
+    }
+  }
+}
+```
+
+**Deduplication:**
+- Items are tracked by the value of their `deduplicateBy` field (stringified)
+- A Set of seen IDs prevents duplicate pushes across poll cycles
+- Maximum 10,000 tracked IDs; pruned by removing the oldest half when exceeded
+- Items without the deduplication field are always pushed (fail-open)
+
+**Error handling:**
+- Transient HTTP errors set state to `'reconnecting'` (timer continues)
+- After 10 consecutive errors, state transitions to `'error'` and the timer stops
+- A single successful poll resets the error counter and returns to `'connected'`
+- Minimum poll interval enforced at 5 seconds to prevent API flooding
+
+**Factory key:** `poll` (no protocol sub-key needed)
+
+**Setup requirements:**
+- Set the relevant API key environment variable (e.g., `NOTION_API_KEY`, `LINEAR_API_KEY`)
+- No external setup needed (unlike webhooks, which require public URLs and webhook registration)
 
 ### Phase 4: Slack Socket Mode
 
@@ -475,10 +546,33 @@ Currently, if Claude's session restarts, it loses its `after_id` cursor and may 
       "guildIds": ["1234567890"],
       "channelIds": ["9876543210"],
       "userIds": ["1111111111"]
+    },
+    "poll": {
+      "url": "https://api.example.com/items",
+      "intervalMs": 60000,
+      "method": "POST",
+      "body": { "query": "..." },
+      "responsePath": "data.items",
+      "deduplicateBy": "id",
+      "eventType": "item_updated",
+      "headers": { "X-Custom-Header": "value" }
     }
   }
 }
 ```
+
+### Poll Ingestor Configuration
+
+| Field | Type | Default | Required | Description |
+|---|---|---|---|---|
+| `url` | `string` | — | Yes | URL to poll. May contain `${VAR}` placeholders. |
+| `intervalMs` | `number` | — | Yes | Poll interval in milliseconds (minimum 5000). |
+| `method` | `string` | `GET` | No | HTTP method. |
+| `body` | `unknown` | — | No | Request body (for POST/PUT/PATCH). `${VAR}` placeholders resolved. |
+| `responsePath` | `string` | — | No | Dot-separated path to extract items array from response. Omit for top-level arrays. |
+| `deduplicateBy` | `string` | — | No | Field name to use for deduplication. Omit to push all items every cycle. |
+| `eventType` | `string` | `poll` | No | Event type string assigned to all items. |
+| `headers` | `Record<string, string>` | — | No | Additional headers merged with connection route headers. |
 
 ### Caller-Level Ingestor Overrides
 
@@ -515,6 +609,7 @@ Callers can override any of the template's ingestor settings without modifying t
 | `userIds` | `string[]` | `[]` (all) | Only buffer events from these user IDs |
 | `bufferSize` | `number` | `200` | Override ring buffer capacity (max 1000) |
 | `disabled` | `boolean` | `false` | Disable the ingestor entirely |
+| `intervalMs` | `number` | Template value | Override poll interval in milliseconds (poll ingestors only) |
 
 **Filtering behavior:**
 - Payload filters (`guildIds`, `channelIds`, `userIds`) inspect the event's `d` payload

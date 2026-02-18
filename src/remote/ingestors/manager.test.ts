@@ -178,3 +178,60 @@ describe('IngestorManager.mergeIngestorConfig', () => {
     expect(result.websocket).toBeUndefined();
   });
 });
+
+describe('IngestorManager.mergeIngestorConfig — poll overrides', () => {
+  const pollConfig: IngestorConfig = {
+    type: 'poll',
+    poll: {
+      url: 'https://api.example.com/items',
+      intervalMs: 60_000,
+      method: 'POST',
+      body: { query: 'test' },
+      deduplicateBy: 'id',
+      responsePath: 'results',
+      eventType: 'item_updated',
+    },
+  };
+
+  it('should override intervalMs for poll config', () => {
+    const overrides: IngestorOverrides = { intervalMs: 30_000 };
+    const result = IngestorManager.mergeIngestorConfig(pollConfig, overrides);
+    expect(result.poll?.intervalMs).toBe(30_000);
+  });
+
+  it('should not mutate original poll config', () => {
+    const overrides: IngestorOverrides = { intervalMs: 15_000 };
+    IngestorManager.mergeIngestorConfig(pollConfig, overrides);
+    expect(pollConfig.poll?.intervalMs).toBe(60_000);
+  });
+
+  it('should preserve non-overridden poll fields', () => {
+    const overrides: IngestorOverrides = { intervalMs: 30_000 };
+    const result = IngestorManager.mergeIngestorConfig(pollConfig, overrides);
+    expect(result.type).toBe('poll');
+    expect(result.poll?.url).toBe('https://api.example.com/items');
+    expect(result.poll?.method).toBe('POST');
+    expect(result.poll?.deduplicateBy).toBe('id');
+    expect(result.poll?.responsePath).toBe('results');
+    expect(result.poll?.eventType).toBe('item_updated');
+  });
+
+  it('should handle poll config without overrides', () => {
+    const result = IngestorManager.mergeIngestorConfig(pollConfig, undefined);
+    expect(result).toEqual(pollConfig);
+  });
+
+  it('should handle poll config with empty overrides', () => {
+    const result = IngestorManager.mergeIngestorConfig(pollConfig, {});
+    expect(result.poll?.intervalMs).toBe(60_000);
+  });
+
+  it('should not apply websocket overrides to poll config', () => {
+    const overrides: IngestorOverrides = { intents: 4609, guildIds: ['123'] };
+    const result = IngestorManager.mergeIngestorConfig(pollConfig, overrides);
+    // Should not crash; websocket overrides are ignored for poll types
+    expect(result.type).toBe('poll');
+    expect(result.poll?.intervalMs).toBe(60_000);
+    expect(result.websocket).toBeUndefined();
+  });
+});

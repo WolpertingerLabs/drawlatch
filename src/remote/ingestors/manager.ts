@@ -34,6 +34,7 @@ import './slack/socket-mode.js';
 import './webhook/github-webhook-ingestor.js';
 import './webhook/stripe-webhook-ingestor.js';
 import './webhook/trello-webhook-ingestor.js';
+import './poll/poll-ingestor.js';
 
 export class IngestorManager {
   /** Active ingestor instances, keyed by `callerAlias:connectionAlias`. */
@@ -76,6 +77,13 @@ export class IngestorManager {
 
         // Merge caller overrides into a copy of the template config
         const effectiveConfig = IngestorManager.mergeIngestorConfig(rawRoute.ingestor, overrides);
+
+        // For poll ingestors, attach the resolved route headers so the factory
+        // can pass them through for authenticated HTTP requests.
+        if (effectiveConfig.type === 'poll') {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- private property consumed by poll factory
+          (effectiveConfig as any)._resolvedRouteHeaders = resolvedRoute.headers;
+        }
 
         const ingestor = createIngestor(
           connectionAlias,
@@ -214,6 +222,11 @@ export class IngestorManager {
       if (overrides.guildIds !== undefined) ws.guildIds = overrides.guildIds;
       if (overrides.channelIds !== undefined) ws.channelIds = overrides.channelIds;
       if (overrides.userIds !== undefined) ws.userIds = overrides.userIds;
+    }
+
+    // Apply poll-specific overrides
+    if (merged.poll) {
+      if (overrides.intervalMs !== undefined) merged.poll.intervalMs = overrides.intervalMs;
     }
 
     return merged;

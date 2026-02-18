@@ -114,6 +114,8 @@ export interface IngestorOverrides {
   bufferSize?: number;
   /** Disable the ingestor for this connection entirely. */
   disabled?: boolean;
+  /** Override the poll interval in milliseconds (poll ingestors only). */
+  intervalMs?: number;
 }
 
 /** Per-caller access configuration */
