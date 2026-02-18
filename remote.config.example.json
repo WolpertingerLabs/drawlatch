@@ -31,6 +31,18 @@
       "env": {
         "GITHUB_TOKEN": "${ALICE_GITHUB_TOKEN}"
       }
+    },
+    "team-member": {
+      "name": "Team Member (ingestor override example)",
+      "peerKeyDir": "/absolute/path/to/.mcp-secure-proxy/keys/peers/team-member",
+      "connections": ["discord-bot"],
+      "ingestorOverrides": {
+        "discord-bot": {
+          "guildIds": ["1234567890"],
+          "channelIds": ["9876543210"],
+          "eventFilter": ["MESSAGE_CREATE", "MESSAGE_UPDATE", "MESSAGE_DELETE"]
+        }
+      }
     }
   }
 }

@@ -14,9 +14,15 @@ import {
   resolveCallerRoutes,
   resolveRoutes,
   resolveSecrets,
+  type IngestorOverrides,
   type RemoteServerConfig,
 } from '../../shared/config.js';
-import type { IngestedEvent, IngestorStatus } from './types.js';
+import type {
+  IngestedEvent,
+  IngestorConfig,
+  IngestorStatus,
+  WebSocketIngestorConfig,
+} from './types.js';
 import type { BaseIngestor } from './base-ingestor.js';
 import { DiscordGatewayIngestor } from './discord-gateway.js';
 
@@ -45,18 +51,33 @@ export class IngestorManager {
         // Skip connections without an ingestor config
         if (!rawRoute.ingestor) continue;
 
+        // Get caller-level overrides for this connection
+        const overrides = callerConfig.ingestorOverrides?.[connectionAlias];
+
+        // Skip if explicitly disabled by caller
+        if (overrides?.disabled) {
+          console.log(
+            `[ingestor] Skipping disabled ingestor for ${callerAlias}:${connectionAlias}`,
+          );
+          continue;
+        }
+
         const key = `${callerAlias}:${connectionAlias}`;
         if (this.ingestors.has(key)) continue;
 
+        // Merge caller overrides into a copy of the template config
+        const effectiveConfig = IngestorManager.mergeIngestorConfig(rawRoute.ingestor, overrides);
+
         const ingestor = this.createIngestor(
           connectionAlias,
-          rawRoute.ingestor,
+          effectiveConfig,
           resolvedRoute.secrets,
+          overrides?.bufferSize,
         );
 
         if (ingestor) {
           this.ingestors.set(key, ingestor);
-          console.log(`[ingestor] Starting ${rawRoute.ingestor.type} ingestor for ${key}`);
+          console.log(`[ingestor] Starting ${effectiveConfig.type} ingestor for ${key}`);
           try {
             await ingestor.start();
           } catch (err) {
@@ -137,12 +158,50 @@ export class IngestorManager {
   }
 
   /**
+   * Merge caller-level ingestor overrides into a copy of the template config.
+   * Override fields replace template values; omitted fields inherit the template defaults.
+   */
+  static mergeIngestorConfig(
+    templateConfig: IngestorConfig,
+    overrides?: IngestorOverrides,
+  ): IngestorConfig {
+    if (!overrides) return templateConfig;
+
+    // Deep-copy to avoid mutating the shared template
+    const merged: IngestorConfig = {
+      type: templateConfig.type,
+      ...(templateConfig.websocket && {
+        websocket: { ...templateConfig.websocket },
+      }),
+      ...(templateConfig.webhook && {
+        webhook: { ...templateConfig.webhook },
+      }),
+      ...(templateConfig.poll && {
+        poll: { ...templateConfig.poll },
+      }),
+    };
+
+    // Apply WebSocket-specific overrides
+    if (merged.websocket) {
+      const ws: WebSocketIngestorConfig = merged.websocket;
+      if (overrides.intents !== undefined) ws.intents = overrides.intents;
+      if (overrides.eventFilter !== undefined) ws.eventFilter = overrides.eventFilter;
+      if (overrides.guildIds !== undefined) ws.guildIds = overrides.guildIds;
+      if (overrides.channelIds !== undefined) ws.channelIds = overrides.channelIds;
+      if (overrides.userIds !== undefined) ws.userIds = overrides.userIds;
+    }
+
+    return merged;
+  }
+
+  /**
    * Factory: create the appropriate ingestor instance based on config.
    */
   private createIngestor(
     connectionAlias: string,
-    config: import('./types.js').IngestorConfig,
+    config: IngestorConfig,
     secrets: Record<string, string>,
+    bufferSize?: number,
   ): BaseIngestor | null {
     switch (config.type) {
       case 'websocket': {
@@ -151,7 +210,7 @@ export class IngestorManager {
           return null;
         }
         if (config.websocket.protocol === 'discord') {
-          return new DiscordGatewayIngestor(connectionAlias, secrets, config.websocket);
+          return new DiscordGatewayIngestor(connectionAlias, secrets, config.websocket, bufferSize);
         }
         console.error(
           `[ingestor] Unsupported websocket protocol "${config.websocket.protocol}" for ${connectionAlias}`,

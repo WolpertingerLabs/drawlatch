@@ -98,6 +98,24 @@ export interface ResolvedRoute {
   resolveSecretsInBody: boolean;
 }
 
+/** Per-connection ingestor overrides (all fields optional — omitted fields inherit from template). */
+export interface IngestorOverrides {
+  /** Override the Discord Gateway intents bitmask. */
+  intents?: number;
+  /** Override event type filter (e.g., ["MESSAGE_CREATE"]). Empty array = capture all. */
+  eventFilter?: string[];
+  /** Only buffer events from these guild IDs. Omitted = all guilds. */
+  guildIds?: string[];
+  /** Only buffer events from these channel IDs. Omitted = all channels. */
+  channelIds?: string[];
+  /** Only buffer events from these user IDs. Omitted = all users. */
+  userIds?: string[];
+  /** Override ring buffer capacity. */
+  bufferSize?: number;
+  /** Disable the ingestor for this connection entirely. */
+  disabled?: boolean;
+}
+
 /** Per-caller access configuration */
 export interface CallerConfig {
   /** Human-readable name for this caller (used in audit logs) */
@@ -112,6 +130,10 @@ export interface CallerConfig {
    *  Values = "${REAL_ENV_VAR}" (redirect to a different env var) or a literal string (direct injection).
    *  These are resolved first, then checked BEFORE process.env during secret resolution. */
   env?: Record<string, string>;
+  /** Per-connection ingestor overrides. Keys are connection aliases (e.g., "discord-bot").
+   *  Allows callers to customize intents, event filters, guild/channel/user ID filters,
+   *  buffer size, or disable an ingestor without modifying the connection template. */
+  ingestorOverrides?: Record<string, IngestorOverrides>;
 }
 
 /** Remote server configuration */

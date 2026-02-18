@@ -40,6 +40,19 @@ export interface WebSocketIngestorConfig {
    *  Only used when protocol is 'discord'.
    *  @see https://discord.com/developers/docs/topics/gateway#gateway-intents */
   intents?: number;
+
+  /** Only buffer events from these guild IDs. Omitted = all guilds.
+   *  Events without a guild_id field (e.g., READY, RESUMED) always pass through. */
+  guildIds?: string[];
+
+  /** Only buffer events from these channel IDs. Omitted = all channels.
+   *  Events without a channel_id field always pass through. */
+  channelIds?: string[];
+
+  /** Only buffer events from these user IDs. Omitted = all users.
+   *  Checks author.id, user.id, and user_id fields depending on the event type.
+   *  Events without a user identifier always pass through. */
+  userIds?: string[];
 }
 
 /** Configuration for webhook-based ingestors (e.g., GitHub, Stripe). */

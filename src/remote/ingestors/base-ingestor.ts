@@ -56,6 +56,9 @@ export abstract class BaseIngestor extends EventEmitter {
     };
     this.buffer.push(event);
     this.lastEventAt = event.receivedAt;
+    console.log(
+      `[ingestor] ${this.connectionAlias} event #${event.id}: ${eventType}`,
+    );
     this.emit('event', event);
   }
 

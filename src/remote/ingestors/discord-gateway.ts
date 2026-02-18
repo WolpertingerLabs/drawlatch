@@ -82,6 +82,24 @@ const NON_RECOVERABLE_CLOSE_CODES = new Set([4004, 4010, 4011, 4012, 4013, 4014]
 // Discord close codes that invalidate the session (must re-IDENTIFY, not RESUME)
 const INVALIDATE_SESSION_CLOSE_CODES = new Set([4007, 4009]);
 
+// ── Payload helpers ─────────────────────────────────────────────────────
+
+/**
+ * Extract a user ID from a Discord dispatch event payload.
+ * Different event types store the user ID in different fields.
+ */
+function extractUserId(data: Record<string, unknown>): string | undefined {
+  // MESSAGE_CREATE/UPDATE: author.id
+  const author = data.author as Record<string, unknown> | undefined;
+  if (typeof author?.id === 'string') return author.id;
+  // GUILD_MEMBER_ADD/UPDATE/REMOVE, PRESENCE_UPDATE: user.id
+  const user = data.user as Record<string, unknown> | undefined;
+  if (typeof user?.id === 'string') return user.id;
+  // TYPING_START, MESSAGE_REACTION_ADD/REMOVE, etc.: user_id
+  if (typeof data.user_id === 'string') return data.user_id;
+  return undefined;
+}
+
 // ── Discord Gateway ingestor ────────────────────────────────────────────
 
 export class DiscordGatewayIngestor extends BaseIngestor {
@@ -104,16 +122,23 @@ export class DiscordGatewayIngestor extends BaseIngestor {
   private readonly gatewayUrl: string;
   private readonly intents: number;
   private readonly eventFilter: string[];
+  private readonly guildIds: Set<string>;
+  private readonly channelIds: Set<string>;
+  private readonly userIds: Set<string>;
 
   constructor(
     connectionAlias: string,
     secrets: Record<string, string>,
     private readonly wsConfig: WebSocketIngestorConfig,
+    bufferSize?: number,
   ) {
-    super(connectionAlias, 'websocket', secrets);
+    super(connectionAlias, 'websocket', secrets, bufferSize);
     this.gatewayUrl = wsConfig.gatewayUrl;
     this.intents = wsConfig.intents ?? DEFAULT_INTENTS;
     this.eventFilter = wsConfig.eventFilter ?? [];
+    this.guildIds = new Set(wsConfig.guildIds ?? []);
+    this.channelIds = new Set(wsConfig.channelIds ?? []);
+    this.userIds = new Set(wsConfig.userIds ?? []);
   }
 
   start(): Promise<void> {
@@ -278,9 +303,28 @@ export class DiscordGatewayIngestor extends BaseIngestor {
       console.log(`[discord-gw] Resumed for ${this.connectionAlias}`);
     }
 
-    // Apply event filter (empty filter = capture all)
+    // Apply event type filter (empty filter = capture all)
     if (this.eventFilter.length > 0 && !this.eventFilter.includes(eventName)) {
       return;
+    }
+
+    // Apply payload-level filters (guild, channel, user).
+    // Events without the filtered field pass through — this preserves lifecycle
+    // events like READY, RESUMED, and GUILD_CREATE that are essential.
+    if (this.guildIds.size > 0 || this.channelIds.size > 0 || this.userIds.size > 0) {
+      const data = payload.d as Record<string, unknown> | null;
+      if (data) {
+        if (this.guildIds.size > 0 && typeof data.guild_id === 'string') {
+          if (!this.guildIds.has(data.guild_id)) return;
+        }
+        if (this.channelIds.size > 0 && typeof data.channel_id === 'string') {
+          if (!this.channelIds.has(data.channel_id)) return;
+        }
+        if (this.userIds.size > 0) {
+          const userId = extractUserId(data);
+          if (userId && !this.userIds.has(userId)) return;
+        }
+      }
     }
 
     // Buffer the event

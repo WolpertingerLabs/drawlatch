@@ -136,6 +136,7 @@ Full implementation of the [Discord Gateway v10](https://discord.com/developers/
 - **Close code handling**: Non-recoverable codes (4004, 4010-4014) → permanent error. Session-invalidating codes (4007, 4009) → clear session, re-identify
 - **Invalid Session**: Resumable → wait 1-5s then resume. Not resumable → clear session, re-identify
 - **Event filtering**: `eventFilter` array in config; empty = capture all
+- **Payload filtering**: `guildIds`, `channelIds`, `userIds` arrays in config; events without the filtered field pass through (preserves lifecycle events)
 - **Intents**: Configurable via config, default `4609` = `GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES`. The `discord-bot.json` template uses `3276799` (all intents including privileged)
 
 **Exported:**
@@ -284,27 +285,47 @@ Second WebSocket protocol implementation for Slack real-time events.
 - Events require acknowledgment (`acknowledge` envelope)
 - Map Slack event types to `IngestedEvent`
 
-### Phase 5: Caller-Level Ingestor Overrides
+### Phase 5: Caller-Level Ingestor Overrides — **Complete**
 
-Allow callers to customize ingestor behavior without modifying connection templates.
+Callers can customize ingestor behavior without modifying connection templates via `ingestorOverrides` in `CallerConfig`.
 
-**Implementation:**
-- Add `ingestorOverrides` to `CallerConfig` in `config.ts`:
-  ```typescript
-  interface CallerConfig {
-    // existing fields...
-    ingestorOverrides?: Record<string, {
-      /** Override buffer size for this connection's ingestor. */
-      bufferSize?: number;
-      /** Override event filter for this connection's ingestor. */
-      eventFilter?: string[];
-      /** Disable the ingestor for this connection entirely. */
-      disabled?: boolean;
-    }>;
+**Supported override fields (all optional):**
+
+| Field | Type | Description |
+|---|---|---|
+| `intents` | `number` | Override the Discord Gateway intents bitmask |
+| `eventFilter` | `string[]` | Override event type filter (e.g., `["MESSAGE_CREATE"]`) |
+| `guildIds` | `string[]` | Only buffer events from these guild IDs |
+| `channelIds` | `string[]` | Only buffer events from these channel IDs |
+| `userIds` | `string[]` | Only buffer events from these user IDs |
+| `bufferSize` | `number` | Override ring buffer capacity |
+| `disabled` | `boolean` | Disable the ingestor for this connection entirely |
+
+**Config example (`remote.config.json`):**
+```json
+{
+  "callers": {
+    "my-laptop": {
+      "peerKeyDir": "...",
+      "connections": ["discord-bot"],
+      "ingestorOverrides": {
+        "discord-bot": {
+          "guildIds": ["1470211573057458318"],
+          "channelIds": ["1470211573749383210"],
+          "eventFilter": ["MESSAGE_CREATE", "MESSAGE_UPDATE"]
+        }
+      }
+    }
   }
-  ```
-- `IngestorManager.startAll()` merges overrides with connection template config
-- Useful for: limiting buffer size for low-memory deployments, filtering to specific event types per-caller, disabling ingestors for callers that don't need them
+}
+```
+
+**How it works:**
+- `IngestorManager.startAll()` merges overrides with the connection template config via `mergeIngestorConfig()`
+- Override fields replace template values; omitted fields inherit template defaults
+- `disabled: true` skips ingestor creation entirely
+- Payload-level filters (`guildIds`, `channelIds`, `userIds`) inspect event payloads; events without the filtered field pass through (preserving lifecycle events like `READY`, `RESUMED`)
+- Filters are AND logic: if both `guildIds` and `channelIds` are set, an event must match both
 
 ### Phase 6: Token Deduplication / Shared Connections
 
@@ -362,11 +383,56 @@ Currently, if Claude's session restarts, it loses its `after_id` cursor and may 
       "gatewayUrl": "wss://...",
       "protocol": "discord",
       "eventFilter": ["MESSAGE_CREATE", "MESSAGE_UPDATE"],
-      "intents": 3276799
+      "intents": 3276799,
+      "guildIds": ["1234567890"],
+      "channelIds": ["9876543210"],
+      "userIds": ["1111111111"]
     }
   }
 }
 ```
+
+### Caller-Level Ingestor Overrides
+
+Callers can override any of the template's ingestor settings without modifying the template itself. All fields are optional — omitted fields inherit from the connection template.
+
+```json
+{
+  "callers": {
+    "my-caller": {
+      "peerKeyDir": "...",
+      "connections": ["discord-bot"],
+      "ingestorOverrides": {
+        "discord-bot": {
+          "intents": 4609,
+          "eventFilter": ["MESSAGE_CREATE"],
+          "guildIds": ["1234567890"],
+          "channelIds": ["9876543210"],
+          "userIds": ["1111111111"],
+          "bufferSize": 500,
+          "disabled": false
+        }
+      }
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `intents` | `number` | Template value | Override Discord Gateway intents bitmask |
+| `eventFilter` | `string[]` | Template value | Override event type filter; empty = all |
+| `guildIds` | `string[]` | `[]` (all) | Only buffer events from these guild IDs |
+| `channelIds` | `string[]` | `[]` (all) | Only buffer events from these channel IDs |
+| `userIds` | `string[]` | `[]` (all) | Only buffer events from these user IDs |
+| `bufferSize` | `number` | `200` | Override ring buffer capacity (max 1000) |
+| `disabled` | `boolean` | `false` | Disable the ingestor entirely |
+
+**Filtering behavior:**
+- Payload filters (`guildIds`, `channelIds`, `userIds`) inspect the event's `d` payload
+- Events **without** the filtered field pass through (e.g., `READY` has no `guild_id` — always kept)
+- Filters are AND logic: if both `guildIds` and `channelIds` are set, events must match both
+- User ID extraction checks `author.id`, `user.id`, and `user_id` (varies by event type)
 
 ### Discord Intent Values
 
