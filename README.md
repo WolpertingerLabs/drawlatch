@@ -60,7 +60,7 @@ export MCP_CONFIG_DIR=/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy
 
 The `.mcp.json` passes this through to the MCP server process. You also need a working setup (keys generated, public keys exchanged, configs in place, remote server running). See [Setup](#setup) below for the full walkthrough.
 
-> **Note:** Auto-discovery uses the pre-built `dist/mcp/server.js` entrypoint. The compiled `dist/` directory is included in the repo, so no build step is needed. If you modify the source, run `npm run build` to recompile.
+> **Note:** Auto-discovery uses the `dist/mcp/server.js` entrypoint. The `dist/` directory is built automatically when you run `npm install` (via the `postinstall` script). If you need to rebuild manually, run `npm run build`.
 
 ## Setup
 
@@ -454,7 +454,7 @@ mcp-secure-proxy/
 │   ├── plugin.json              # Plugin manifest (name, version, description)
 │   └── marketplace.json         # Marketplace catalog for distribution
 ├── .mcp.json                    # MCP server config (used by plugin system + auto-discovery)
-├── dist/                        # Compiled JavaScript (pre-built, no build step needed)
+├── dist/                        # Compiled JavaScript (built via `npm run build` or `postinstall`)
 │   └── mcp/server.js            # MCP proxy entrypoint
 └── src/                         # TypeScript source
 ```
