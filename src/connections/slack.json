@@ -1,15 +1,23 @@
 {
   "name": "Slack API",
-  "description": "Slack Web API — messages, channels, users, reactions, files, and more. Auth is handled automatically via the SLACK_BOT_TOKEN environment variable.",
+  "description": "Slack Web API — messages, channels, users, reactions, files, and more. Auth is handled automatically via the SLACK_BOT_TOKEN environment variable. Real-time events via Socket Mode require SLACK_APP_TOKEN.",
   "docsUrl": "https://docs.slack.dev/apis/web-api",
   "openApiUrl": "https://raw.githubusercontent.com/slackapi/slack-api-specs/master/web-api/slack_web_openapi_v2.json",
   "headers": {
     "Authorization": "Bearer ${SLACK_BOT_TOKEN}"
   },
   "secrets": {
-    "SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}"
+    "SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}",
+    "SLACK_APP_TOKEN": "${SLACK_APP_TOKEN}"
   },
   "allowedEndpoints": [
     "https://slack.com/api/**"
-  ]
+  ],
+  "ingestor": {
+    "type": "websocket",
+    "websocket": {
+      "gatewayUrl": "https://slack.com/api/apps.connections.open",
+      "protocol": "slack"
+    }
+  }
 }

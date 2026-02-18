@@ -29,6 +29,7 @@ import { createIngestor } from './registry.js';
 // Import providers so they self-register their factories.
 // Each provider calls registerIngestorFactory() at module load time.
 import './discord/discord-gateway.js';
+import './slack/socket-mode.js';
 
 export class IngestorManager {
   /** Active ingestor instances, keyed by `callerAlias:connectionAlias`. */

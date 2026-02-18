@@ -23,3 +23,5 @@ export {
   ALL_INTENTS,
   ALL_NON_PRIVILEGED_INTENTS,
 } from './discord/index.js';
+
+export { SlackSocketModeIngestor } from './slack/index.js';
