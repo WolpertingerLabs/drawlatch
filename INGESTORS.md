@@ -1,6 +1,6 @@
 # Ingestors: Real-Time Data Collection for MCP Secure Proxy
 
-> **Status:** Phase 1 (Core Infrastructure + Discord Gateway) — **Complete**
+> **Status:** Phase 2 (Webhook Ingestor Infrastructure + GitHub) — **Complete**
 > **Date:** 2026-02-18
 
 ---
@@ -217,17 +217,36 @@ The intents value `3276799` includes all Discord Gateway intents, including the 
 
 ## Future Work
 
-### Phase 2: Webhook Ingestor
+### Phase 2: Webhook Ingestor — **Complete**
 
-Add support for receiving HTTP webhooks from services like GitHub, Stripe, and Linear.
+Added support for receiving HTTP webhooks. GitHub is the first webhook provider, with HMAC-SHA256 signature verification. The webhook listener shares the same Express app/port as the remote server.
 
-**Implementation:**
-- Create `src/remote/ingestors/webhook-ingestor.ts`
-- Add Express route: `POST /webhooks/:connectionAlias` on the remote server
-- Signature verification using the connection's `signatureSecret` and `signatureHeader` config
-- GitHub: `X-Hub-Signature-256` header, HMAC-SHA256 verification
-- Stripe: `Stripe-Signature` header, timing-safe comparison
-- Push verified payloads into the ring buffer via `pushEvent()`
+**Architecture:** Unlike WebSocket ingestors (which maintain outbound connections), webhook ingestors are passive receivers. The Express app receives `POST /webhooks/:path`, looks up matching ingestor instances via `IngestorManager.getWebhookIngestors(path)`, and fans out the payload to all matching instances (one per caller). Each ingestor independently verifies the signature and buffers the event.
+
+**New Files:**
+
+| File | Purpose |
+|---|---|
+| `src/remote/ingestors/webhook/types.ts` | GitHub-specific types, HMAC-SHA256 signature verification (`verifyGitHubSignature`), header extraction (`extractGitHubHeaders`) |
+| `src/remote/ingestors/webhook/webhook-ingestor.ts` | `GitHubWebhookIngestor` class extending `BaseIngestor`. Passive lifecycle (`start()` → immediately `'connected'`). `handleWebhook(headers, rawBody)` method for signature verification + event buffering. Self-registers as `'webhook'` factory. |
+| `src/remote/ingestors/webhook/index.ts` | Barrel exports |
+| `src/remote/ingestors/webhook/webhook-ingestor.test.ts` | 22 unit tests covering signature verification, header extraction, lifecycle, event buffering, factory registration |
+
+**Modified Files:**
+
+| File | Changes |
+|---|---|
+| `src/remote/server.ts` | Added `express.raw()` body parser for `/webhooks` path. Added `POST /webhooks/:path` route with fan-out dispatch to matching ingestors. Returns 200 if any ingestor accepts, 403 if all reject, 404 if no ingestors match. |
+| `src/remote/ingestors/manager.ts` | Added `import './webhook/webhook-ingestor.js'` for self-registration. Added `getWebhookIngestors(path)` method to find matching webhook ingestors across all callers. |
+| `src/remote/ingestors/index.ts` | Added webhook barrel exports |
+| `src/connections/github.json` | Added `GITHUB_WEBHOOK_SECRET` to secrets. Added `ingestor` block with `type: "webhook"` and GitHub signature verification config. |
+| `src/remote/server.e2e.test.ts` | Added 6 e2e tests: valid webhook → poll_events, invalid signature → 403, missing signature → 403, unregistered path → 404, ingestor_status reporting, cursor-based polling |
+
+**Signature Verification:**
+- Optional: if `signatureHeader` and `signatureSecret` are both configured, incoming webhooks are verified; if either is absent, verification is skipped entirely
+- GitHub uses `X-Hub-Signature-256` header with `sha256=<hex-encoded HMAC-SHA256>`
+- Timing-safe comparison via `crypto.timingSafeEqual` to prevent timing attacks
+- If the secret name is configured but the resolved value is missing, the webhook is rejected (config error)
 
 **Config example (GitHub):**
 ```json
@@ -243,10 +262,12 @@ Add support for receiving HTTP webhooks from services like GitHub, Stripe, and L
 }
 ```
 
-**Considerations:**
-- The remote server needs to be publicly accessible for webhooks (or behind a tunnel)
-- May need per-service signature verification strategies (pluggable verifier pattern)
-- Rate limiting on the webhook endpoint to prevent abuse
+**Setup requirements:**
+- Set `GITHUB_WEBHOOK_SECRET` env var on the remote server (matching the secret configured in GitHub's webhook settings)
+- The remote server needs to be publicly accessible for webhooks (or behind a tunnel like ngrok/Cloudflare Tunnel)
+- Point the GitHub webhook URL to `https://<server>/webhooks/github`
+
+**Future webhook providers:** Stripe, Linear, and Trello can be added by creating new ingestor classes or by extending the generic `GitHubWebhookIngestor` to a service-agnostic `WebhookIngestor` with pluggable signature verification strategies.
 
 ### Phase 3: Polling Ingestor
 

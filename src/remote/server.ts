@@ -397,6 +397,9 @@ export function createApp(options: CreateAppOptions = {}) {
   // Raw buffer for encrypted request endpoint
   app.use('/request', express.raw({ type: 'application/octet-stream', limit: '10mb' }));
 
+  // Raw buffer for webhook endpoints (needed for signature verification)
+  app.use('/webhooks', express.raw({ type: 'application/json', limit: '1mb' }));
+
   const config = options.config ?? loadRemoteConfig();
   const ownKeys = options.ownKeys ?? loadKeyBundle(config.localKeysDir);
   const authorizedPeers = options.authorizedPeers ?? loadCallerPeers(config.callers);
@@ -608,6 +611,46 @@ export function createApp(options: CreateAppOptions = {}) {
       activeSessions: sessions.size,
       uptime: process.uptime(),
     });
+  });
+
+  // ── Webhook receiver ─────────────────────────────────────────────────
+
+  app.post('/webhooks/:path', (req, res) => {
+    const webhookPath = req.params.path;
+    const mgr = app.locals.ingestorManager as IngestorManager;
+
+    // Find all ingestor instances matching this webhook path
+    const ingestors = mgr.getWebhookIngestors(webhookPath);
+
+    if (ingestors.length === 0) {
+      res.status(404).json({ error: `No webhook ingestor registered for path: ${webhookPath}` });
+      return;
+    }
+
+    // Ensure we have a raw Buffer for signature verification
+    const rawBody = Buffer.isBuffer(req.body)
+      ? req.body
+      : Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
+
+    // Fan out to all matching ingestors (multiple callers may share a webhook path)
+    let anyAccepted = false;
+    const results: { connection: string; accepted: boolean; reason?: string }[] = [];
+
+    for (const ingestor of ingestors) {
+      const result = ingestor.handleWebhook(
+        req.headers as Record<string, string | string[] | undefined>,
+        rawBody,
+      );
+      results.push({ connection: ingestor.webhookPath, ...result });
+      if (result.accepted) anyAccepted = true;
+    }
+
+    // Return 200 if any ingestor accepted (GitHub retries on non-2xx)
+    if (anyAccepted) {
+      res.status(200).json({ received: true });
+    } else {
+      res.status(403).json({ error: 'Webhook rejected by all ingestors', details: results });
+    }
   });
 
   return app;

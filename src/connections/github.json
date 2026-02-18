@@ -1,6 +1,6 @@
 {
   "name": "GitHub API",
-  "description": "GitHub REST API — repositories, issues, pull requests, users, organizations, and more. Auth is handled automatically via the GITHUB_TOKEN environment variable.",
+  "description": "GitHub REST API — repositories, issues, pull requests, users, organizations, and more. Auth is handled automatically via the GITHUB_TOKEN environment variable. Includes a webhook ingestor for real-time events (push, pull_request, issues, etc.) — set GITHUB_WEBHOOK_SECRET and use poll_events to retrieve them.",
   "docsUrl": "https://docs.github.com/en/rest",
   "openApiUrl": "https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json",
   "headers": {
@@ -10,9 +10,18 @@
     "User-Agent": "mcp-secure-proxy"
   },
   "secrets": {
-    "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+    "GITHUB_TOKEN": "${GITHUB_TOKEN}",
+    "GITHUB_WEBHOOK_SECRET": "${GITHUB_WEBHOOK_SECRET}"
   },
   "allowedEndpoints": [
     "https://api.github.com/**"
-  ]
+  ],
+  "ingestor": {
+    "type": "webhook",
+    "webhook": {
+      "path": "github",
+      "signatureHeader": "X-Hub-Signature-256",
+      "signatureSecret": "GITHUB_WEBHOOK_SECRET"
+    }
+  }
 }
