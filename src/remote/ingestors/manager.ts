@@ -33,6 +33,7 @@ import './discord/discord-gateway.js';
 import './slack/socket-mode.js';
 import './webhook/github-webhook-ingestor.js';
 import './webhook/stripe-webhook-ingestor.js';
+import './webhook/trello-webhook-ingestor.js';
 
 export class IngestorManager {
   /** Active ingestor instances, keyed by `callerAlias:connectionAlias`. */

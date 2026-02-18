@@ -43,3 +43,14 @@ export {
   STRIPE_SIGNATURE_HEADER,
   DEFAULT_TIMESTAMP_TOLERANCE,
 } from './webhook/index.js';
+
+export { TrelloWebhookIngestor } from './webhook/index.js';
+export {
+  verifyTrelloSignature,
+  extractTrelloActionType,
+  extractTrelloActionId,
+  type TrelloWebhookPayload,
+  type TrelloWebhookAction,
+  type TrelloWebhookInfo,
+  TRELLO_SIGNATURE_HEADER,
+} from './webhook/index.js';
