@@ -2,7 +2,7 @@
 export { WebhookIngestor } from './base-webhook-ingestor.js';
 
 // ── GitHub provider ─────────────────────────────────────────────────────
-export { GitHubWebhookIngestor } from './webhook-ingestor.js';
+export { GitHubWebhookIngestor } from './github-webhook-ingestor.js';
 export {
   verifyGitHubSignature,
   extractGitHubHeaders,
@@ -10,7 +10,7 @@ export {
   GITHUB_EVENT_HEADER,
   GITHUB_SIGNATURE_HEADER,
   GITHUB_DELIVERY_HEADER,
-} from './types.js';
+} from './github-types.js';
 
 // ── Stripe provider ─────────────────────────────────────────────────────
 export { StripeWebhookIngestor } from './stripe-webhook-ingestor.js';

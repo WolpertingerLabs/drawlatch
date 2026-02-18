@@ -4,14 +4,14 @@
 
 import crypto from 'node:crypto';
 import { describe, it, expect } from 'vitest';
-import { GitHubWebhookIngestor } from './webhook-ingestor.js';
+import { GitHubWebhookIngestor } from './github-webhook-ingestor.js';
 import {
   verifyGitHubSignature,
   extractGitHubHeaders,
   GITHUB_EVENT_HEADER,
   GITHUB_SIGNATURE_HEADER,
   GITHUB_DELIVERY_HEADER,
-} from './types.js';
+} from './github-types.js';
 import { createIngestor } from '../registry.js';
 
 // ── Helper ──────────────────────────────────────────────────────────────

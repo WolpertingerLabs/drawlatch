@@ -13,7 +13,7 @@
 
 import { registerIngestorFactory } from '../registry.js';
 import { WebhookIngestor } from './base-webhook-ingestor.js';
-import { verifyGitHubSignature, extractGitHubHeaders } from './types.js';
+import { verifyGitHubSignature, extractGitHubHeaders } from './github-types.js';
 
 // ── GitHub Webhook Ingestor ──────────────────────────────────────────────
 

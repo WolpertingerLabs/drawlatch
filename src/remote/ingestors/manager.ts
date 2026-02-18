@@ -31,7 +31,7 @@ import { WebhookIngestor } from './webhook/base-webhook-ingestor.js';
 // Each provider calls registerIngestorFactory() at module load time.
 import './discord/discord-gateway.js';
 import './slack/socket-mode.js';
-import './webhook/webhook-ingestor.js';
+import './webhook/github-webhook-ingestor.js';
 import './webhook/stripe-webhook-ingestor.js';
 
 export class IngestorManager {

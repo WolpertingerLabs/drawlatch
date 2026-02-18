@@ -227,17 +227,17 @@ Added support for receiving HTTP webhooks. GitHub is the first webhook provider,
 
 | File | Purpose |
 |---|---|
-| `src/remote/ingestors/webhook/types.ts` | GitHub-specific types, HMAC-SHA256 signature verification (`verifyGitHubSignature`), header extraction (`extractGitHubHeaders`) |
-| `src/remote/ingestors/webhook/webhook-ingestor.ts` | `GitHubWebhookIngestor` class extending `BaseIngestor`. Passive lifecycle (`start()` → immediately `'connected'`). `handleWebhook(headers, rawBody)` method for signature verification + event buffering. Self-registers as `'webhook'` factory. |
+| `src/remote/ingestors/webhook/github-types.ts` | GitHub-specific types, HMAC-SHA256 signature verification (`verifyGitHubSignature`), header extraction (`extractGitHubHeaders`) |
+| `src/remote/ingestors/webhook/github-webhook-ingestor.ts` | `GitHubWebhookIngestor` class extending `WebhookIngestor`. Passive lifecycle (`start()` → immediately `'connected'`). Implements `verifySignature()`, `extractEventType()`, `extractEventData()`. Self-registers as `'webhook:generic'` factory. |
 | `src/remote/ingestors/webhook/index.ts` | Barrel exports |
-| `src/remote/ingestors/webhook/webhook-ingestor.test.ts` | 22 unit tests covering signature verification, header extraction, lifecycle, event buffering, factory registration |
+| `src/remote/ingestors/webhook/github-webhook-ingestor.test.ts` | 25 unit tests covering signature verification, header extraction, lifecycle, event buffering, factory registration |
 
 **Modified Files:**
 
 | File | Changes |
 |---|---|
 | `src/remote/server.ts` | Added `express.raw()` body parser for `/webhooks` path. Added `POST /webhooks/:path` route with fan-out dispatch to matching ingestors. Returns 200 if any ingestor accepts, 403 if all reject, 404 if no ingestors match. |
-| `src/remote/ingestors/manager.ts` | Added `import './webhook/webhook-ingestor.js'` for self-registration. Added `getWebhookIngestors(path)` method to find matching webhook ingestors across all callers. |
+| `src/remote/ingestors/manager.ts` | Added `import './webhook/github-webhook-ingestor.js'` for self-registration. Added `getWebhookIngestors(path)` method to find matching webhook ingestors across all callers. |
 | `src/remote/ingestors/index.ts` | Added webhook barrel exports |
 | `src/connections/github.json` | Added `GITHUB_WEBHOOK_SECRET` to secrets. Added `ingestor` block with `type: "webhook"` and GitHub signature verification config. |
 | `src/remote/server.e2e.test.ts` | Added 6 e2e tests: valid webhook → poll_events, invalid signature → 403, missing signature → 403, unregistered path → 404, ingestor_status reporting, cursor-based polling |
@@ -293,7 +293,7 @@ The factory registry now uses `webhook:<protocol>` keys (mirroring `websocket:<p
 
 | File | Changes |
 |---|---|
-| `src/remote/ingestors/webhook/webhook-ingestor.ts` | Refactored `GitHubWebhookIngestor` to extend `WebhookIngestor` instead of `BaseIngestor`. Signature verification, event type extraction, and data shaping now implemented as overrides. Factory key changed from `'webhook'` to `'webhook:generic'`. |
+| `src/remote/ingestors/webhook/github-webhook-ingestor.ts` | Refactored `GitHubWebhookIngestor` to extend `WebhookIngestor` instead of `BaseIngestor`. Renamed from `webhook-ingestor.ts` for symmetry with `stripe-webhook-ingestor.ts`. Signature verification, event type extraction, and data shaping now implemented as overrides. Factory key changed from `'webhook'` to `'webhook:generic'`. |
 | `src/remote/ingestors/types.ts` | Added optional `protocol?: string` field to `WebhookIngestorConfig` |
 | `src/remote/ingestors/registry.ts` | Updated `createIngestor()` key logic to use `webhook:<protocol>` keys (matching the `websocket:<protocol>` convention) |
 | `src/remote/ingestors/manager.ts` | `getWebhookIngestors()` now checks `instanceof WebhookIngestor` (base class) instead of `GitHubWebhookIngestor`. Added Stripe factory self-registration import. |
