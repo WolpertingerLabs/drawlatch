@@ -166,7 +166,8 @@ export class PollIngestor extends BaseIngestor {
       let newItemCount = 0;
       for (const item of items) {
         if (this.shouldPush(item)) {
-          this.pushEvent(this.eventType, item);
+          const idempotencyKey = this.extractItemIdempotencyKey(item);
+          this.pushEvent(this.eventType, item, idempotencyKey);
           newItemCount++;
         }
       }
@@ -279,6 +280,29 @@ export class PollIngestor extends BaseIngestor {
     log.debug(
       `${this.connectionAlias}: pruned ${removed} seen IDs (${this.seenIds.size} remaining)`,
     );
+  }
+
+  // ── Idempotency ─────────────────────────────────────────────────
+
+  /**
+   * Extract an idempotency key from a poll item using the `deduplicateBy` field.
+   * Returns `undefined` if no dedup field is configured or the field is absent.
+   */
+  private extractItemIdempotencyKey(item: unknown): string | undefined {
+    if (!this.deduplicateBy) return undefined;
+
+    const record = item as Record<string, unknown> | null;
+    if (!record || typeof record !== 'object') return undefined;
+
+    const idValue = record[this.deduplicateBy];
+    if (idValue === undefined || idValue === null) return undefined;
+
+    const id =
+      typeof idValue === 'string' || typeof idValue === 'number' || typeof idValue === 'boolean'
+        ? String(idValue)
+        : JSON.stringify(idValue);
+
+    return `poll:${this.connectionAlias}:${id}`;
   }
 
   // ── Helpers ────────────────────────────────────────────────────────

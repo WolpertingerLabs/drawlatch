@@ -87,6 +87,22 @@ export class StripeWebhookIngestor extends WebhookIngestor {
       payload: body,
     };
   }
+
+  /**
+   * Extract the Stripe event ID as the idempotency key.
+   *
+   * Each Stripe event carries a unique `id` field (e.g., 'evt_1234...').
+   * Using this as the idempotency key prevents duplicate events
+   * from webhook retries.
+   */
+  protected extractIdempotencyKey(
+    _headers: Record<string, string | string[] | undefined>,
+    body: unknown,
+  ): string | undefined {
+    const record = body as Record<string, unknown> | undefined;
+    const eventId = record?.id;
+    return typeof eventId === 'string' ? `stripe:${eventId}` : undefined;
+  }
 }
 
 // ── Self-registration ────────────────────────────────────────────────────

@@ -86,6 +86,21 @@ export class GitHubWebhookIngestor extends WebhookIngestor {
       payload: body,
     };
   }
+
+  /**
+   * Extract the GitHub delivery ID as the idempotency key.
+   *
+   * Each webhook delivery from GitHub carries a unique `X-GitHub-Delivery`
+   * UUID. Using this as the idempotency key prevents duplicate events
+   * from webhook retries.
+   */
+  protected extractIdempotencyKey(
+    headers: Record<string, string | string[] | undefined>,
+    _body: unknown,
+  ): string | undefined {
+    const deliveryId = extractGitHubHeaders(headers).deliveryId;
+    return deliveryId ? `github:${deliveryId}` : undefined;
+  }
 }
 
 // ── Self-registration ────────────────────────────────────────────────────

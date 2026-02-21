@@ -18,12 +18,19 @@ import { createLogger } from '../../shared/logger.js';
 
 const log = createLogger('ingestor');
 
+/** Maximum number of idempotency keys to track for deduplication.
+ *  When exceeded, the oldest half is pruned. */
+const MAX_SEEN_KEYS = 2000;
+
 export abstract class BaseIngestor extends EventEmitter {
   protected state: IngestorState = 'stopped';
   protected buffer: RingBuffer<IngestedEvent>;
   protected totalEventsReceived = 0;
   protected lastEventAt: string | null = null;
   protected errorMessage?: string;
+
+  /** Recently seen idempotency keys for deduplication. */
+  private readonly seenKeys = new Set<string>();
 
   constructor(
     /** The connection alias (e.g., 'discord-bot'). */
@@ -48,23 +55,64 @@ export abstract class BaseIngestor extends EventEmitter {
   /**
    * Push a new event into the ring buffer.
    * Called by subclasses when they receive data from an external service.
+   *
+   * @param eventType  The event type/name (e.g., 'push', 'MESSAGE_CREATE').
+   * @param data       The raw event payload from the external service.
+   * @param idempotencyKey  Optional service-specific unique key for deduplication.
+   *                        When provided, duplicate events with the same key are silently dropped.
+   *                        When omitted, a fallback key is generated from `${source}:${id}`.
    */
-  protected pushEvent(eventType: string, data: unknown): void {
+  protected pushEvent(eventType: string, data: unknown, idempotencyKey?: string): void {
+    // When an explicit key is provided, reject duplicates
+    if (idempotencyKey && this.seenKeys.has(idempotencyKey)) {
+      log.debug(
+        `${this.connectionAlias} duplicate event skipped (key: ${idempotencyKey})`,
+      );
+      return;
+    }
+
+    const now = new Date();
+    const id = this.totalEventsReceived++;
+    const key = idempotencyKey ?? `${this.connectionAlias}:${id}`;
+
     const event: IngestedEvent = {
-      id: this.totalEventsReceived++,
-      receivedAt: new Date().toISOString(),
+      id,
+      idempotencyKey: key,
+      receivedAt: now.toISOString(),
+      receivedAtMs: now.getTime(),
       source: this.connectionAlias,
       eventType,
       data,
     };
     this.buffer.push(event);
     this.lastEventAt = event.receivedAt;
+
+    // Track the key for future dedup checks
+    this.seenKeys.add(key);
+    if (this.seenKeys.size > MAX_SEEN_KEYS) {
+      this.pruneSeenKeys();
+    }
+
     log.info(`${this.connectionAlias} event #${event.id}: ${eventType}`);
     log.debug(
       `${this.connectionAlias} event #${event.id} payload:`,
       JSON.stringify(data, null, 2),
     );
     this.emit('event', event);
+  }
+
+  /**
+   * Prune the seen-keys set to prevent unbounded memory growth.
+   * Removes the oldest half of entries (Set preserves insertion order).
+   */
+  private pruneSeenKeys(): void {
+    const pruneCount = Math.floor(this.seenKeys.size / 2);
+    let removed = 0;
+    for (const key of this.seenKeys) {
+      if (removed >= pruneCount) break;
+      this.seenKeys.delete(key);
+      removed++;
+    }
   }
 
   /**

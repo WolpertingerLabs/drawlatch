@@ -116,8 +116,23 @@ export interface IngestedEvent {
   /** Monotonically increasing event ID (unique per-ingestor). */
   id: number;
 
+  /**
+   * Idempotency key for deduplication.
+   *
+   * Derived from service-specific unique identifiers when available
+   * (e.g., GitHub delivery ID, Stripe event ID, Slack envelope ID).
+   * Falls back to `${source}:${id}` for services without natural keys.
+   *
+   * Consumers can use this key to detect and skip duplicate events
+   * caused by webhook retries or reconnection replays.
+   */
+  idempotencyKey: string;
+
   /** ISO-8601 timestamp when the event was received by the ingestor. */
   receivedAt: string;
+
+  /** Unix timestamp (milliseconds) when the event was received by the ingestor. */
+  receivedAtMs: number;
 
   /** Source connection alias (e.g., 'discord-bot', 'github'). */
   source: string;

@@ -147,6 +147,21 @@ export class TrelloWebhookIngestor extends WebhookIngestor {
       payload: body,
     };
   }
+
+  /**
+   * Extract the Trello action ID as the idempotency key.
+   *
+   * Each Trello webhook carries an action with a unique `id` field.
+   * Using this as the idempotency key prevents duplicate events
+   * from webhook retries.
+   */
+  protected extractIdempotencyKey(
+    _headers: Record<string, string | string[] | undefined>,
+    body: unknown,
+  ): string | undefined {
+    const actionId = extractTrelloActionId(body);
+    return actionId ? `trello:${actionId}` : undefined;
+  }
 }
 
 // ── Self-registration ───────────────────────────────────────────────────

@@ -124,6 +124,26 @@ export abstract class WebhookIngestor extends BaseIngestor {
     body: unknown,
   ): unknown;
 
+  /**
+   * Extract a service-specific idempotency key from the webhook request.
+   *
+   * Subclasses override this to return a unique key for deduplication
+   * (e.g., GitHub's `X-GitHub-Delivery` header, Stripe's `body.id`).
+   *
+   * When a key is returned, duplicate events with the same key are silently
+   * dropped by the base ingestor's ring buffer.
+   *
+   * @param headers - The raw HTTP request headers.
+   * @param body - The parsed JSON body.
+   * @returns A unique idempotency key string, or `undefined` to use a fallback.
+   */
+  protected extractIdempotencyKey(
+    _headers: Record<string, string | string[] | undefined>,
+    _body: unknown,
+  ): string | undefined {
+    return undefined;
+  }
+
   // ── Webhook handling ──────────────────────────────────────────────────
 
   /**
@@ -170,9 +190,12 @@ export abstract class WebhookIngestor extends BaseIngestor {
     // 5. Extract event data (delegated to subclass)
     const data = this.extractEventData(headers, body);
 
-    // 6. Push event into ring buffer
+    // 6. Extract idempotency key (delegated to subclass, fallback in pushEvent)
+    const idempotencyKey = this.extractIdempotencyKey(headers, body);
+
+    // 7. Push event into ring buffer (dedup handled by base class)
     log.debug(`${this.connectionAlias} dispatching webhook event: ${eventType}`);
-    this.pushEvent(eventType, data);
+    this.pushEvent(eventType, data, idempotencyKey);
 
     return { accepted: true };
   }
