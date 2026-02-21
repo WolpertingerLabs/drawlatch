@@ -24,6 +24,7 @@ Connection templates are loaded when a caller's session is established. Custom c
 | Connection      | API                                                                                           | Required Environment Variable(s) | Auth Method                      |
 | --------------- | --------------------------------------------------------------------------------------------- | -------------------------------- | -------------------------------- |
 | `anthropic`     | [Anthropic Claude API](https://docs.anthropic.com/en/api)                                     | `ANTHROPIC_API_KEY`              | x-api-key header (see note)      |
+| `bluesky`       | [Bluesky API (AT Protocol)](https://docs.bsky.app/)                                           | `BLUESKY_ACCESS_TOKEN`           | Bearer token header (see note)   |
 | `devin`         | [Devin AI API](https://docs.devin.ai/api-reference/overview)                                  | `DEVIN_API_KEY`                  | Bearer token header              |
 | `discord-bot`   | [Discord Bot API](https://discord.com/developers/docs/intro)                                  | `DISCORD_BOT_TOKEN`              | Bot token header (see note)      |
 | `discord-oauth` | [Discord OAuth2 API](https://discord.com/developers/docs/topics/oauth2)                       | `DISCORD_OAUTH_TOKEN`            | Bearer token header (see note)   |
@@ -32,12 +33,17 @@ Connection templates are loaded when a caller's session is established. Custom c
 | `google-ai`     | [Google AI Gemini API](https://ai.google.dev/api)                                             | `GOOGLE_AI_API_KEY`              | x-goog-api-key header (see note) |
 | `hex`           | [Hex API](https://learn.hex.tech/docs/api/api-overview)                                       | `HEX_TOKEN`                      | Bearer token header              |
 | `linear`        | [Linear GraphQL API](https://developers.linear.app/docs/graphql/working-with-the-graphql-api) | `LINEAR_API_KEY`                 | API key header (see note)        |
+| `mastodon`      | [Mastodon API](https://docs.joinmastodon.org/api/)                                            | `MASTODON_ACCESS_TOKEN`          | Bearer token header (see note)   |
 | `notion`        | [Notion API](https://developers.notion.com/reference)                                         | `NOTION_API_KEY`                 | Bearer token header (see note)   |
 | `openai`        | [OpenAI API](https://platform.openai.com/docs/api-reference)                                  | `OPENAI_API_KEY`                 | Bearer token header              |
 | `openrouter`    | [OpenRouter API](https://openrouter.ai/docs/api-reference)                                    | `OPENROUTER_API_KEY`             | Bearer token header              |
+| `reddit`        | [Reddit API](https://www.reddit.com/dev/api/)                                                 | `REDDIT_ACCESS_TOKEN`, `REDDIT_USER_AGENT` | Bearer token header (see note) |
 | `slack`         | [Slack Web API](https://docs.slack.dev/apis/web-api)                                          | `SLACK_BOT_TOKEN`                | Bearer token header              |
 | `stripe`        | [Stripe Payments API](https://docs.stripe.com/api)                                            | `STRIPE_SECRET_KEY`              | Bearer token header              |
+| `telegram`      | [Telegram Bot API](https://core.telegram.org/bots/api)                                        | `TELEGRAM_BOT_TOKEN`             | URL path token (see note)        |
 | `trello`        | [Trello Boards API](https://developer.atlassian.com/cloud/trello/rest/)                       | `TRELLO_API_KEY`, `TRELLO_TOKEN` | Query parameters (see note)      |
+| `twitch`        | [Twitch Helix API](https://dev.twitch.tv/docs/api/reference/)                                 | `TWITCH_ACCESS_TOKEN`, `TWITCH_CLIENT_ID` | Bearer + Client-Id headers (see note) |
+| `x`             | [X (Twitter) API v2](https://developer.x.com/en/docs/x-api)                                  | `X_BEARER_TOKEN`                 | Bearer token header (see note)   |
 
 > **Anthropic note:** The Anthropic API uses a custom `x-api-key` header instead of the standard `Authorization: Bearer` pattern. The `anthropic-version` header is pinned to `2023-06-01`. To use a different API version, override with a custom route.
 
@@ -54,6 +60,18 @@ Connection templates are loaded when a caller's session is established. Custom c
 > **Notion note:** The Notion API requires a `Notion-Version` header. This connection pins it to `2022-06-28` (the last stable version before breaking multi-source changes). To use a newer version, override with a custom route.
 
 > **Trello note:** The Trello API uses query parameter authentication rather than headers. Include `?key=${TRELLO_API_KEY}&token=${TRELLO_TOKEN}` in your request URLs — the `${VAR}` placeholders are resolved automatically from the route's secrets.
+
+> **Bluesky note:** Bluesky uses the AT Protocol. Obtain an access token by POSTing to `https://bsky.social/xrpc/com.atproto.server.createSession` with `{ "identifier": "your.handle", "password": "your-app-password" }`. Use an [App Password](https://bsky.app/settings/app-passwords) rather than your main password. Access tokens expire after ~2 hours — rotate externally using the `refreshJwt` from the session response. Both `bsky.social` (authenticated PDS) and `public.api.bsky.app` (public read-only API) are allowlisted. For self-hosted PDS instances, override with a custom connector. Rate limit: 3,000 requests per 5 minutes. The AT Protocol firehose (`wss://bsky.network/xrpc/com.atproto.sync.subscribeRepos`) provides real-time events but is not yet supported as an ingestor type.
+
+> **Mastodon note:** This template targets the `mastodon.social` instance. Mastodon is a federated network — each instance has its own API URL. To use a different instance, define a custom connector with the same auth pattern but replace `mastodon.social` in `allowedEndpoints` with your instance domain (e.g., `hachyderm.io`, `fosstodon.org`). Obtain an access token from your instance's Development settings (Preferences > Development > New Application). Rate limit: 300 requests per 5 minutes per token (default, may vary by instance).
+
+> **Reddit note:** The Reddit API requires a descriptive `User-Agent` header — set `REDDIT_USER_AGENT` to something like `platform:myapp:v1.0 (by /u/yourusername)`. Obtain an OAuth2 token by registering a "script" application at [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps), then POSTing to `https://www.reddit.com/api/v1/access_token` with HTTP Basic Auth (`client_id:client_secret`) and `grant_type=client_credentials` (or `password` for user context). Tokens expire after 1 hour — rotate externally using the refresh token. The poll ingestor monitors a subreddit for new posts — set `REDDIT_SUBREDDIT` to the subreddit name without the `r/` prefix (e.g., `programming`). If unset, the poll will fail; disable the ingestor via `ingestorOverrides` if not needed. Rate limit: 100 requests per minute per OAuth2 token.
+
+> **Telegram note:** The Telegram Bot API embeds the bot token in the URL path rather than in headers. Include `/bot${TELEGRAM_BOT_TOKEN}/` in your request URLs (e.g., `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`) — the `${VAR}` placeholder is resolved automatically from the route's secrets. Create a bot via [@BotFather](https://t.me/BotFather) on Telegram to obtain a token. The poll ingestor uses `getUpdates` to fetch new messages and events. Note: if you set up a webhook externally, `getUpdates` will not work — Telegram only supports one delivery method at a time.
+
+> **Twitch note:** Twitch requires both `Authorization: Bearer` and `Client-Id` headers on every API request. Register an application at the [Twitch Developer Console](https://dev.twitch.tv/console/apps) to get a Client ID, then obtain an access token via OAuth2 (client credentials for app tokens, or authorization code for user tokens). App tokens cannot access user-specific endpoints like followed streams — the poll ingestor requires a user access token and `TWITCH_USER_ID`. Get your user ID via `GET /helix/users` with your token. If the poll ingestor is not needed, `TWITCH_USER_ID` can be left unset. Rate limit: 800 requests per minute with a valid token.
+
+> **X (Twitter) note:** The `x` connection uses the v2 API with an App-only Bearer token (available from the [X Developer Portal](https://developer.x.com/en/portal/dashboard)). Both `api.x.com` and `api.twitter.com` (legacy domain) are allowlisted. The poll ingestor searches recent tweets matching a configurable query — set `X_SEARCH_QUERY` to a search query string (e.g., `#programming -is:retweet`). If unset, the poll will fail; disable the ingestor via `ingestorOverrides` if not needed. API access tiers vary significantly — the Free tier allows 1 app and read-only access with low rate limits; Basic ($200/month) adds write access and higher limits. X also supports filtered streams (`GET /2/tweets/search/stream`) for real-time tweet delivery, but this requires an active HTTP streaming connection not currently supported by the poll ingestor.
 
 ## Example: Connections with environment variables
 
@@ -138,6 +156,7 @@ The following connections are on the roadmap to be added:
 - [ ] **Jira** — Project management (Atlassian)
 - [ ] **HubSpot** — CRM platform
 - [ ] **Twilio / SendGrid** — Messaging & email APIs
+- [ ] **Microsoft Graph** — Teams, Outlook, OneDrive, SharePoint (Azure AD OAuth2)
 
 ### Tier 2 — Developer & Productivity
 
@@ -162,3 +181,10 @@ The following connections are on the roadmap to be added:
 
 - [ ] **AWS** — S3, Lambda, etc.
 - [ ] **Cloudflare** — Edge, DNS, Workers
+
+### Tier 5 — Social & Content Platforms
+
+- [ ] **YouTube Data API** — Video search, channels, playlists (API key auth, complements `google` connection)
+- [ ] **LinkedIn** — Professional networking (OAuth2)
+- [ ] **Pinterest** — Visual discovery (OAuth2)
+- [ ] **Tumblr** — Blogging platform (OAuth2)

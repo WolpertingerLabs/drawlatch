@@ -254,9 +254,15 @@ export class DiscordGatewayIngestor extends BaseIngestor {
       }
     }
 
-    // Buffer the event (use sequence number as idempotency key for resume dedup)
+    // Buffer the event (use session ID + sequence number as idempotency key).
+    // The session ID ensures keys from different Gateway sessions never collide —
+    // sequence numbers reset to 1 on each new session (reconnect/reboot), so
+    // without a session component, consumers seeding their dedup set from historical
+    // events will falsely match new events with recycled sequence numbers.
     const idempotencyKey =
-      payload.s !== null ? `discord:${this.connectionAlias}:seq:${payload.s}` : undefined;
+      payload.s !== null
+        ? `discord:${this.connectionAlias}:${this.discordSessionId ?? 'nosess'}:seq:${payload.s}`
+        : undefined;
     log.debug(`${this.connectionAlias} dispatching event: ${eventName} (seq: ${payload.s})`);
     this.pushEvent(eventName, payload.d, idempotencyKey);
   }

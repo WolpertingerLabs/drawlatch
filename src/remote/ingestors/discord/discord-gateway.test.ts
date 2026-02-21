@@ -323,13 +323,27 @@ describe('DiscordGatewayIngestor — payload filtering', () => {
   // ── Idempotency / deduplication ────────────────────────────────────
 
   describe('idempotency keys', () => {
-    it('should use Discord sequence number as idempotency key', () => {
+    it('should include session ID in idempotency key after READY', () => {
+      const ingestor = createTestIngestor({});
+
+      // Simulate a READY event to set the session ID
+      dispatch(ingestor, 'READY', { session_id: 'sess_abc', resume_gateway_url: 'wss://resume.discord.gg' }, 1);
+
+      // Now send a real event — key should include the session ID
+      dispatch(ingestor, 'MESSAGE_CREATE', { guild_id: 'g1', author: { id: 'u1' } }, 42);
+
+      const events = ingestor.getEvents();
+      expect(events).toHaveLength(2); // READY + MESSAGE_CREATE
+      expect(events[1].idempotencyKey).toBe('discord:test-discord:sess_abc:seq:42');
+    });
+
+    it('should use nosess fallback in idempotency key before READY', () => {
       const ingestor = createTestIngestor({});
       dispatch(ingestor, 'MESSAGE_CREATE', { guild_id: 'g1', author: { id: 'u1' } }, 42);
 
       const events = ingestor.getEvents();
       expect(events).toHaveLength(1);
-      expect(events[0].idempotencyKey).toBe('discord:test-discord:seq:42');
+      expect(events[0].idempotencyKey).toBe('discord:test-discord:nosess:seq:42');
     });
 
     it('should deduplicate replayed events with the same sequence number', () => {

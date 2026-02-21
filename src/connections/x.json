@@ -1,0 +1,27 @@
+{
+  "name": "X (Twitter) API",
+  "description": "X (formerly Twitter) API v2 — tweets, users, spaces, lists, and more. Auth is handled automatically via the X_BEARER_TOKEN environment variable (App-only Bearer token from the X Developer Portal). Both api.x.com and api.twitter.com domains are allowlisted. Includes a poll ingestor that searches recent tweets matching a configurable query — set X_SEARCH_QUERY and use poll_events to retrieve them.",
+  "docsUrl": "https://developer.x.com/en/docs/x-api",
+  "headers": {
+    "Authorization": "Bearer ${X_BEARER_TOKEN}"
+  },
+  "secrets": {
+    "X_BEARER_TOKEN": "${X_BEARER_TOKEN}",
+    "X_SEARCH_QUERY": "${X_SEARCH_QUERY}"
+  },
+  "allowedEndpoints": [
+    "https://api.x.com/**",
+    "https://api.twitter.com/**"
+  ],
+  "ingestor": {
+    "type": "poll",
+    "poll": {
+      "url": "https://api.x.com/2/tweets/search/recent?query=${X_SEARCH_QUERY}&max_results=25&tweet.fields=created_at,author_id,public_metrics",
+      "intervalMs": 60000,
+      "method": "GET",
+      "responsePath": "data",
+      "deduplicateBy": "id",
+      "eventType": "tweet"
+    }
+  }
+}

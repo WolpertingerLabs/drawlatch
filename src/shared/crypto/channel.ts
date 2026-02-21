@@ -8,8 +8,12 @@
  * Each message is encrypted with a fresh random IV and includes:
  *   - 12-byte IV
  *   - 16-byte GCM auth tag
+ *   - monotonic counter as AAD (prevents replay)
  *   - ciphertext
- *   - monotonic counter as AAD (prevents replay/reorder)
+ *
+ * Replay protection uses a sliding-window approach (similar to IPsec/DTLS):
+ * messages may arrive out of order, but each counter can only be accepted once,
+ * and counters that fall too far behind the highest seen are rejected.
  *
  * The shared secret from X25519 ECDH is never used directly — HKDF derives
  * separate encryption keys for each direction plus a MAC key.
@@ -21,6 +25,13 @@ import crypto from 'node:crypto';
 const IV_LENGTH = 12;
 const AUTH_TAG_LENGTH = 16;
 const COUNTER_LENGTH = 8; // uint64 big-endian
+
+/**
+ * Size of the sliding anti-replay window. Counters within this distance behind
+ * the highest authenticated counter are accepted (if not already seen).
+ * Counters further behind are rejected as too old.
+ */
+const ANTI_REPLAY_WINDOW_SIZE = 256n;
 
 /** Derived session keys for one direction */
 export interface DirectionalKey {
@@ -80,12 +91,18 @@ export function deriveSessionKeys(
 /**
  * Encrypted channel for bidirectional communication.
  *
- * Maintains a monotonic counter per direction to prevent replay attacks.
- * Each message includes the counter as AAD (Additional Authenticated Data).
+ * Uses a sliding-window anti-replay mechanism: each message carries a
+ * monotonic counter as AAD, and the receiver tracks which counters have
+ * been seen. Out-of-order delivery is tolerated within the window, but
+ * duplicate counters and counters that are too old are rejected.
  */
 export class EncryptedChannel {
   private sendCounter = 0n;
-  private recvCounter = 0n;
+
+  /** Highest authenticated counter received so far (-1 = none seen yet). */
+  private maxRecvCounter = -1n;
+  /** Set of counters seen within the sliding window. */
+  private readonly replayWindow = new Set<bigint>();
 
   constructor(private readonly keys: SessionKeys) {}
 
@@ -126,7 +143,14 @@ export class EncryptedChannel {
   /**
    * Decrypt a received message.
    *
-   * @throws Error if authentication fails, counter is out of order, or decryption fails
+   * Uses a sliding-window check: counters that have already been seen or that
+   * have fallen too far behind the highest authenticated counter are rejected.
+   * Out-of-order delivery within the window is accepted.
+   *
+   * Window state is only updated **after** GCM authentication succeeds, so a
+   * forged message cannot advance the window or poison the seen-set.
+   *
+   * @throws Error if the counter is a replay, too old, or decryption fails
    */
   decrypt(packed: Buffer): Buffer {
     if (packed.length < IV_LENGTH + AUTH_TAG_LENGTH + COUNTER_LENGTH) {
@@ -141,25 +165,53 @@ export class EncryptedChannel {
     );
     const ciphertext = packed.subarray(IV_LENGTH + AUTH_TAG_LENGTH + COUNTER_LENGTH);
 
-    // Verify counter is strictly monotonic
     const counter = counterBuf.readBigUInt64BE();
-    if (counter !== this.recvCounter) {
-      throw new Error(
-        `Counter mismatch: expected ${this.recvCounter}, got ${counter}. ` +
-          'Possible replay or reordering attack.',
-      );
+
+    // --- Anti-replay pre-checks (before expensive decryption) ---
+
+    if (this.maxRecvCounter >= 0n) {
+      // Reject counters that have fallen outside the window (too old)
+      if (counter + ANTI_REPLAY_WINDOW_SIZE <= this.maxRecvCounter) {
+        throw new Error(
+          `Counter ${counter} is too old (highest seen: ${this.maxRecvCounter}, ` +
+            `window: ${ANTI_REPLAY_WINDOW_SIZE}). Possible replay attack.`,
+        );
+      }
+
+      // Reject duplicate counters (replay)
+      if (this.replayWindow.has(counter)) {
+        throw new Error(
+          `Duplicate counter ${counter}. Possible replay attack.`,
+        );
+      }
     }
-    this.recvCounter++;
+
+    // --- Decrypt and authenticate ---
 
     const decipher = crypto.createDecipheriv('aes-256-gcm', this.keys.recvKey.encryptionKey, iv);
     decipher.setAAD(counterBuf);
     decipher.setAuthTag(authTag);
 
+    let result: Buffer;
     try {
-      return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+      result = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     } catch {
       throw new Error('Decryption failed: authentication tag mismatch (tampered or wrong key)');
     }
+
+    // --- Post-authentication: update anti-replay state ---
+
+    if (counter > this.maxRecvCounter) {
+      // Advance the window and prune entries that fell outside
+      const newFloor = counter - ANTI_REPLAY_WINDOW_SIZE;
+      for (const seen of this.replayWindow) {
+        if (seen <= newFloor) this.replayWindow.delete(seen);
+      }
+      this.maxRecvCounter = counter;
+    }
+    this.replayWindow.add(counter);
+
+    return result;
   }
 
   /**

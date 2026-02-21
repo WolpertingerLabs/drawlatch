@@ -299,7 +299,7 @@ describe('Security', () => {
         Buffer.from(await resp2.arrayBuffer()),
       );
       expect(errorResponse.success).toBe(false);
-      expect(errorResponse.error).toContain('Counter mismatch');
+      expect(errorResponse.error).toContain('Duplicate counter');
     } else {
       expect(resp2.status).toBe(500);
     }

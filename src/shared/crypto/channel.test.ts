@@ -129,31 +129,73 @@ describe('EncryptedChannel', () => {
     }
   });
 
-  it('should reject messages with wrong counter (replay attack)', () => {
+  it('should reject replayed messages (duplicate counter)', () => {
     const { initiatorKeys, responderKeys } = createKeyPair();
     const initiator = new EncryptedChannel(initiatorKeys);
     const responder = new EncryptedChannel(responderKeys);
 
     const msg1 = initiator.encrypt(Buffer.from('first'));
-    const _msg2 = initiator.encrypt(Buffer.from('second'));
+    initiator.encrypt(Buffer.from('second')); // advance sender counter
 
     // Decrypt first message
     responder.decrypt(msg1);
 
-    // Try to replay first message instead of second — counter mismatch
-    expect(() => responder.decrypt(msg1)).toThrow('Counter mismatch');
+    // Replay first message — same counter, should be rejected
+    expect(() => responder.decrypt(msg1)).toThrow('Duplicate counter');
   });
 
-  it('should reject out-of-order messages', () => {
+  it('should accept out-of-order messages within the anti-replay window', () => {
     const { initiatorKeys, responderKeys } = createKeyPair();
     const initiator = new EncryptedChannel(initiatorKeys);
     const responder = new EncryptedChannel(responderKeys);
 
-    const _msg1 = initiator.encrypt(Buffer.from('first'));
-    const msg2 = initiator.encrypt(Buffer.from('second'));
+    const msg0 = initiator.encrypt(Buffer.from('first'));
+    const msg1 = initiator.encrypt(Buffer.from('second'));
+    const msg2 = initiator.encrypt(Buffer.from('third'));
 
-    // Skip msg1, try msg2 directly — counter expects 0 but gets 1
-    expect(() => responder.decrypt(msg2)).toThrow('Counter mismatch');
+    // Deliver out of order: msg2, msg0, msg1
+    expect(responder.decrypt(msg2).toString()).toBe('third');
+    expect(responder.decrypt(msg0).toString()).toBe('first');
+    expect(responder.decrypt(msg1).toString()).toBe('second');
+  });
+
+  it('should reject duplicate of an out-of-order message', () => {
+    const { initiatorKeys, responderKeys } = createKeyPair();
+    const initiator = new EncryptedChannel(initiatorKeys);
+    const responder = new EncryptedChannel(responderKeys);
+
+    const msg0 = initiator.encrypt(Buffer.from('first'));
+    const msg1 = initiator.encrypt(Buffer.from('second'));
+
+    // Deliver msg1 first (out of order), then msg0 — both succeed
+    responder.decrypt(msg1);
+    responder.decrypt(msg0);
+
+    // Replay msg0 — should be rejected as duplicate
+    expect(() => responder.decrypt(msg0)).toThrow('Duplicate counter');
+  });
+
+  it('should reject counters that have fallen outside the anti-replay window', () => {
+    const { initiatorKeys, responderKeys } = createKeyPair();
+    const initiator = new EncryptedChannel(initiatorKeys);
+    const responder = new EncryptedChannel(responderKeys);
+
+    // Capture an early message
+    const earlyMsg = initiator.encrypt(Buffer.from('early'));
+
+    // Advance the sender counter well past the window (256+)
+    const messages: Buffer[] = [];
+    for (let i = 0; i < 257; i++) {
+      messages.push(initiator.encrypt(Buffer.from(`msg-${i}`)));
+    }
+
+    // Decrypt all the later messages to advance the receiver's window
+    for (const msg of messages) {
+      responder.decrypt(msg);
+    }
+
+    // Now try the early message — its counter is outside the window
+    expect(() => responder.decrypt(earlyMsg)).toThrow('too old');
   });
 
   it('should reject tampered messages', () => {

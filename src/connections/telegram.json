@@ -1,0 +1,26 @@
+{
+  "name": "Telegram Bot API",
+  "description": "Telegram Bot API — messages, chats, users, inline queries, payments, and more. Auth uses a bot token embedded in the URL path — include /bot${TELEGRAM_BOT_TOKEN}/ in your request URLs. The placeholder is resolved automatically from the route's secrets. Create a bot via @BotFather on Telegram to obtain a token. Includes a poll ingestor that fetches new updates via getUpdates — use poll_events to retrieve them.",
+  "docsUrl": "https://core.telegram.org/bots/api",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "secrets": {
+    "TELEGRAM_BOT_TOKEN": "${TELEGRAM_BOT_TOKEN}"
+  },
+  "resolveSecretsInBody": true,
+  "allowedEndpoints": [
+    "https://api.telegram.org/**"
+  ],
+  "ingestor": {
+    "type": "poll",
+    "poll": {
+      "url": "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?limit=25&timeout=0",
+      "intervalMs": 30000,
+      "method": "GET",
+      "responsePath": "result",
+      "deduplicateBy": "update_id",
+      "eventType": "update"
+    }
+  }
+}

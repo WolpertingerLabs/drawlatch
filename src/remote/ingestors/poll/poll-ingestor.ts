@@ -235,16 +235,35 @@ export class PollIngestor extends BaseIngestor {
   // ── Deduplication ──────────────────────────────────────────────────
 
   /**
+   * Resolve a dot-separated path on an object.
+   * E.g., "data.name" on { data: { name: "t3_abc" } } → "t3_abc".
+   * Single-segment paths (e.g., "id") resolve as a simple property lookup.
+   */
+  private static resolveNestedPath(obj: unknown, dotPath: string): unknown {
+    if (obj === null || obj === undefined || typeof obj !== 'object') return undefined;
+
+    const parts = dotPath.split('.');
+    let current: unknown = obj;
+
+    for (const part of parts) {
+      if (current === null || current === undefined || typeof current !== 'object') {
+        return undefined;
+      }
+      current = (current as Record<string, unknown>)[part];
+    }
+
+    return current;
+  }
+
+  /**
    * Check if an item should be pushed into the buffer (dedup check).
    * Returns true if the item is new (not previously seen).
+   * Supports dot-separated paths in `deduplicateBy` (e.g., "data.name").
    */
   private shouldPush(item: unknown): boolean {
     if (!this.deduplicateBy) return true;
 
-    const record = item as Record<string, unknown> | null;
-    if (!record || typeof record !== 'object') return true;
-
-    const idValue = record[this.deduplicateBy];
+    const idValue = PollIngestor.resolveNestedPath(item, this.deduplicateBy);
     if (idValue === undefined || idValue === null) return true;
 
     // Ensure safe stringification: only accept primitives for dedup IDs
@@ -286,15 +305,13 @@ export class PollIngestor extends BaseIngestor {
 
   /**
    * Extract an idempotency key from a poll item using the `deduplicateBy` field.
+   * Supports dot-separated paths (e.g., "data.name").
    * Returns `undefined` if no dedup field is configured or the field is absent.
    */
   private extractItemIdempotencyKey(item: unknown): string | undefined {
     if (!this.deduplicateBy) return undefined;
 
-    const record = item as Record<string, unknown> | null;
-    if (!record || typeof record !== 'object') return undefined;
-
-    const idValue = record[this.deduplicateBy];
+    const idValue = PollIngestor.resolveNestedPath(item, this.deduplicateBy);
     if (idValue === undefined || idValue === null) return undefined;
 
     const id =
