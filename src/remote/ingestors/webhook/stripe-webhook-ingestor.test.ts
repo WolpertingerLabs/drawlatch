@@ -313,14 +313,15 @@ describe('StripeWebhookIngestor.handleWebhook (no verification)', () => {
       );
     }
 
-    expect(ingestor.getEvents()).toHaveLength(5);
+    const allEvents = ingestor.getEvents();
+    expect(allEvents).toHaveLength(5);
     expect(ingestor.getStatus().totalEventsReceived).toBe(5);
 
-    // Cursor-based: get events after id 2
-    const afterTwo = ingestor.getEvents(2);
-    expect(afterTwo).toHaveLength(2);
-    expect(afterTwo[0].id).toBe(3);
-    expect(afterTwo[1].id).toBe(4);
+    // Cursor-based: get events after the 3rd event
+    const afterThird = ingestor.getEvents(allEvents[2].id);
+    expect(afterThird).toHaveLength(2);
+    expect(afterThird[0].id).toBe(allEvents[3].id);
+    expect(afterThird[1].id).toBe(allEvents[4].id);
   });
 
   it('should set source to connection alias', async () => {

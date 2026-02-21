@@ -254,9 +254,11 @@ export class DiscordGatewayIngestor extends BaseIngestor {
       }
     }
 
-    // Buffer the event
+    // Buffer the event (use sequence number as idempotency key for resume dedup)
+    const idempotencyKey =
+      payload.s !== null ? `discord:${this.connectionAlias}:seq:${payload.s}` : undefined;
     log.debug(`${this.connectionAlias} dispatching event: ${eventName} (seq: ${payload.s})`);
-    this.pushEvent(eventName, payload.d);
+    this.pushEvent(eventName, payload.d, idempotencyKey);
   }
 
   // ── Invalid Session ─────────────────────────────────────────────────
