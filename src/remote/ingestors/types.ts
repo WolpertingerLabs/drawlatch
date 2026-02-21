@@ -113,7 +113,11 @@ export interface PollIngestorConfig {
 
 /** A single event received by an ingestor, stored in the ring buffer. */
 export interface IngestedEvent {
-  /** Monotonically increasing event ID (unique per-ingestor). */
+  /**
+   * Monotonically increasing event ID (unique per-ingestor).
+   * Epoch-based: `bootEpochSeconds * 1_000_000 + counter`, so IDs are always
+   * greater than those from previous server boots.
+   */
   id: number;
 
   /**

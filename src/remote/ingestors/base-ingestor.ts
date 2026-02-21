@@ -23,10 +23,22 @@ const log = createLogger('ingestor');
  *  When exceeded, the oldest half is pruned. */
 const MAX_SEEN_KEYS = 2000;
 
+/**
+ * Epoch-based event IDs that are monotonically increasing across server reboots.
+ * Format: `bootEpochSeconds * 1_000_000 + counter`.
+ *
+ * Uses seconds (not milliseconds) so the product stays within Number.MAX_SAFE_INTEGER.
+ * This prevents clients with a stale `after_id` cursor from missing events
+ * after a reboot — new IDs will always be higher than pre-reboot IDs
+ * (assuming <1M events per boot and >1s between boots).
+ */
+const BOOT_EPOCH = Math.floor(Date.now() / 1000);
+const ID_MULTIPLIER = 1_000_000;
+
 export abstract class BaseIngestor extends EventEmitter {
   protected state: IngestorState = 'stopped';
   protected buffer: RingBuffer<IngestedEvent>;
-  protected totalEventsReceived = 0;
+  protected counter = 0;
   protected lastEventAt: string | null = null;
   protected errorMessage?: string;
 
@@ -71,7 +83,7 @@ export abstract class BaseIngestor extends EventEmitter {
     }
 
     const now = new Date();
-    const id = this.totalEventsReceived++;
+    const id = BOOT_EPOCH * ID_MULTIPLIER + this.counter++;
     const key = idempotencyKey ?? `${this.connectionAlias}:${crypto.randomUUID()}`;
 
     const event: IngestedEvent = {
@@ -127,7 +139,7 @@ export abstract class BaseIngestor extends EventEmitter {
       type: this.ingestorType,
       state: this.state,
       bufferedEvents: this.buffer.size,
-      totalEventsReceived: this.totalEventsReceived,
+      totalEventsReceived: this.counter,
       lastEventAt: this.lastEventAt,
       ...(this.errorMessage && { error: this.errorMessage }),
     };

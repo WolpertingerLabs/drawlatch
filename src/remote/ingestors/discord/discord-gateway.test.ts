@@ -314,7 +314,46 @@ describe('DiscordGatewayIngestor — payload filtering', () => {
       // Buffer capacity is 3, so only last 3 events remain
       const events = ingestor.getEvents();
       expect(events).toHaveLength(3);
-      expect(events[0].id).toBe(2); // events 0 and 1 were evicted
+      // IDs are epoch-based, so verify relative ordering instead of exact values
+      expect(events[0].id).toBeLessThan(events[1].id);
+      expect(events[1].id).toBeLessThan(events[2].id);
+    });
+  });
+
+  // ── Idempotency / deduplication ────────────────────────────────────
+
+  describe('idempotency keys', () => {
+    it('should use Discord sequence number as idempotency key', () => {
+      const ingestor = createTestIngestor({});
+      dispatch(ingestor, 'MESSAGE_CREATE', { guild_id: 'g1', author: { id: 'u1' } }, 42);
+
+      const events = ingestor.getEvents();
+      expect(events).toHaveLength(1);
+      expect(events[0].idempotencyKey).toBe('discord:test-discord:seq:42');
+    });
+
+    it('should deduplicate replayed events with the same sequence number', () => {
+      const ingestor = createTestIngestor({});
+      const messageData = {
+        guild_id: 'g1',
+        channel_id: 'ch-1',
+        author: { id: 'u1' },
+        content: 'hello',
+      };
+
+      dispatch(ingestor, 'MESSAGE_CREATE', messageData, 42);
+      dispatch(ingestor, 'MESSAGE_CREATE', messageData, 42); // replay
+
+      expect(ingestor.getEvents()).toHaveLength(1);
+    });
+
+    it('should not deduplicate events with different sequence numbers', () => {
+      const ingestor = createTestIngestor({});
+
+      dispatch(ingestor, 'MESSAGE_CREATE', { guild_id: 'g1', author: { id: 'u1' } }, 1);
+      dispatch(ingestor, 'MESSAGE_CREATE', { guild_id: 'g1', author: { id: 'u1' } }, 2);
+
+      expect(ingestor.getEvents()).toHaveLength(2);
     });
   });
 });
