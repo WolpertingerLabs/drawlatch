@@ -257,9 +257,12 @@ export class SlackSocketModeIngestor extends BaseIngestor {
       if (userId && !this.userIds.has(userId)) return;
     }
 
-    // Buffer the event
+    // Buffer the event (use envelope_id as idempotency key for retry dedup)
+    const idempotencyKey = envelope.envelope_id
+      ? `slack:${envelope.envelope_id}`
+      : undefined;
     log.debug(`${this.connectionAlias} dispatching event: ${eventType} (envelope: ${envelope.type})`);
-    this.pushEvent(eventType, envelope.payload);
+    this.pushEvent(eventType, envelope.payload, idempotencyKey);
   }
 
   // ── Acknowledgment ────────────────────────────────────────────────
