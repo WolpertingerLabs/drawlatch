@@ -1,6 +1,6 @@
 {
   "remoteUrl": "http://127.0.0.1:9999",
-  "localKeysDir": "/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy/keys/local/my-laptop",
+  "localKeyAlias": "my-laptop",
   "remotePublicKeysDir": "/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy/keys/peers/remote-server",
   "connectTimeout": 10000,
   "requestTimeout": 300000

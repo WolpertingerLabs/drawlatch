@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
+import path from 'node:path';
 import {
   resolveSecrets,
   resolvePlaceholders,
@@ -13,6 +14,7 @@ import {
   CONFIG_PATH,
   PROXY_CONFIG_PATH,
   REMOTE_CONFIG_PATH,
+  LOCAL_KEYS_DIR,
 } from './config.js';
 
 describe('resolvePlaceholders', () => {
@@ -448,6 +450,133 @@ describe('loadProxyConfig', () => {
     expect(config.remoteUrl).toBe('https://legacy.example.com:9999');
     // Defaults for unspecified fields
     expect(config.connectTimeout).toBe(10_000);
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+});
+
+describe('loadProxyConfig alias resolution', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env.MCP_KEY_ALIAS;
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('should resolve MCP_KEY_ALIAS env var to localKeysDir', () => {
+    process.env.MCP_KEY_ALIAS = 'alice';
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    const config = loadProxyConfig();
+
+    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'alice'));
+
+    existsSpy.mockRestore();
+  });
+
+  it('should prioritize MCP_KEY_ALIAS over localKeyAlias in config', () => {
+    process.env.MCP_KEY_ALIAS = 'alice';
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation(
+      (p) => String(p) === PROXY_CONFIG_PATH,
+    );
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({ localKeyAlias: 'bob' }),
+    );
+
+    const config = loadProxyConfig();
+
+    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'alice'));
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
+  it('should resolve localKeyAlias from config when no env var is set', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation(
+      (p) => String(p) === PROXY_CONFIG_PATH,
+    );
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({ localKeyAlias: 'bob' }),
+    );
+
+    const config = loadProxyConfig();
+
+    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'bob'));
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
+  it('should let localKeyAlias take precedence over localKeysDir', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation(
+      (p) => String(p) === PROXY_CONFIG_PATH,
+    );
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({ localKeyAlias: 'bob', localKeysDir: '/explicit/path' }),
+    );
+
+    const config = loadProxyConfig();
+
+    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'bob'));
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
+  it('should use localKeysDir when no alias is set', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation(
+      (p) => String(p) === PROXY_CONFIG_PATH,
+    );
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({ localKeysDir: '/explicit/path' }),
+    );
+
+    const config = loadProxyConfig();
+
+    expect(config.localKeysDir).toBe('/explicit/path');
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
+  it('should default to keys/local/default when nothing is set', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    const config = loadProxyConfig();
+
+    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'default'));
+
+    existsSpy.mockRestore();
+  });
+
+  it('should trim whitespace from MCP_KEY_ALIAS', () => {
+    process.env.MCP_KEY_ALIAS = '  alice  ';
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    const config = loadProxyConfig();
+
+    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'alice'));
+
+    existsSpy.mockRestore();
+  });
+
+  it('should ignore empty or whitespace-only MCP_KEY_ALIAS', () => {
+    process.env.MCP_KEY_ALIAS = '   ';
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation(
+      (p) => String(p) === PROXY_CONFIG_PATH,
+    );
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({ localKeyAlias: 'bob' }),
+    );
+
+    const config = loadProxyConfig();
+
+    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'bob'));
 
     existsSpy.mockRestore();
     readSpy.mockRestore();

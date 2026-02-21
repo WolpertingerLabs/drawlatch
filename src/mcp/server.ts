@@ -34,6 +34,15 @@ async function establishChannel(): Promise<EncryptedChannel> {
   const config = loadProxyConfig();
   remoteUrl = config.remoteUrl;
 
+  // Log which key identity is being used
+  const envAlias = process.env.MCP_KEY_ALIAS?.trim();
+  if (envAlias) {
+    console.error(`[mcp-proxy] Using key alias from MCP_KEY_ALIAS: "${envAlias}"`);
+  } else if (config.localKeyAlias) {
+    console.error(`[mcp-proxy] Using key alias from config: "${config.localKeyAlias}"`);
+  }
+  console.error(`[mcp-proxy] Local keys dir: ${config.localKeysDir}`);
+
   const ownKeys = loadKeyBundle(config.localKeysDir);
   const remotePub = loadPublicKeys(config.remotePublicKeysDir);
 
