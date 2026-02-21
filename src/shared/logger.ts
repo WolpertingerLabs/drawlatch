@@ -24,8 +24,8 @@ type LevelName = keyof typeof LEVELS;
 // ANSI colour codes for each level (matches Winston's defaults)
 const COLORS: Record<LevelName, string> = {
   error: '\x1b[31m', // red
-  warn: '\x1b[33m',  // yellow
-  info: '\x1b[32m',  // green
+  warn: '\x1b[33m', // yellow
+  info: '\x1b[32m', // green
   debug: '\x1b[34m', // blue
 };
 const RESET = '\x1b[0m';

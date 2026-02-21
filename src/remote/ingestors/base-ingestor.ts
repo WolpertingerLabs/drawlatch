@@ -9,6 +9,7 @@
  * whenever they receive data from the external service.
  */
 
+import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 
 import type { IngestedEvent, IngestorState, IngestorStatus } from './types.js';
@@ -60,20 +61,18 @@ export abstract class BaseIngestor extends EventEmitter {
    * @param data       The raw event payload from the external service.
    * @param idempotencyKey  Optional service-specific unique key for deduplication.
    *                        When provided, duplicate events with the same key are silently dropped.
-   *                        When omitted, a fallback key is generated from `${source}:${id}`.
+   *                        When omitted, a fallback key is generated from `${source}:${uuid-v4}`.
    */
   protected pushEvent(eventType: string, data: unknown, idempotencyKey?: string): void {
     // When an explicit key is provided, reject duplicates
     if (idempotencyKey && this.seenKeys.has(idempotencyKey)) {
-      log.debug(
-        `${this.connectionAlias} duplicate event skipped (key: ${idempotencyKey})`,
-      );
+      log.debug(`${this.connectionAlias} duplicate event skipped (key: ${idempotencyKey})`);
       return;
     }
 
     const now = new Date();
     const id = this.totalEventsReceived++;
-    const key = idempotencyKey ?? `${this.connectionAlias}:${id}`;
+    const key = idempotencyKey ?? `${this.connectionAlias}:${crypto.randomUUID()}`;
 
     const event: IngestedEvent = {
       id,
@@ -94,10 +93,7 @@ export abstract class BaseIngestor extends EventEmitter {
     }
 
     log.info(`${this.connectionAlias} event #${event.id}: ${eventType}`);
-    log.debug(
-      `${this.connectionAlias} event #${event.id} payload:`,
-      JSON.stringify(data, null, 2),
-    );
+    log.debug(`${this.connectionAlias} event #${event.id} payload:`, JSON.stringify(data, null, 2));
     this.emit('event', event);
   }
 

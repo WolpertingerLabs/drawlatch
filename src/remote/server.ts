@@ -361,9 +361,7 @@ const toolHandlers: Record<string, ToolHandler> = {
         context.ingestorManager.getEvents(context.callerAlias, connection, afterId),
       );
     }
-    return Promise.resolve(
-      context.ingestorManager.getAllEvents(context.callerAlias, afterId),
-    );
+    return Promise.resolve(context.ingestorManager.getAllEvents(context.callerAlias, afterId));
   },
 
   /**

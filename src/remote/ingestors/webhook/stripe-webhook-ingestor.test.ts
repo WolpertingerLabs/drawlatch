@@ -327,10 +327,7 @@ describe('StripeWebhookIngestor.handleWebhook (no verification)', () => {
     const ingestor = createTestIngestor();
     await ingestor.start();
 
-    ingestor.handleWebhook(
-      {},
-      Buffer.from(JSON.stringify({ id: 'evt_1', type: 'test' })),
-    );
+    ingestor.handleWebhook({}, Buffer.from(JSON.stringify({ id: 'evt_1', type: 'test' })));
 
     expect(ingestor.getEvents()[0].source).toBe('stripe');
   });
@@ -361,10 +358,7 @@ describe('StripeWebhookIngestor.handleWebhook (with verification)', () => {
     const body = JSON.stringify({ id: 'evt_123', type: 'payment_intent.succeeded' });
     const sig = signStripePayload(body, secret);
 
-    const result = ingestor.handleWebhook(
-      { [STRIPE_SIGNATURE_HEADER]: sig },
-      Buffer.from(body),
-    );
+    const result = ingestor.handleWebhook({ [STRIPE_SIGNATURE_HEADER]: sig }, Buffer.from(body));
 
     expect(result.accepted).toBe(true);
     expect(ingestor.getEvents()).toHaveLength(1);
@@ -377,10 +371,7 @@ describe('StripeWebhookIngestor.handleWebhook (with verification)', () => {
     const body = JSON.stringify({ id: 'evt_123', type: 'payment_intent.succeeded' });
     const badSig = signStripePayload(body, 'wrong-secret');
 
-    const result = ingestor.handleWebhook(
-      { [STRIPE_SIGNATURE_HEADER]: badSig },
-      Buffer.from(body),
-    );
+    const result = ingestor.handleWebhook({ [STRIPE_SIGNATURE_HEADER]: badSig }, Buffer.from(body));
 
     expect(result.accepted).toBe(false);
     expect(result.reason).toBe('Signature verification failed');
@@ -415,10 +406,7 @@ describe('StripeWebhookIngestor.handleWebhook (with verification)', () => {
     const body = JSON.stringify({ id: 'evt_123', type: 'payment_intent.succeeded' });
     const sig = signStripePayload(body, secret);
 
-    const result = ingestor.handleWebhook(
-      { [STRIPE_SIGNATURE_HEADER]: sig },
-      Buffer.from(body),
-    );
+    const result = ingestor.handleWebhook({ [STRIPE_SIGNATURE_HEADER]: sig }, Buffer.from(body));
 
     expect(result.accepted).toBe(false);
     expect(result.reason).toBe('Signature secret not configured');
@@ -432,10 +420,7 @@ describe('StripeWebhookIngestor.handleWebhook (with verification)', () => {
     const oldTimestamp = Math.floor(Date.now() / 1000) - 600; // 10 minutes ago
     const sig = signStripePayload(body, secret, oldTimestamp);
 
-    const result = ingestor.handleWebhook(
-      { [STRIPE_SIGNATURE_HEADER]: sig },
-      Buffer.from(body),
-    );
+    const result = ingestor.handleWebhook({ [STRIPE_SIGNATURE_HEADER]: sig }, Buffer.from(body));
 
     expect(result.accepted).toBe(false);
     expect(result.reason).toBe('Timestamp outside tolerance window');

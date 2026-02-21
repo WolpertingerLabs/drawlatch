@@ -100,8 +100,7 @@ export function verifyTrelloSignature(
     const receivedBuf = Buffer.from(signatureHeader, 'base64');
     const computedBuf = Buffer.from(computedSig, 'base64');
     return (
-      receivedBuf.length === computedBuf.length &&
-      crypto.timingSafeEqual(receivedBuf, computedBuf)
+      receivedBuf.length === computedBuf.length && crypto.timingSafeEqual(receivedBuf, computedBuf)
     );
   } catch {
     // Invalid base64 or length mismatch

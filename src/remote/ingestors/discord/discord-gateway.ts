@@ -114,9 +114,7 @@ export class DiscordGatewayIngestor extends BaseIngestor {
     });
 
     this.ws.addEventListener('close', (event: CloseEvent) => {
-      log.info(
-        `Connection closed for ${this.connectionAlias}: ${event.code} ${event.reason}`,
-      );
+      log.info(`Connection closed for ${this.connectionAlias}: ${event.code} ${event.reason}`);
       this.clearAllTimers();
       if (this.state !== 'stopped') {
         this.handleClose(event.code);
@@ -221,9 +219,7 @@ export class DiscordGatewayIngestor extends BaseIngestor {
       this.resumeGatewayUrl = readyData.resume_gateway_url;
       this.state = 'connected';
       this.reconnectAttempts = 0;
-      log.info(
-        `Ready for ${this.connectionAlias} (session: ${this.discordSessionId})`,
-      );
+      log.info(`Ready for ${this.connectionAlias} (session: ${this.discordSessionId})`);
     }
 
     // Handle RESUMED

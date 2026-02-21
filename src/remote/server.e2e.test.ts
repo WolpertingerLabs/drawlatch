@@ -1114,7 +1114,8 @@ describe('Route metadata in list_routes', () => {
           name: 'GitHub API',
           description: 'Access to GitHub REST API v3',
           docsUrl: 'https://docs.github.com/en/rest',
-          openApiUrl: 'https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json',
+          openApiUrl:
+            'https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json',
           secrets: { GH_TOKEN: 'ghp_test123' },
           headers: { Authorization: 'Bearer ${GH_TOKEN}' },
           allowedEndpoints: ['https://api.github.com/**'],
@@ -1222,7 +1223,9 @@ describe('Route metadata in list_routes', () => {
     expect(routes[0].name).toBe('GitHub API');
     expect(routes[0].description).toBe('Access to GitHub REST API v3');
     expect(routes[0].docsUrl).toBe('https://docs.github.com/en/rest');
-    expect(routes[0].openApiUrl).toBe('https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json');
+    expect(routes[0].openApiUrl).toBe(
+      'https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json',
+    );
     expect(routes[0].allowedEndpoints).toEqual(['https://api.github.com/**']);
     expect(routes[0].secretNames).toEqual(['GH_TOKEN']);
     expect(routes[0].autoHeaders).toEqual(['Authorization']);

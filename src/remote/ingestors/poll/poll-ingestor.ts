@@ -179,11 +179,11 @@ export class PollIngestor extends BaseIngestor {
       }
 
       if (newItemCount > 0) {
-        log.info(
-          `${this.connectionAlias}: ${newItemCount} new item(s) from ${items.length} total`,
-        );
+        log.info(`${this.connectionAlias}: ${newItemCount} new item(s) from ${items.length} total`);
       }
-      log.debug(`${this.connectionAlias}: poll complete — ${items.length} items, ${newItemCount} new`);
+      log.debug(
+        `${this.connectionAlias}: poll complete — ${items.length} items, ${newItemCount} new`,
+      );
     } catch (err) {
       this.consecutiveErrors++;
       const message = err instanceof Error ? err.message : String(err);
