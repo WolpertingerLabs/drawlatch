@@ -27,6 +27,9 @@ import {
   type SlackDisconnect,
   type SlackConnectionsOpenResponse,
 } from './types.js';
+import { createLogger } from '../../../shared/logger.js';
+
+const log = createLogger('slack-sm');
 
 // ── Slack Socket Mode ingestor ──────────────────────────────────────────
 
@@ -80,7 +83,7 @@ export class SlackSocketModeIngestor extends BaseIngestor {
     if (!appToken) {
       this.state = 'error';
       this.errorMessage = 'SLACK_APP_TOKEN not found in resolved secrets';
-      console.error(`[slack-sm] ${this.errorMessage} (${this.connectionAlias})`);
+      log.error(`${this.errorMessage} (${this.connectionAlias})`);
       return;
     }
 
@@ -99,7 +102,7 @@ export class SlackSocketModeIngestor extends BaseIngestor {
       if (!body.ok || !body.url) {
         this.state = 'error';
         this.errorMessage = `apps.connections.open failed: ${body.error ?? 'no URL returned'}`;
-        console.error(`[slack-sm] ${this.errorMessage} (${this.connectionAlias})`);
+        log.error(`${this.errorMessage} (${this.connectionAlias})`);
         return;
       }
 
@@ -107,7 +110,7 @@ export class SlackSocketModeIngestor extends BaseIngestor {
     } catch (err) {
       this.state = 'error';
       this.errorMessage = `Failed to call apps.connections.open: ${err instanceof Error ? err.message : String(err)}`;
-      console.error(`[slack-sm] ${this.errorMessage} (${this.connectionAlias})`);
+      log.error(`${this.errorMessage} (${this.connectionAlias})`);
       return;
     }
 
@@ -122,12 +125,12 @@ export class SlackSocketModeIngestor extends BaseIngestor {
     } catch (err) {
       this.state = 'error';
       this.errorMessage = `Failed to create WebSocket: ${err instanceof Error ? err.message : String(err)}`;
-      console.error(`[slack-sm] ${this.errorMessage} (${this.connectionAlias})`);
+      log.error(`${this.errorMessage} (${this.connectionAlias})`);
       return;
     }
 
     this.ws.addEventListener('open', () => {
-      console.log(`[slack-sm] WebSocket connected for ${this.connectionAlias}`);
+      log.info(`WebSocket connected for ${this.connectionAlias}`);
     });
 
     this.ws.addEventListener('message', (event: MessageEvent) => {
@@ -136,13 +139,13 @@ export class SlackSocketModeIngestor extends BaseIngestor {
         const envelope = JSON.parse(data) as SlackEnvelope;
         this.handleEnvelope(envelope);
       } catch (err) {
-        console.error(`[slack-sm] Failed to parse Socket Mode message:`, err);
+        log.error(`Failed to parse Socket Mode message:`, err);
       }
     });
 
     this.ws.addEventListener('close', (event: CloseEvent) => {
-      console.log(
-        `[slack-sm] Connection closed for ${this.connectionAlias}: ${event.code} ${event.reason}`,
+      log.info(
+        `Connection closed for ${this.connectionAlias}: ${event.code} ${event.reason}`,
       );
       if (this.state !== 'stopped') {
         this.scheduleReconnect();
@@ -151,7 +154,7 @@ export class SlackSocketModeIngestor extends BaseIngestor {
 
     this.ws.addEventListener('error', () => {
       // The 'close' event always follows 'error', so we handle reconnection there.
-      console.error(`[slack-sm] WebSocket error for ${this.connectionAlias}`);
+      log.error(`WebSocket error for ${this.connectionAlias}`);
     });
   }
 
@@ -174,8 +177,8 @@ export class SlackSocketModeIngestor extends BaseIngestor {
         break;
 
       default:
-        console.log(
-          `[slack-sm] Unknown message type "${String(envelope.type)}" for ${this.connectionAlias}`,
+        log.warn(
+          `Unknown message type "${String(envelope.type)}" for ${this.connectionAlias}`,
         );
         // Still acknowledge if there's an envelope_id
         if (envelope.envelope_id) {
@@ -190,8 +193,8 @@ export class SlackSocketModeIngestor extends BaseIngestor {
   private handleHello(hello: SlackHello): void {
     this.state = 'connected';
     this.reconnectAttempts = 0;
-    console.log(
-      `[slack-sm] Connected for ${this.connectionAlias} ` +
+    log.info(
+      `Connected for ${this.connectionAlias} ` +
         `(app: ${hello.connection_info.app_id}, connections: ${hello.num_connections}, ` +
         `refresh in ~${hello.debug_info.approximate_connection_time}s)`,
     );
@@ -200,8 +203,8 @@ export class SlackSocketModeIngestor extends BaseIngestor {
   // ── Disconnect ────────────────────────────────────────────────────
 
   private handleDisconnect(disconnect: SlackDisconnect): void {
-    console.log(
-      `[slack-sm] Disconnect for ${this.connectionAlias}: ${disconnect.reason} ` +
+    log.info(
+      `Disconnect for ${this.connectionAlias}: ${disconnect.reason} ` +
         `(host: ${disconnect.debug_info.host})`,
     );
 
@@ -216,7 +219,7 @@ export class SlackSocketModeIngestor extends BaseIngestor {
         // Socket Mode was disabled for the app — stop permanently
         this.state = 'error';
         this.errorMessage = 'Socket Mode was disabled for this app (link_disabled)';
-        console.error(`[slack-sm] ${this.errorMessage} (${this.connectionAlias})`);
+        log.error(`${this.errorMessage} (${this.connectionAlias})`);
         if (this.ws) {
           this.ws.close(1000, 'Link disabled');
           this.ws = null;
@@ -238,6 +241,7 @@ export class SlackSocketModeIngestor extends BaseIngestor {
 
     // Apply event type filter (empty filter = capture all)
     if (this.eventFilter.length > 0 && !this.eventFilter.includes(eventType)) {
+      log.debug(`${this.connectionAlias} event filtered out by eventFilter: ${eventType}`);
       return;
     }
 
@@ -254,6 +258,7 @@ export class SlackSocketModeIngestor extends BaseIngestor {
     }
 
     // Buffer the event
+    log.debug(`${this.connectionAlias} dispatching event: ${eventType} (envelope: ${envelope.type})`);
     this.pushEvent(eventType, envelope.payload);
   }
 
@@ -282,15 +287,15 @@ export class SlackSocketModeIngestor extends BaseIngestor {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       this.state = 'error';
       this.errorMessage = `Max reconnect attempts (${this.maxReconnectAttempts}) exceeded`;
-      console.error(`[slack-sm] ${this.errorMessage} (${this.connectionAlias})`);
+      log.error(`${this.errorMessage} (${this.connectionAlias})`);
       return;
     }
 
     this.state = 'reconnecting';
     this.reconnectAttempts++;
     const backoff = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30_000);
-    console.log(
-      `[slack-sm] Reconnecting ${this.connectionAlias} in ${backoff}ms ` +
+    log.info(
+      `Reconnecting ${this.connectionAlias} in ${backoff}ms ` +
         `(attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`,
     );
 
@@ -321,7 +326,7 @@ export class SlackSocketModeIngestor extends BaseIngestor {
 
 registerIngestorFactory('websocket:slack', (connectionAlias, config, secrets, bufferSize) => {
   if (!config.websocket) {
-    console.error(`[ingestor] Missing websocket config for ${connectionAlias}`);
+    log.error(`Missing websocket config for ${connectionAlias}`);
     return null;
   }
   return new SlackSocketModeIngestor(connectionAlias, secrets, config.websocket, bufferSize);

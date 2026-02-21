@@ -21,6 +21,9 @@
 import { BaseIngestor } from '../base-ingestor.js';
 import type { PollIngestorConfig } from '../types.js';
 import { registerIngestorFactory } from '../registry.js';
+import { createLogger } from '../../../shared/logger.js';
+
+const log = createLogger('poll');
 
 // ── Constants ─────────────────────────────────────────────────────────
 
@@ -86,8 +89,8 @@ export class PollIngestor extends BaseIngestor {
 
   async start(): Promise<void> {
     this.state = 'starting';
-    console.log(
-      `[poll] Starting poll ingestor for ${this.connectionAlias} ` +
+    log.info(
+      `Starting poll ingestor for ${this.connectionAlias} ` +
         `(${this.method} ${this.url}, every ${this.intervalMs}ms)`,
     );
 
@@ -175,10 +178,11 @@ export class PollIngestor extends BaseIngestor {
       }
 
       if (newItemCount > 0) {
-        console.log(
-          `[poll] ${this.connectionAlias}: ${newItemCount} new item(s) from ${items.length} total`,
+        log.info(
+          `${this.connectionAlias}: ${newItemCount} new item(s) from ${items.length} total`,
         );
       }
+      log.debug(`${this.connectionAlias}: poll complete — ${items.length} items, ${newItemCount} new`);
     } catch (err) {
       this.consecutiveErrors++;
       const message = err instanceof Error ? err.message : String(err);
@@ -186,8 +190,8 @@ export class PollIngestor extends BaseIngestor {
 
       if (this.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
         this.state = 'error';
-        console.error(
-          `[poll] ${this.connectionAlias}: ${MAX_CONSECUTIVE_ERRORS} consecutive errors, giving up: ${message}`,
+        log.error(
+          `${this.connectionAlias}: ${MAX_CONSECUTIVE_ERRORS} consecutive errors, giving up: ${message}`,
         );
         // Stop the timer on permanent error
         if (this.pollTimer) {
@@ -196,8 +200,8 @@ export class PollIngestor extends BaseIngestor {
         }
       } else {
         this.state = 'reconnecting';
-        console.warn(
-          `[poll] ${this.connectionAlias}: poll failed (attempt ${this.consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}): ${message}`,
+        log.warn(
+          `${this.connectionAlias}: poll failed (attempt ${this.consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}): ${message}`,
         );
       }
     }
@@ -272,8 +276,8 @@ export class PollIngestor extends BaseIngestor {
       this.seenIds.delete(id);
       removed++;
     }
-    console.log(
-      `[poll] ${this.connectionAlias}: pruned ${removed} seen IDs (${this.seenIds.size} remaining)`,
+    log.debug(
+      `${this.connectionAlias}: pruned ${removed} seen IDs (${this.seenIds.size} remaining)`,
     );
   }
 
@@ -294,7 +298,7 @@ export class PollIngestor extends BaseIngestor {
 
 registerIngestorFactory('poll', (connectionAlias, config, secrets, bufferSize) => {
   if (!config.poll) {
-    console.error(`[ingestor] Missing poll config for ${connectionAlias}`);
+    log.error(`Missing poll config for ${connectionAlias}`);
     return null;
   }
 

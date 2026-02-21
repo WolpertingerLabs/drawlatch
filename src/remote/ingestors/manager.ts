@@ -17,6 +17,9 @@ import {
   type IngestorOverrides,
   type RemoteServerConfig,
 } from '../../shared/config.js';
+import { createLogger } from '../../shared/logger.js';
+
+const log = createLogger('ingestor');
 import type {
   IngestedEvent,
   IngestorConfig,
@@ -66,8 +69,8 @@ export class IngestorManager {
 
         // Skip if explicitly disabled by caller
         if (overrides?.disabled) {
-          console.log(
-            `[ingestor] Skipping disabled ingestor for ${callerAlias}:${connectionAlias}`,
+          log.info(
+            `Skipping disabled ingestor for ${callerAlias}:${connectionAlias}`,
           );
           continue;
         }
@@ -94,11 +97,11 @@ export class IngestorManager {
 
         if (ingestor) {
           this.ingestors.set(key, ingestor);
-          console.log(`[ingestor] Starting ${effectiveConfig.type} ingestor for ${key}`);
+          log.info(`Starting ${effectiveConfig.type} ingestor for ${key}`);
           try {
             await ingestor.start();
           } catch (err) {
-            console.error(`[ingestor] Failed to start ${key}:`, err);
+            log.error(`Failed to start ${key}:`, err);
           }
         }
       }
@@ -106,7 +109,7 @@ export class IngestorManager {
 
     const count = this.ingestors.size;
     if (count > 0) {
-      console.log(`[ingestor] ${count} ingestor(s) started`);
+      log.info(`${count} ingestor(s) started`);
     }
   }
 
@@ -115,11 +118,11 @@ export class IngestorManager {
    */
   async stopAll(): Promise<void> {
     const stops = Array.from(this.ingestors.entries()).map(async ([key, ingestor]) => {
-      console.log(`[ingestor] Stopping ${key}`);
+      log.info(`Stopping ${key}`);
       try {
         await ingestor.stop();
       } catch (err) {
-        console.error(`[ingestor] Error stopping ${key}:`, err);
+        log.error(`Error stopping ${key}:`, err);
       }
     });
     await Promise.all(stops);

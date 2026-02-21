@@ -26,6 +26,9 @@ import {
   extractUserId,
   type GatewayPayload,
 } from './types.js';
+import { createLogger } from '../../../shared/logger.js';
+
+const log = createLogger('discord-gw');
 
 // ── Discord Gateway ingestor ────────────────────────────────────────────
 
@@ -92,12 +95,12 @@ export class DiscordGatewayIngestor extends BaseIngestor {
     } catch (err) {
       this.state = 'error';
       this.errorMessage = `Failed to create WebSocket: ${err instanceof Error ? err.message : String(err)}`;
-      console.error(`[discord-gw] ${this.errorMessage} (${this.connectionAlias})`);
+      log.error(`${this.errorMessage} (${this.connectionAlias})`);
       return;
     }
 
     this.ws.addEventListener('open', () => {
-      console.log(`[discord-gw] Connected to Gateway for ${this.connectionAlias}`);
+      log.info(`Connected to Gateway for ${this.connectionAlias}`);
     });
 
     this.ws.addEventListener('message', (event: MessageEvent) => {
@@ -106,13 +109,13 @@ export class DiscordGatewayIngestor extends BaseIngestor {
         const payload = JSON.parse(data) as GatewayPayload;
         this.handlePayload(payload);
       } catch (err) {
-        console.error(`[discord-gw] Failed to parse Gateway message:`, err);
+        log.error(`Failed to parse Gateway message:`, err);
       }
     });
 
     this.ws.addEventListener('close', (event: CloseEvent) => {
-      console.log(
-        `[discord-gw] Connection closed for ${this.connectionAlias}: ${event.code} ${event.reason}`,
+      log.info(
+        `Connection closed for ${this.connectionAlias}: ${event.code} ${event.reason}`,
       );
       this.clearAllTimers();
       if (this.state !== 'stopped') {
@@ -122,7 +125,7 @@ export class DiscordGatewayIngestor extends BaseIngestor {
 
     this.ws.addEventListener('error', () => {
       // The 'close' event always follows 'error', so we handle reconnection there.
-      console.error(`[discord-gw] WebSocket error for ${this.connectionAlias}`);
+      log.error(`WebSocket error for ${this.connectionAlias}`);
     });
   }
 
@@ -144,7 +147,7 @@ export class DiscordGatewayIngestor extends BaseIngestor {
         this.handleDispatch(payload);
         break;
       case GatewayOp.RECONNECT:
-        console.log(`[discord-gw] Server requested reconnect for ${this.connectionAlias}`);
+        log.info(`Server requested reconnect for ${this.connectionAlias}`);
         this.initiateReconnect();
         break;
       case GatewayOp.INVALID_SESSION:
@@ -170,7 +173,7 @@ export class DiscordGatewayIngestor extends BaseIngestor {
     if (!token) {
       this.state = 'error';
       this.errorMessage = 'DISCORD_BOT_TOKEN not found in resolved secrets';
-      console.error(`[discord-gw] ${this.errorMessage} (${this.connectionAlias})`);
+      log.error(`${this.errorMessage} (${this.connectionAlias})`);
       return;
     }
 
@@ -218,8 +221,8 @@ export class DiscordGatewayIngestor extends BaseIngestor {
       this.resumeGatewayUrl = readyData.resume_gateway_url;
       this.state = 'connected';
       this.reconnectAttempts = 0;
-      console.log(
-        `[discord-gw] Ready for ${this.connectionAlias} (session: ${this.discordSessionId})`,
+      log.info(
+        `Ready for ${this.connectionAlias} (session: ${this.discordSessionId})`,
       );
     }
 
@@ -227,11 +230,12 @@ export class DiscordGatewayIngestor extends BaseIngestor {
     if (eventName === 'RESUMED') {
       this.state = 'connected';
       this.reconnectAttempts = 0;
-      console.log(`[discord-gw] Resumed for ${this.connectionAlias}`);
+      log.info(`Resumed for ${this.connectionAlias}`);
     }
 
     // Apply event type filter (empty filter = capture all)
     if (this.eventFilter.length > 0 && !this.eventFilter.includes(eventName)) {
+      log.debug(`${this.connectionAlias} event filtered out by eventFilter: ${eventName}`);
       return;
     }
 
@@ -255,6 +259,7 @@ export class DiscordGatewayIngestor extends BaseIngestor {
     }
 
     // Buffer the event
+    log.debug(`${this.connectionAlias} dispatching event: ${eventName} (seq: ${payload.s})`);
     this.pushEvent(eventName, payload.d);
   }
 
@@ -288,7 +293,7 @@ export class DiscordGatewayIngestor extends BaseIngestor {
       this.heartbeatTimer = setInterval(() => {
         if (!this.heartbeatAcked) {
           // Zombie connection — server stopped responding
-          console.log(`[discord-gw] Heartbeat not ACKed, reconnecting ${this.connectionAlias}`);
+          log.info(`Heartbeat not ACKed, reconnecting ${this.connectionAlias}`);
           this.initiateReconnect();
           return;
         }
@@ -309,7 +314,7 @@ export class DiscordGatewayIngestor extends BaseIngestor {
     if (NON_RECOVERABLE_CLOSE_CODES.has(code)) {
       this.state = 'error';
       this.errorMessage = `Non-recoverable Gateway close code: ${code}`;
-      console.error(`[discord-gw] ${this.errorMessage} (${this.connectionAlias})`);
+      log.error(`${this.errorMessage} (${this.connectionAlias})`);
       return;
     }
 
@@ -336,15 +341,15 @@ export class DiscordGatewayIngestor extends BaseIngestor {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       this.state = 'error';
       this.errorMessage = `Max reconnect attempts (${this.maxReconnectAttempts}) exceeded`;
-      console.error(`[discord-gw] ${this.errorMessage} (${this.connectionAlias})`);
+      log.error(`${this.errorMessage} (${this.connectionAlias})`);
       return;
     }
 
     this.state = 'reconnecting';
     this.reconnectAttempts++;
     const backoff = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30_000);
-    console.log(
-      `[discord-gw] Reconnecting ${this.connectionAlias} in ${backoff}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`,
+    log.info(
+      `Reconnecting ${this.connectionAlias} in ${backoff}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`,
     );
 
     this.reconnectTimer = setTimeout(() => {
@@ -382,7 +387,7 @@ export class DiscordGatewayIngestor extends BaseIngestor {
 
 registerIngestorFactory('websocket:discord', (connectionAlias, config, secrets, bufferSize) => {
   if (!config.websocket) {
-    console.error(`[ingestor] Missing websocket config for ${connectionAlias}`);
+    log.error(`Missing websocket config for ${connectionAlias}`);
     return null;
   }
   return new DiscordGatewayIngestor(connectionAlias, secrets, config.websocket, bufferSize);

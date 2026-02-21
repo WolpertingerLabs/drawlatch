@@ -14,6 +14,9 @@
 import { registerIngestorFactory } from '../registry.js';
 import { WebhookIngestor } from './base-webhook-ingestor.js';
 import { verifyStripeSignature, STRIPE_SIGNATURE_HEADER } from './stripe-types.js';
+import { createLogger } from '../../../shared/logger.js';
+
+const log = createLogger('webhook');
 
 // ── Stripe Webhook Ingestor ──────────────────────────────────────────────
 
@@ -35,8 +38,8 @@ export class StripeWebhookIngestor extends WebhookIngestor {
 
     const secret = this.secrets[this.signatureSecretName];
     if (!secret) {
-      console.error(
-        `[webhook] Signature secret "${this.signatureSecretName}" not found ` +
+      log.error(
+        `Signature secret "${this.signatureSecretName}" not found ` +
           `in resolved secrets for ${this.connectionAlias}`,
       );
       return { valid: false, reason: 'Signature secret not configured' };
@@ -90,7 +93,7 @@ export class StripeWebhookIngestor extends WebhookIngestor {
 
 registerIngestorFactory('webhook:stripe', (connectionAlias, config, secrets, bufferSize) => {
   if (!config.webhook) {
-    console.error(`[ingestor] Missing webhook config for ${connectionAlias}`);
+    log.error(`Missing webhook config for ${connectionAlias}`);
     return null;
   }
   return new StripeWebhookIngestor(connectionAlias, secrets, config.webhook, bufferSize);

@@ -23,6 +23,9 @@ import {
   extractTrelloActionId,
   TRELLO_SIGNATURE_HEADER,
 } from './trello-types.js';
+import { createLogger } from '../../../shared/logger.js';
+
+const log = createLogger('webhook');
 
 // ── Placeholder resolution ──────────────────────────────────────────────
 
@@ -80,16 +83,16 @@ export class TrelloWebhookIngestor extends WebhookIngestor {
 
     const secret = this.secrets[this.signatureSecretName];
     if (!secret) {
-      console.error(
-        `[webhook] Signature secret "${this.signatureSecretName}" not found ` +
+      log.error(
+        `Signature secret "${this.signatureSecretName}" not found ` +
           `in resolved secrets for ${this.connectionAlias}`,
       );
       return { valid: false, reason: 'Signature secret not configured' };
     }
 
     if (!this.callbackUrl) {
-      console.error(
-        `[webhook] Callback URL not configured for ${this.connectionAlias}. ` +
+      log.error(
+        `Callback URL not configured for ${this.connectionAlias}. ` +
           `Trello signature verification requires the callbackUrl.`,
       );
       return { valid: false, reason: 'Callback URL not configured' };
@@ -105,8 +108,8 @@ export class TrelloWebhookIngestor extends WebhookIngestor {
     }
 
     if (!verifyTrelloSignature(rawBody, signatureValue, secret, this.callbackUrl)) {
-      console.warn(
-        `[webhook] Signature verification failed for ${this.connectionAlias}`,
+      log.warn(
+        `Signature verification failed for ${this.connectionAlias}`,
       );
       return { valid: false, reason: 'Signature verification failed' };
     }
@@ -150,7 +153,7 @@ export class TrelloWebhookIngestor extends WebhookIngestor {
 
 registerIngestorFactory('webhook:trello', (connectionAlias, config, secrets, bufferSize) => {
   if (!config.webhook) {
-    console.error(`[ingestor] Missing webhook config for ${connectionAlias}`);
+    log.error(`Missing webhook config for ${connectionAlias}`);
     return null;
   }
   return new TrelloWebhookIngestor(connectionAlias, secrets, config.webhook, bufferSize);

@@ -14,6 +14,9 @@
 import { registerIngestorFactory } from '../registry.js';
 import { WebhookIngestor } from './base-webhook-ingestor.js';
 import { verifyGitHubSignature, extractGitHubHeaders } from './github-types.js';
+import { createLogger } from '../../../shared/logger.js';
+
+const log = createLogger('webhook');
 
 // ── GitHub Webhook Ingestor ──────────────────────────────────────────────
 
@@ -34,8 +37,8 @@ export class GitHubWebhookIngestor extends WebhookIngestor {
 
     const secret = this.secrets[this.signatureSecretName];
     if (!secret) {
-      console.error(
-        `[webhook] Signature secret "${this.signatureSecretName}" not found ` +
+      log.error(
+        `Signature secret "${this.signatureSecretName}" not found ` +
           `in resolved secrets for ${this.connectionAlias}`,
       );
       return { valid: false, reason: 'Signature secret not configured' };
@@ -48,8 +51,8 @@ export class GitHubWebhookIngestor extends WebhookIngestor {
     }
 
     if (!verifyGitHubSignature(rawBody, signature, secret)) {
-      console.warn(
-        `[webhook] Signature verification failed for ${this.connectionAlias} ` +
+      log.warn(
+        `Signature verification failed for ${this.connectionAlias} ` +
           `(delivery: ${ghHeaders.deliveryId ?? 'unknown'})`,
       );
       return { valid: false, reason: 'Signature verification failed' };
@@ -89,7 +92,7 @@ export class GitHubWebhookIngestor extends WebhookIngestor {
 
 registerIngestorFactory('webhook:generic', (connectionAlias, config, secrets, bufferSize) => {
   if (!config.webhook) {
-    console.error(`[ingestor] Missing webhook config for ${connectionAlias}`);
+    log.error(`Missing webhook config for ${connectionAlias}`);
     return null;
   }
   return new GitHubWebhookIngestor(connectionAlias, secrets, config.webhook, bufferSize);

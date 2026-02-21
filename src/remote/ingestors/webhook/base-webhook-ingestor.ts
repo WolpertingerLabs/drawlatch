@@ -18,6 +18,9 @@
 
 import { BaseIngestor } from '../base-ingestor.js';
 import type { WebhookIngestorConfig } from '../types.js';
+import { createLogger } from '../../../shared/logger.js';
+
+const log = createLogger('webhook');
 
 // ── Abstract Webhook Ingestor ──────────────────────────────────────────
 
@@ -56,8 +59,8 @@ export abstract class WebhookIngestor extends BaseIngestor {
    */
   start(): Promise<void> {
     this.state = 'connected';
-    console.log(
-      `[webhook] Webhook ingestor ready for ${this.connectionAlias} ` +
+    log.info(
+      `Webhook ingestor ready for ${this.connectionAlias} ` +
         `(path: /webhooks/${this.webhookPath})`,
     );
     return Promise.resolve();
@@ -139,9 +142,12 @@ export abstract class WebhookIngestor extends BaseIngestor {
     headers: Record<string, string | string[] | undefined>,
     rawBody: Buffer,
   ): { accepted: boolean; reason?: string } {
+    log.debug(`${this.connectionAlias} received webhook (${rawBody.length} bytes)`);
+
     // 1. Signature verification (delegated to subclass)
     const verification = this.verifySignature(headers, rawBody);
     if (!verification.valid) {
+      log.debug(`${this.connectionAlias} webhook rejected: ${verification.reason}`);
       return { accepted: false, reason: verification.reason };
     }
 
@@ -165,6 +171,7 @@ export abstract class WebhookIngestor extends BaseIngestor {
     const data = this.extractEventData(headers, body);
 
     // 6. Push event into ring buffer
+    log.debug(`${this.connectionAlias} dispatching webhook event: ${eventType}`);
     this.pushEvent(eventType, data);
 
     return { accepted: true };

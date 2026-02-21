@@ -9,6 +9,9 @@
 
 import type { BaseIngestor } from './base-ingestor.js';
 import type { IngestorConfig } from './types.js';
+import { createLogger } from '../../shared/logger.js';
+
+const log = createLogger('ingestor');
 
 /** Signature for a factory that creates an ingestor from its config. */
 export type IngestorFactory = (
@@ -57,7 +60,7 @@ export function createIngestor(
 
   const factory = factories.get(key);
   if (!factory) {
-    console.error(`[ingestor] No factory registered for "${key}" (${connectionAlias})`);
+    log.error(`No factory registered for "${key}" (${connectionAlias})`);
     return null;
   }
 

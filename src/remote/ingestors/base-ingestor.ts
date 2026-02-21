@@ -14,6 +14,9 @@ import { EventEmitter } from 'node:events';
 import type { IngestedEvent, IngestorState, IngestorStatus } from './types.js';
 import { RingBuffer } from './ring-buffer.js';
 import { DEFAULT_BUFFER_SIZE } from './types.js';
+import { createLogger } from '../../shared/logger.js';
+
+const log = createLogger('ingestor');
 
 export abstract class BaseIngestor extends EventEmitter {
   protected state: IngestorState = 'stopped';
@@ -56,8 +59,10 @@ export abstract class BaseIngestor extends EventEmitter {
     };
     this.buffer.push(event);
     this.lastEventAt = event.receivedAt;
-    console.log(
-      `[ingestor] ${this.connectionAlias} event #${event.id}: ${eventType}`,
+    log.info(`${this.connectionAlias} event #${event.id}: ${eventType}`);
+    log.debug(
+      `${this.connectionAlias} event #${event.id} payload:`,
+      JSON.stringify(data, null, 2),
     );
     this.emit('event', event);
   }
