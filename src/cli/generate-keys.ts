@@ -28,7 +28,9 @@ function usage(): void {
 mcp-secure-proxy key generation
 
 Usage:
-  generate-keys local           Generate MCP proxy (local) keypair
+  generate-keys local [alias]   Generate MCP proxy (local) keypair
+                                Alias defaults to "default" if omitted.
+                                Keys are stored in keys/local/<alias>/
   generate-keys remote          Generate remote server keypair
   generate-keys --dir <path>    Generate keypair in a custom directory
   generate-keys show <path>     Show fingerprint of an existing keypair
@@ -89,7 +91,26 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
 fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
 
 if (args[0] === 'local') {
-  generateAndSave(LOCAL_KEYS_DIR, 'MCP proxy (local)');
+  const alias = args[1] && !args[1].startsWith('-') ? args[1] : 'default';
+  const targetDir = path.join(LOCAL_KEYS_DIR, alias);
+
+  // Check for legacy flat key layout (PEM files directly in LOCAL_KEYS_DIR)
+  const legacyKeyPath = path.join(LOCAL_KEYS_DIR, 'signing.key.pem');
+  if (fs.existsSync(legacyKeyPath)) {
+    console.error(
+      `\n⚠️  Legacy key layout detected: PEM files found directly in ${LOCAL_KEYS_DIR}\n` +
+        `   Local keys are now stored per-alias: keys/local/<alias>/\n` +
+        `   To migrate, move your existing keys:\n\n` +
+        `     mkdir -p ${targetDir}\n` +
+        `     mv ${LOCAL_KEYS_DIR}/signing.* ${targetDir}/\n` +
+        `     mv ${LOCAL_KEYS_DIR}/exchange.* ${targetDir}/\n\n` +
+        `   Then update localKeysDir in your proxy.config.json to point to:\n` +
+        `     ${targetDir}\n`,
+    );
+    process.exit(1);
+  }
+
+  generateAndSave(targetDir, `MCP proxy (local) — alias "${alias}"`);
 } else if (args[0] === 'remote') {
   generateAndSave(REMOTE_KEYS_DIR, 'remote server');
 } else if (args[0] === '--dir' && args[1]) {

@@ -161,7 +161,7 @@ export interface RemoteServerConfig {
 function proxyDefaults(): ProxyConfig {
   return {
     remoteUrl: 'http://localhost:9999',
-    localKeysDir: LOCAL_KEYS_DIR,
+    localKeysDir: path.join(LOCAL_KEYS_DIR, 'default'),
     remotePublicKeysDir: path.join(PEER_KEYS_DIR, 'remote-server'),
     connectTimeout: 10_000,
     requestTimeout: 30_000,

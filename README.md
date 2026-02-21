@@ -82,11 +82,12 @@ All config and key files live inside a `.mcp-secure-proxy/` directory (relative 
 ├── proxy.config.json                          # Local proxy config
 ├── remote.config.json                         # Remote server config
 └── keys/
-    ├── local/                                 # MCP proxy keypair
-    │   ├── signing.pub.pem                    # Ed25519 public key (share this)
-    │   ├── signing.key.pem                    # Ed25519 private key (keep secret)
-    │   ├── exchange.pub.pem                   # X25519 public key (share this)
-    │   └── exchange.key.pem                   # X25519 private key (keep secret)
+    ├── local/                                 # MCP proxy keypairs (one per alias)
+    │   └── my-laptop/                         # Alias-named subdirectory
+    │       ├── signing.pub.pem                # Ed25519 public key (share this)
+    │       ├── signing.key.pem                # Ed25519 private key (keep secret)
+    │       ├── exchange.pub.pem               # X25519 public key (share this)
+    │       └── exchange.key.pem               # X25519 private key (keep secret)
     ├── remote/                                # Remote server keypair
     │   ├── signing.pub.pem
     │   ├── signing.key.pem
@@ -109,14 +110,19 @@ All config and key files live inside a `.mcp-secure-proxy/` directory (relative 
 Generate keypairs for both the local proxy and the remote server:
 
 ```bash
-# Generate local MCP proxy keypair
+# Generate local MCP proxy keypair (with alias)
+npm run generate-keys -- local my-laptop
+
+# Or use the default alias
 npm run generate-keys -- local
 
 # Generate remote server keypair
 npm run generate-keys -- remote
 ```
 
-Each command creates four PEM files (Ed25519 signing + X25519 exchange, public + private) in the appropriate directory under `.mcp-secure-proxy/keys/`.
+Each command creates four PEM files (Ed25519 signing + X25519 exchange, public + private) in the appropriate directory under `.mcp-secure-proxy/keys/`. Local keys are stored under `keys/local/<alias>/` — the alias defaults to `"default"` if omitted.
+
+> **Multiple identities:** You can generate multiple local keypairs by using different aliases (e.g., `my-laptop`, `ci-server`). Each alias gets its own subdirectory under `keys/local/`. Use different `proxy.config.json` files (or set `localKeysDir` per environment) to select which identity the proxy uses. The alias directory name should match the caller alias in the remote server's config.
 
 You can also generate keys to a custom directory:
 
@@ -127,22 +133,22 @@ npm run generate-keys -- --dir /path/to/custom/keys
 Or inspect the fingerprint of an existing keypair:
 
 ```bash
-npm run generate-keys -- show .mcp-secure-proxy/keys/local
+npm run generate-keys -- show .mcp-secure-proxy/keys/local/my-laptop
 ```
 
 ### Step 2: Exchange Public Keys
 
 The local proxy and remote server need each other's public keys for mutual authentication. Copy the **public** key files (`.pub.pem` only — never share private keys):
 
-**From local to remote** — copy the proxy's public keys into a caller directory on the remote server:
+**From local to remote** — copy the proxy's public keys into a caller directory on the remote server. Since local keys are now stored per-alias, the alias directory name naturally matches the peer directory:
 
 ```bash
 mkdir -p .mcp-secure-proxy/keys/peers/my-laptop
 
-cp .mcp-secure-proxy/keys/local/signing.pub.pem \
+cp .mcp-secure-proxy/keys/local/my-laptop/signing.pub.pem \
    .mcp-secure-proxy/keys/peers/my-laptop/signing.pub.pem
 
-cp .mcp-secure-proxy/keys/local/exchange.pub.pem \
+cp .mcp-secure-proxy/keys/local/my-laptop/exchange.pub.pem \
    .mcp-secure-proxy/keys/peers/my-laptop/exchange.pub.pem
 ```
 
@@ -173,20 +179,20 @@ Edit `.mcp-secure-proxy/proxy.config.json`:
 ```json
 {
   "remoteUrl": "http://127.0.0.1:9999",
-  "localKeysDir": "/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy/keys/local",
+  "localKeysDir": "/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy/keys/local/my-laptop",
   "remotePublicKeysDir": "/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy/keys/peers/remote-server",
   "connectTimeout": 10000,
   "requestTimeout": 30000
 }
 ```
 
-| Field                 | Description                                        | Default                                      |
-| --------------------- | -------------------------------------------------- | -------------------------------------------- |
-| `remoteUrl`           | URL of the remote secure server                    | `http://localhost:9999`                      |
-| `localKeysDir`        | Absolute path to the proxy's own keypair directory | `.mcp-secure-proxy/keys/local`               |
-| `remotePublicKeysDir` | Absolute path to the remote server's public keys   | `.mcp-secure-proxy/keys/peers/remote-server` |
-| `connectTimeout`      | Handshake timeout in milliseconds                  | `10000` (10s)                                |
-| `requestTimeout`      | Request timeout in milliseconds                    | `30000` (30s)                                |
+| Field                 | Description                                        | Default                                        |
+| --------------------- | -------------------------------------------------- | ---------------------------------------------- |
+| `remoteUrl`           | URL of the remote secure server                    | `http://localhost:9999`                        |
+| `localKeysDir`        | Absolute path to the proxy's own keypair directory | `.mcp-secure-proxy/keys/local/default`         |
+| `remotePublicKeysDir` | Absolute path to the remote server's public keys   | `.mcp-secure-proxy/keys/peers/remote-server`   |
+| `connectTimeout`      | Handshake timeout in milliseconds                  | `10000` (10s)                                  |
+| `requestTimeout`      | Request timeout in milliseconds                    | `30000` (30s)                                  |
 
 ### Step 4: Create the Remote Server Config
 
