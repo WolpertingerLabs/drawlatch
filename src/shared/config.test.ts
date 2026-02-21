@@ -481,12 +481,12 @@ describe('loadProxyConfig alias resolution', () => {
 
   it('should prioritize MCP_KEY_ALIAS over localKeyAlias in config', () => {
     process.env.MCP_KEY_ALIAS = 'alice';
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation(
-      (p) => String(p) === PROXY_CONFIG_PATH,
-    );
-    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
-      JSON.stringify({ localKeyAlias: 'bob' }),
-    );
+    const existsSpy = vi
+      .spyOn(fs, 'existsSync')
+      .mockImplementation((p) => String(p) === PROXY_CONFIG_PATH);
+    const readSpy = vi
+      .spyOn(fs, 'readFileSync')
+      .mockReturnValue(JSON.stringify({ localKeyAlias: 'bob' }));
 
     const config = loadProxyConfig();
 
@@ -497,12 +497,12 @@ describe('loadProxyConfig alias resolution', () => {
   });
 
   it('should resolve localKeyAlias from config when no env var is set', () => {
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation(
-      (p) => String(p) === PROXY_CONFIG_PATH,
-    );
-    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
-      JSON.stringify({ localKeyAlias: 'bob' }),
-    );
+    const existsSpy = vi
+      .spyOn(fs, 'existsSync')
+      .mockImplementation((p) => String(p) === PROXY_CONFIG_PATH);
+    const readSpy = vi
+      .spyOn(fs, 'readFileSync')
+      .mockReturnValue(JSON.stringify({ localKeyAlias: 'bob' }));
 
     const config = loadProxyConfig();
 
@@ -513,12 +513,12 @@ describe('loadProxyConfig alias resolution', () => {
   });
 
   it('should let localKeyAlias take precedence over localKeysDir', () => {
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation(
-      (p) => String(p) === PROXY_CONFIG_PATH,
-    );
-    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
-      JSON.stringify({ localKeyAlias: 'bob', localKeysDir: '/explicit/path' }),
-    );
+    const existsSpy = vi
+      .spyOn(fs, 'existsSync')
+      .mockImplementation((p) => String(p) === PROXY_CONFIG_PATH);
+    const readSpy = vi
+      .spyOn(fs, 'readFileSync')
+      .mockReturnValue(JSON.stringify({ localKeyAlias: 'bob', localKeysDir: '/explicit/path' }));
 
     const config = loadProxyConfig();
 
@@ -529,12 +529,12 @@ describe('loadProxyConfig alias resolution', () => {
   });
 
   it('should use localKeysDir when no alias is set', () => {
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation(
-      (p) => String(p) === PROXY_CONFIG_PATH,
-    );
-    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
-      JSON.stringify({ localKeysDir: '/explicit/path' }),
-    );
+    const existsSpy = vi
+      .spyOn(fs, 'existsSync')
+      .mockImplementation((p) => String(p) === PROXY_CONFIG_PATH);
+    const readSpy = vi
+      .spyOn(fs, 'readFileSync')
+      .mockReturnValue(JSON.stringify({ localKeysDir: '/explicit/path' }));
 
     const config = loadProxyConfig();
 
@@ -567,12 +567,12 @@ describe('loadProxyConfig alias resolution', () => {
 
   it('should ignore empty or whitespace-only MCP_KEY_ALIAS', () => {
     process.env.MCP_KEY_ALIAS = '   ';
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation(
-      (p) => String(p) === PROXY_CONFIG_PATH,
-    );
-    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
-      JSON.stringify({ localKeyAlias: 'bob' }),
-    );
+    const existsSpy = vi
+      .spyOn(fs, 'existsSync')
+      .mockImplementation((p) => String(p) === PROXY_CONFIG_PATH);
+    const readSpy = vi
+      .spyOn(fs, 'readFileSync')
+      .mockReturnValue(JSON.stringify({ localKeyAlias: 'bob' }));
 
     const config = loadProxyConfig();
 
@@ -718,9 +718,7 @@ describe('resolveCallerRoutes', () => {
       host: '127.0.0.1',
       port: 9999,
       localKeysDir: '',
-      connectors: [
-        { alias: 'my-api', allowedEndpoints: ['https://api.example.com/**'] },
-      ],
+      connectors: [{ alias: 'my-api', allowedEndpoints: ['https://api.example.com/**'] }],
       callers: {
         laptop: { peerKeyDir: '/keys/laptop', connections: ['my-api'] },
       },
@@ -750,7 +748,11 @@ describe('resolveCallerRoutes', () => {
       port: 9999,
       localKeysDir: '',
       connectors: [
-        { alias: 'custom-api', name: 'Custom API', allowedEndpoints: ['https://api.custom.com/**'] },
+        {
+          alias: 'custom-api',
+          name: 'Custom API',
+          allowedEndpoints: ['https://api.custom.com/**'],
+        },
       ],
       callers: {
         laptop: { peerKeyDir: '/keys/laptop', connections: ['custom-api', 'test-conn'] },
@@ -827,7 +829,9 @@ describe('resolveCallerRoutes', () => {
 
 describe('loadRemoteConfig legacy migration', () => {
   it('should migrate old format with routes to caller-centric format', () => {
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => { /* noop */ });
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {
+      /* noop */
+    });
     const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
       return String(p) === REMOTE_CONFIG_PATH;
     });
@@ -836,9 +840,7 @@ describe('loadRemoteConfig legacy migration', () => {
         host: '0.0.0.0',
         port: 8080,
         authorizedPeersDir: '/old/peers',
-        routes: [
-          { name: 'My API', allowedEndpoints: ['https://api.example.com/**'] },
-        ],
+        routes: [{ name: 'My API', allowedEndpoints: ['https://api.example.com/**'] }],
       }),
     );
 

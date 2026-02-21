@@ -69,9 +69,7 @@ export class IngestorManager {
 
         // Skip if explicitly disabled by caller
         if (overrides?.disabled) {
-          log.info(
-            `Skipping disabled ingestor for ${callerAlias}:${connectionAlias}`,
-          );
+          log.info(`Skipping disabled ingestor for ${callerAlias}:${connectionAlias}`);
           continue;
         }
 

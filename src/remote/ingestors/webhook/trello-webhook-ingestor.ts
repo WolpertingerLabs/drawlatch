@@ -108,9 +108,7 @@ export class TrelloWebhookIngestor extends WebhookIngestor {
     }
 
     if (!verifyTrelloSignature(rawBody, signatureValue, secret, this.callbackUrl)) {
-      log.warn(
-        `Signature verification failed for ${this.connectionAlias}`,
-      );
+      log.warn(`Signature verification failed for ${this.connectionAlias}`);
       return { valid: false, reason: 'Signature verification failed' };
     }
 

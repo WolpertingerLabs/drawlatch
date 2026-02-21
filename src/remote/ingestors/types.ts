@@ -121,7 +121,7 @@ export interface IngestedEvent {
    *
    * Derived from service-specific unique identifiers when available
    * (e.g., GitHub delivery ID, Stripe event ID, Slack envelope ID).
-   * Falls back to `${source}:${id}` for services without natural keys.
+   * Falls back to `${source}:${uuid-v4}` for services without natural keys.
    *
    * Consumers can use this key to detect and skip duplicate events
    * caused by webhook retries or reconnection replays.

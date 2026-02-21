@@ -17,12 +17,19 @@ import { createIngestor } from '../registry.js';
 
 const CALLBACK_URL = 'https://example.com/webhooks/trello';
 
-function signTrelloPayload(body: string, secret: string, callbackUrl: string = CALLBACK_URL): string {
+function signTrelloPayload(
+  body: string,
+  secret: string,
+  callbackUrl: string = CALLBACK_URL,
+): string {
   const content = body + callbackUrl;
   return crypto.createHmac('sha1', secret).update(content).digest('base64');
 }
 
-function makeTrelloPayload(actionType: string = 'updateCard', actionId: string = 'action-123'): object {
+function makeTrelloPayload(
+  actionType: string = 'updateCard',
+  actionId: string = 'action-123',
+): object {
   return {
     action: {
       id: actionId,
@@ -313,10 +320,7 @@ describe('TrelloWebhookIngestor.handleWebhook (no verification)', () => {
     const ingestor = createTestIngestor();
     await ingestor.start();
 
-    ingestor.handleWebhook(
-      {},
-      Buffer.from(JSON.stringify(makeTrelloPayload())),
-    );
+    ingestor.handleWebhook({}, Buffer.from(JSON.stringify(makeTrelloPayload())));
 
     expect(ingestor.getEvents()[0].source).toBe('trello');
   });
@@ -348,10 +352,7 @@ describe('TrelloWebhookIngestor.handleWebhook (with verification)', () => {
     const body = JSON.stringify(makeTrelloPayload());
     const sig = signTrelloPayload(body, secret);
 
-    const result = ingestor.handleWebhook(
-      { [TRELLO_SIGNATURE_HEADER]: sig },
-      Buffer.from(body),
-    );
+    const result = ingestor.handleWebhook({ [TRELLO_SIGNATURE_HEADER]: sig }, Buffer.from(body));
 
     expect(result.accepted).toBe(true);
     expect(ingestor.getEvents()).toHaveLength(1);
@@ -364,10 +365,7 @@ describe('TrelloWebhookIngestor.handleWebhook (with verification)', () => {
     const body = JSON.stringify(makeTrelloPayload());
     const badSig = signTrelloPayload(body, 'wrong-secret');
 
-    const result = ingestor.handleWebhook(
-      { [TRELLO_SIGNATURE_HEADER]: badSig },
-      Buffer.from(body),
-    );
+    const result = ingestor.handleWebhook({ [TRELLO_SIGNATURE_HEADER]: badSig }, Buffer.from(body));
 
     expect(result.accepted).toBe(false);
     expect(result.reason).toBe('Signature verification failed');
@@ -403,10 +401,7 @@ describe('TrelloWebhookIngestor.handleWebhook (with verification)', () => {
     const body = JSON.stringify(makeTrelloPayload());
     const sig = signTrelloPayload(body, secret);
 
-    const result = ingestor.handleWebhook(
-      { [TRELLO_SIGNATURE_HEADER]: sig },
-      Buffer.from(body),
-    );
+    const result = ingestor.handleWebhook({ [TRELLO_SIGNATURE_HEADER]: sig }, Buffer.from(body));
 
     expect(result.accepted).toBe(false);
     expect(result.reason).toBe('Signature secret not configured');
@@ -429,10 +424,7 @@ describe('TrelloWebhookIngestor.handleWebhook (with verification)', () => {
     const body = JSON.stringify(makeTrelloPayload());
     const sig = signTrelloPayload(body, secret);
 
-    const result = ingestor.handleWebhook(
-      { [TRELLO_SIGNATURE_HEADER]: sig },
-      Buffer.from(body),
-    );
+    const result = ingestor.handleWebhook({ [TRELLO_SIGNATURE_HEADER]: sig }, Buffer.from(body));
 
     expect(result.accepted).toBe(false);
     expect(result.reason).toBe('Callback URL not configured');
@@ -460,10 +452,7 @@ describe('TrelloWebhookIngestor.handleWebhook (with verification)', () => {
     // Sign with the resolved URL, not the placeholder
     const sig = signTrelloPayload(body, secret, resolvedUrl);
 
-    const result = ingestor.handleWebhook(
-      { [TRELLO_SIGNATURE_HEADER]: sig },
-      Buffer.from(body),
-    );
+    const result = ingestor.handleWebhook({ [TRELLO_SIGNATURE_HEADER]: sig }, Buffer.from(body));
 
     expect(result.accepted).toBe(true);
     expect(ingestor.getEvents()).toHaveLength(1);

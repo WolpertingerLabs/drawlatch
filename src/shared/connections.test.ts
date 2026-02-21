@@ -44,13 +44,9 @@ describe('loadConnection', () => {
       // The connection file doesn't exist, but the directory does
       return !String(p).endsWith('.json');
     });
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(
-      mockReaddirSync(['github.json', 'stripe.json']),
-    );
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['github.json', 'stripe.json']));
 
-    expect(() => loadConnection('nonexistent')).toThrow(
-      'Available connections: github, stripe',
-    );
+    expect(() => loadConnection('nonexistent')).toThrow('Available connections: github, stripe');
   });
 
   it('should show (none) when no connections are available', () => {

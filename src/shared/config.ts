@@ -265,7 +265,8 @@ export function loadRemoteConfig(): RemoteServerConfig {
 
     const legacyRoutes: Route[] = rawConfig.routes;
     const legacyConnections: string[] = rawConfig.connections ?? [];
-    const legacyPeersDir: string = rawConfig.authorizedPeersDir ?? path.join(PEER_KEYS_DIR, 'authorized-clients');
+    const legacyPeersDir: string =
+      rawConfig.authorizedPeersDir ?? path.join(PEER_KEYS_DIR, 'authorized-clients');
 
     // Auto-assign aliases to unnamed routes for the default caller
     const connectors = legacyRoutes.map((r, i) => ({
@@ -273,10 +274,7 @@ export function loadRemoteConfig(): RemoteServerConfig {
       alias: r.alias ?? r.name?.toLowerCase().replace(/\s+/g, '-') ?? `route-${i}`,
     }));
 
-    const allConnectionNames = [
-      ...legacyConnections,
-      ...connectors.map((c) => c.alias!),
-    ];
+    const allConnectionNames = [...legacyConnections, ...connectors.map((c) => c.alias!)];
 
     config = {
       ...def,
@@ -388,7 +386,10 @@ export function resolveSecrets(
  * When `envOverrides` is provided, those pre-resolved values are checked
  * before process.env during secret resolution (used for per-caller env).
  */
-export function resolveRoutes(routes: Route[], envOverrides?: Record<string, string>): ResolvedRoute[] {
+export function resolveRoutes(
+  routes: Route[],
+  envOverrides?: Record<string, string>,
+): ResolvedRoute[] {
   return routes.map((route) => {
     const resolvedSecrets = resolveSecrets(route.secrets ?? {}, envOverrides);
     const resolvedHeaders: Record<string, string> = {};

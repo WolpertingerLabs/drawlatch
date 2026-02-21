@@ -144,9 +144,7 @@ export class SlackSocketModeIngestor extends BaseIngestor {
     });
 
     this.ws.addEventListener('close', (event: CloseEvent) => {
-      log.info(
-        `Connection closed for ${this.connectionAlias}: ${event.code} ${event.reason}`,
-      );
+      log.info(`Connection closed for ${this.connectionAlias}: ${event.code} ${event.reason}`);
       if (this.state !== 'stopped') {
         this.scheduleReconnect();
       }
@@ -177,9 +175,7 @@ export class SlackSocketModeIngestor extends BaseIngestor {
         break;
 
       default:
-        log.warn(
-          `Unknown message type "${String(envelope.type)}" for ${this.connectionAlias}`,
-        );
+        log.warn(`Unknown message type "${String(envelope.type)}" for ${this.connectionAlias}`);
         // Still acknowledge if there's an envelope_id
         if (envelope.envelope_id) {
           this.acknowledge(envelope.envelope_id);
@@ -258,10 +254,10 @@ export class SlackSocketModeIngestor extends BaseIngestor {
     }
 
     // Buffer the event (use envelope_id as idempotency key for retry dedup)
-    const idempotencyKey = envelope.envelope_id
-      ? `slack:${envelope.envelope_id}`
-      : undefined;
-    log.debug(`${this.connectionAlias} dispatching event: ${eventType} (envelope: ${envelope.type})`);
+    const idempotencyKey = envelope.envelope_id ? `slack:${envelope.envelope_id}` : undefined;
+    log.debug(
+      `${this.connectionAlias} dispatching event: ${eventType} (envelope: ${envelope.type})`,
+    );
     this.pushEvent(eventType, envelope.payload, idempotencyKey);
   }
 

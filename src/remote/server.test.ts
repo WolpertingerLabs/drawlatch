@@ -139,8 +139,18 @@ describe('matchRoute', () => {
 
   it('should return the first match when multiple routes could match', () => {
     const overlappingRoutes: ResolvedRoute[] = [
-      { headers: {}, secrets: { A: '1' }, allowedEndpoints: ['https://api.example.com/**'], resolveSecretsInBody: false },
-      { headers: {}, secrets: { B: '2' }, allowedEndpoints: ['https://api.example.com/v1/**'], resolveSecretsInBody: false },
+      {
+        headers: {},
+        secrets: { A: '1' },
+        allowedEndpoints: ['https://api.example.com/**'],
+        resolveSecretsInBody: false,
+      },
+      {
+        headers: {},
+        secrets: { B: '2' },
+        allowedEndpoints: ['https://api.example.com/v1/**'],
+        resolveSecretsInBody: false,
+      },
     ];
     const match = matchRoute('https://api.example.com/v1/data', overlappingRoutes);
     expect(match).toBe(overlappingRoutes[0]);
@@ -149,7 +159,12 @@ describe('matchRoute', () => {
   it('should skip routes with empty allowedEndpoints', () => {
     const routesWithEmpty: ResolvedRoute[] = [
       { headers: {}, secrets: {}, allowedEndpoints: [], resolveSecretsInBody: false },
-      { headers: {}, secrets: { KEY: 'val' }, allowedEndpoints: ['https://api.example.com/**'], resolveSecretsInBody: false },
+      {
+        headers: {},
+        secrets: { KEY: 'val' },
+        allowedEndpoints: ['https://api.example.com/**'],
+        resolveSecretsInBody: false,
+      },
     ];
     const match = matchRoute('https://api.example.com/data', routesWithEmpty);
     expect(match).toBe(routesWithEmpty[1]);

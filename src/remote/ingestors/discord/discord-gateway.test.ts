@@ -275,28 +275,13 @@ describe('DiscordGatewayIngestor — payload filtering', () => {
       });
 
       // Matching guild + matching event → buffered
-      dispatch(
-        ingestor,
-        'MESSAGE_CREATE',
-        { guild_id: 'guild-1', author: { id: 'u1' } },
-        1,
-      );
+      dispatch(ingestor, 'MESSAGE_CREATE', { guild_id: 'guild-1', author: { id: 'u1' } }, 1);
 
       // Matching guild + wrong event → dropped by eventFilter
-      dispatch(
-        ingestor,
-        'MESSAGE_DELETE',
-        { guild_id: 'guild-1' },
-        2,
-      );
+      dispatch(ingestor, 'MESSAGE_DELETE', { guild_id: 'guild-1' }, 2);
 
       // Wrong guild + matching event → dropped by guildIds
-      dispatch(
-        ingestor,
-        'MESSAGE_CREATE',
-        { guild_id: 'guild-2', author: { id: 'u2' } },
-        3,
-      );
+      dispatch(ingestor, 'MESSAGE_CREATE', { guild_id: 'guild-2', author: { id: 'u2' } }, 3);
 
       expect(ingestor.getEvents()).toHaveLength(1);
     });

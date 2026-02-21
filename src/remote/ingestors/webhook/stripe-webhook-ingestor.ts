@@ -46,7 +46,8 @@ export class StripeWebhookIngestor extends WebhookIngestor {
     }
 
     // Extract the Stripe-Signature header value
-    const rawHeader = headers[STRIPE_SIGNATURE_HEADER] ?? headers[STRIPE_SIGNATURE_HEADER.toLowerCase()];
+    const rawHeader =
+      headers[STRIPE_SIGNATURE_HEADER] ?? headers[STRIPE_SIGNATURE_HEADER.toLowerCase()];
     const signatureValue = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
 
     if (!signatureValue) {

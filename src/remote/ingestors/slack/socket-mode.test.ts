@@ -235,9 +235,7 @@ describe('SlackSocketModeIngestor', () => {
         eventsApiEnvelope('message', { channel: 'C123', user: 'U456', text: 'hello' }, 'ack-1'),
       );
 
-      expect(latestMockWs!.send).toHaveBeenCalledWith(
-        JSON.stringify({ envelope_id: 'ack-1' }),
-      );
+      expect(latestMockWs!.send).toHaveBeenCalledWith(JSON.stringify({ envelope_id: 'ack-1' }));
     });
 
     it('should acknowledge slash_commands envelopes', async () => {
@@ -249,9 +247,7 @@ describe('SlackSocketModeIngestor', () => {
         slashCommandEnvelope('/test', { channel_id: 'C123', user_id: 'U456' }, 'ack-cmd-1'),
       );
 
-      expect(latestMockWs!.send).toHaveBeenCalledWith(
-        JSON.stringify({ envelope_id: 'ack-cmd-1' }),
-      );
+      expect(latestMockWs!.send).toHaveBeenCalledWith(JSON.stringify({ envelope_id: 'ack-cmd-1' }));
     });
 
     it('should acknowledge unknown message types that have an envelope_id', async () => {
@@ -265,9 +261,7 @@ describe('SlackSocketModeIngestor', () => {
         payload: {},
       });
 
-      expect(latestMockWs!.send).toHaveBeenCalledWith(
-        JSON.stringify({ envelope_id: 'ack-opt-1' }),
-      );
+      expect(latestMockWs!.send).toHaveBeenCalledWith(JSON.stringify({ envelope_id: 'ack-opt-1' }));
     });
   });
 
@@ -323,11 +317,18 @@ describe('SlackSocketModeIngestor', () => {
       const ingestor = createTestIngestor();
       await ingestor.start();
 
-      latestMockWs!.simulateMessage(helloMessage({
-        connection_info: { app_id: 'A1234' },
-        num_connections: 1,
-        debug_info: { host: 'wss-test', started: '2026-01-01', build_number: 1, approximate_connection_time: 3600 },
-      }));
+      latestMockWs!.simulateMessage(
+        helloMessage({
+          connection_info: { app_id: 'A1234' },
+          num_connections: 1,
+          debug_info: {
+            host: 'wss-test',
+            started: '2026-01-01',
+            build_number: 1,
+            approximate_connection_time: 3600,
+          },
+        }),
+      );
 
       expect(ingestor.getEvents()).toHaveLength(0);
     });
@@ -404,9 +405,7 @@ describe('SlackSocketModeIngestor', () => {
       await ingestor.start();
 
       // Event with no channel field should pass through
-      latestMockWs!.simulateMessage(
-        eventsApiEnvelope('app_mention', {}, 'env-1'),
-      );
+      latestMockWs!.simulateMessage(eventsApiEnvelope('app_mention', {}, 'env-1'));
 
       expect(ingestor.getEvents()).toHaveLength(1);
     });
@@ -473,9 +472,7 @@ describe('SlackSocketModeIngestor', () => {
       latestMockWs!.simulateMessage(
         eventsApiEnvelope('reaction_added', { channel: 'C2' }, 'env-2'),
       );
-      latestMockWs!.simulateMessage(
-        slashCommandEnvelope('/test', { channel_id: 'C3' }, 'env-3'),
-      );
+      latestMockWs!.simulateMessage(slashCommandEnvelope('/test', { channel_id: 'C3' }, 'env-3'));
 
       expect(ingestor.getEvents()).toHaveLength(3);
     });
