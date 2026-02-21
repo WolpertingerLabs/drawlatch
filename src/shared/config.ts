@@ -34,7 +34,11 @@ export const PEER_KEYS_DIR = path.join(KEYS_DIR, 'peers');
 export interface ProxyConfig {
   /** Remote server URL */
   remoteUrl: string;
-  /** Path to our own key bundle */
+  /** Key alias — resolved to keys/local/<alias>/.
+   *  Overridden by the MCP_KEY_ALIAS env var at runtime.
+   *  When set, takes precedence over localKeysDir. */
+  localKeyAlias?: string;
+  /** Path to our own key bundle (full-path override; ignored when alias is set) */
   localKeysDir: string;
   /** Path to the remote server's public keys */
   remotePublicKeysDir: string;
@@ -187,23 +191,39 @@ function remoteDefaults(): RemoteServerConfig {
  *   1. proxy.config.json (flat ProxyConfig)
  *   2. config.json → .proxy section (legacy combined format)
  *   3. Built-in defaults
+ *
+ * Key alias resolution (applied after loading):
+ *   1. MCP_KEY_ALIAS env var (highest — set per agent at spawn time)
+ *   2. localKeyAlias in config file
+ *   3. localKeysDir in config file (explicit full path)
+ *   4. Default: keys/local/default
  */
 export function loadProxyConfig(): ProxyConfig {
   const def = proxyDefaults();
 
+  let config: ProxyConfig;
+
   // Try dedicated proxy config file first
   if (fs.existsSync(PROXY_CONFIG_PATH)) {
     const raw = JSON.parse(fs.readFileSync(PROXY_CONFIG_PATH, 'utf-8'));
-    return { ...def, ...raw };
-  }
-
-  // Fall back to combined config.json
-  if (fs.existsSync(CONFIG_PATH)) {
+    config = { ...def, ...raw };
+  } else if (fs.existsSync(CONFIG_PATH)) {
+    // Fall back to combined config.json
     const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-    if (raw.proxy) return { ...def, ...raw.proxy };
+    config = raw.proxy ? { ...def, ...raw.proxy } : def;
+  } else {
+    config = def;
   }
 
-  return def;
+  // Alias resolution: env var > config alias > localKeysDir > default
+  const envAlias = process.env.MCP_KEY_ALIAS?.trim() || undefined;
+  const alias = envAlias ?? config.localKeyAlias;
+
+  if (alias) {
+    config.localKeysDir = path.join(LOCAL_KEYS_DIR, alias);
+  }
+
+  return config;
 }
 
 /**

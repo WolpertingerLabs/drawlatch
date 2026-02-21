@@ -122,7 +122,7 @@ npm run generate-keys -- remote
 
 Each command creates four PEM files (Ed25519 signing + X25519 exchange, public + private) in the appropriate directory under `.mcp-secure-proxy/keys/`. Local keys are stored under `keys/local/<alias>/` — the alias defaults to `"default"` if omitted.
 
-> **Multiple identities:** You can generate multiple local keypairs by using different aliases (e.g., `my-laptop`, `ci-server`). Each alias gets its own subdirectory under `keys/local/`. Use different `proxy.config.json` files (or set `localKeysDir` per environment) to select which identity the proxy uses. The alias directory name should match the caller alias in the remote server's config.
+> **Multiple identities:** Generate multiple local keypairs using different aliases (e.g., `my-laptop`, `ci-server`). Set `MCP_KEY_ALIAS` per agent at spawn time or use `localKeyAlias` in `proxy.config.json` to select which identity the proxy uses. The alias directory name should match the caller alias in the remote server's config.
 
 You can also generate keys to a custom directory:
 
@@ -179,20 +179,27 @@ Edit `.mcp-secure-proxy/proxy.config.json`:
 ```json
 {
   "remoteUrl": "http://127.0.0.1:9999",
-  "localKeysDir": "/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy/keys/local/my-laptop",
+  "localKeyAlias": "my-laptop",
   "remotePublicKeysDir": "/absolute/path/to/mcp-secure-proxy/.mcp-secure-proxy/keys/peers/remote-server",
   "connectTimeout": 10000,
   "requestTimeout": 30000
 }
 ```
 
-| Field                 | Description                                        | Default                                        |
-| --------------------- | -------------------------------------------------- | ---------------------------------------------- |
-| `remoteUrl`           | URL of the remote secure server                    | `http://localhost:9999`                        |
-| `localKeysDir`        | Absolute path to the proxy's own keypair directory | `.mcp-secure-proxy/keys/local/default`         |
-| `remotePublicKeysDir` | Absolute path to the remote server's public keys   | `.mcp-secure-proxy/keys/peers/remote-server`   |
-| `connectTimeout`      | Handshake timeout in milliseconds                  | `10000` (10s)                                  |
-| `requestTimeout`      | Request timeout in milliseconds                    | `30000` (30s)                                  |
+| Field                 | Description                                                                                       | Default                                        |
+| --------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `remoteUrl`           | URL of the remote secure server                                                                   | `http://localhost:9999`                        |
+| `localKeyAlias`       | Key alias — resolved to `keys/local/<alias>/`. Overridden by `MCP_KEY_ALIAS` env var at runtime   | _(none)_                                       |
+| `localKeysDir`        | Absolute path to the proxy's own keypair directory. Ignored when `localKeyAlias` is set            | `.mcp-secure-proxy/keys/local/default`         |
+| `remotePublicKeysDir` | Absolute path to the remote server's public keys                                                  | `.mcp-secure-proxy/keys/peers/remote-server`   |
+| `connectTimeout`      | Handshake timeout in milliseconds                                                                 | `10000` (10s)                                  |
+| `requestTimeout`      | Request timeout in milliseconds                                                                   | `30000` (30s)                                  |
+
+**Alias resolution priority:**
+1. `MCP_KEY_ALIAS` env var (highest — set per agent at spawn time)
+2. `localKeyAlias` in `proxy.config.json`
+3. `localKeysDir` in `proxy.config.json` (explicit full path for custom deployments)
+4. Default: `keys/local/default`
 
 ### Step 4: Create the Remote Server Config
 
@@ -407,6 +414,34 @@ claude mcp add secure-proxy \
 ```
 
 After connecting (either via auto-discovery or manual registration), the proxy will automatically perform the encrypted handshake with the remote server on first use.
+
+### Multiple Agents (Multi-Identity)
+
+When multiple agents share the same machine, each needs its own key identity. Generate a keypair per agent:
+
+```bash
+npm run generate-keys -- local alice
+npm run generate-keys -- local bob
+```
+
+Each agent's MCP server config specifies its alias via the `MCP_KEY_ALIAS` env var:
+
+```json
+{
+  "mcpServers": {
+    "secure-proxy": {
+      "command": "node",
+      "args": ["dist/mcp/server.js"],
+      "env": {
+        "MCP_CONFIG_DIR": "/path/to/.mcp-secure-proxy",
+        "MCP_KEY_ALIAS": "alice"
+      }
+    }
+  }
+}
+```
+
+The proxy auto-resolves `MCP_KEY_ALIAS=alice` to `keys/local/alice/`. On the remote server, register each agent as a separate caller with matching alias directories under `keys/peers/`.
 
 ## MCP Tools
 
