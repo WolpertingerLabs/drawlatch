@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'node:fs';
-import { loadConnection, listAvailableConnections } from './connections.js';
+import { loadConnection, listAvailableConnections, listConnectionTemplates } from './connections.js';
+import type { ConnectionTemplateInfo } from './connections.js';
 
 // Helper: readdirSync returns string[] when called with encoding, but
 // vi.spyOn infers the Dirent[] overload. Cast through unknown to satisfy tsc.
@@ -272,5 +273,211 @@ describe('bundled connection templates', () => {
     expect(available).toContain('slack');
     expect(available).toContain('stripe');
     expect(available).toContain('trello');
+  });
+});
+
+// ── listConnectionTemplates ─────────────────────────────────────────────
+
+describe('listConnectionTemplates (unit)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should return correct structure for a template with ingestor', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['myapi.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'My API',
+        description: 'An API with a webhook ingestor',
+        docsUrl: 'https://docs.myapi.com',
+        headers: { Authorization: 'Bearer ${API_TOKEN}' },
+        secrets: { API_TOKEN: '${API_TOKEN}', WEBHOOK_SECRET: '${WEBHOOK_SECRET}' },
+        allowedEndpoints: ['https://api.myapi.com/**'],
+        ingestor: { type: 'webhook', webhook: { path: 'myapi' } },
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates).toHaveLength(1);
+
+    const t = templates[0];
+    expect(t.alias).toBe('myapi');
+    expect(t.name).toBe('My API');
+    expect(t.description).toBe('An API with a webhook ingestor');
+    expect(t.docsUrl).toBe('https://docs.myapi.com');
+    expect(t.requiredSecrets).toEqual(['API_TOKEN']);
+    expect(t.optionalSecrets).toEqual(['WEBHOOK_SECRET']);
+    expect(t.hasIngestor).toBe(true);
+    expect(t.ingestorType).toBe('webhook');
+    expect(t.allowedEndpoints).toEqual(['https://api.myapi.com/**']);
+  });
+
+  it('should return correct structure for a template without ingestor', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['simple.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'Simple API',
+        headers: { 'x-api-key': '${KEY}' },
+        secrets: { KEY: '${KEY}' },
+        allowedEndpoints: ['https://api.simple.com/**'],
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates).toHaveLength(1);
+
+    const t = templates[0];
+    expect(t.alias).toBe('simple');
+    expect(t.name).toBe('Simple API');
+    expect(t.description).toBeUndefined();
+    expect(t.openApiUrl).toBeUndefined();
+    expect(t.requiredSecrets).toEqual(['KEY']);
+    expect(t.optionalSecrets).toEqual([]);
+    expect(t.hasIngestor).toBe(false);
+    expect(t.ingestorType).toBeUndefined();
+  });
+
+  it('should correctly categorize required vs optional secrets', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['mixed.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'Mixed',
+        headers: {
+          Authorization: 'Bearer ${AUTH_TOKEN}',
+          'X-Custom': '${CUSTOM_HEADER}',
+        },
+        secrets: {
+          AUTH_TOKEN: '${AUTH_TOKEN}',
+          CUSTOM_HEADER: '${CUSTOM_HEADER}',
+          WEBHOOK_KEY: '${WEBHOOK_KEY}',
+          POLL_URL_VAR: '${POLL_URL_VAR}',
+        },
+        allowedEndpoints: ['https://api.mixed.com/**'],
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    const t = templates[0];
+    expect(t.requiredSecrets).toEqual(['AUTH_TOKEN', 'CUSTOM_HEADER']);
+    expect(t.optionalSecrets).toEqual(['WEBHOOK_KEY', 'POLL_URL_VAR']);
+  });
+
+  it('should return empty array when no connections exist', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    const templates = listConnectionTemplates();
+    expect(templates).toEqual([]);
+  });
+
+  it('should fall back to alias when name is missing', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['nameless.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        allowedEndpoints: ['https://api.nameless.com/**'],
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].name).toBe('nameless');
+  });
+});
+
+describe('listConnectionTemplates (integration)', () => {
+  it('should return entries for all bundled templates', () => {
+    const templates = listConnectionTemplates();
+    const available = listAvailableConnections();
+
+    expect(templates).toHaveLength(available.length);
+
+    const aliases = templates.map((t) => t.alias);
+    for (const name of available) {
+      expect(aliases).toContain(name);
+    }
+  });
+
+  it('should have a non-empty name and at least one endpoint for every template', () => {
+    const templates = listConnectionTemplates();
+
+    for (const t of templates) {
+      expect(t.name).toBeTruthy();
+      expect(t.allowedEndpoints.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('should correctly introspect github template', () => {
+    const templates = listConnectionTemplates();
+    const github = templates.find((t) => t.alias === 'github')!;
+
+    expect(github.name).toBe('GitHub API');
+    expect(github.requiredSecrets).toEqual(['GITHUB_TOKEN']);
+    expect(github.optionalSecrets).toEqual(['GITHUB_WEBHOOK_SECRET']);
+    expect(github.hasIngestor).toBe(true);
+    expect(github.ingestorType).toBe('webhook');
+    expect(github.docsUrl).toBeTruthy();
+    expect(github.openApiUrl).toBeTruthy();
+  });
+
+  it('should correctly introspect anthropic template (no ingestor)', () => {
+    const templates = listConnectionTemplates();
+    const anthropic = templates.find((t) => t.alias === 'anthropic')!;
+
+    expect(anthropic.name).toBe('Anthropic API');
+    expect(anthropic.requiredSecrets).toEqual(['ANTHROPIC_API_KEY']);
+    expect(anthropic.optionalSecrets).toEqual([]);
+    expect(anthropic.hasIngestor).toBe(false);
+    expect(anthropic.ingestorType).toBeUndefined();
+  });
+
+  it('should correctly introspect slack template (websocket ingestor)', () => {
+    const templates = listConnectionTemplates();
+    const slack = templates.find((t) => t.alias === 'slack')!;
+
+    expect(slack.name).toBe('Slack API');
+    expect(slack.requiredSecrets).toEqual(['SLACK_BOT_TOKEN']);
+    expect(slack.optionalSecrets).toEqual(['SLACK_APP_TOKEN']);
+    expect(slack.hasIngestor).toBe(true);
+    expect(slack.ingestorType).toBe('websocket');
+  });
+
+  it('should correctly introspect telegram template (poll ingestor, token in URL not headers)', () => {
+    const templates = listConnectionTemplates();
+    const telegram = templates.find((t) => t.alias === 'telegram')!;
+
+    expect(telegram.name).toBe('Telegram Bot API');
+    // Token is in URL path, not headers — so it's optional by header-classification
+    expect(telegram.requiredSecrets).toEqual([]);
+    expect(telegram.optionalSecrets).toEqual(['TELEGRAM_BOT_TOKEN']);
+    expect(telegram.hasIngestor).toBe(true);
+    expect(telegram.ingestorType).toBe('poll');
+  });
+
+  it('should correctly introspect discord-bot template (websocket ingestor)', () => {
+    const templates = listConnectionTemplates();
+    const discord = templates.find((t) => t.alias === 'discord-bot')!;
+
+    expect(discord.name).toBe('Discord Bot API');
+    expect(discord.requiredSecrets).toEqual(['DISCORD_BOT_TOKEN']);
+    expect(discord.optionalSecrets).toEqual([]);
+    expect(discord.hasIngestor).toBe(true);
+    expect(discord.ingestorType).toBe('websocket');
+  });
+
+  it('should correctly introspect trello template (multiple secrets, webhook ingestor)', () => {
+    const templates = listConnectionTemplates();
+    const trello = templates.find((t) => t.alias === 'trello')!;
+
+    expect(trello.name).toBe('Trello API');
+    // Trello has no auth headers — uses query-string auth
+    expect(trello.hasIngestor).toBe(true);
+    expect(trello.ingestorType).toBe('webhook');
+    // All secrets should be accounted for
+    const allSecrets = [...trello.requiredSecrets, ...trello.optionalSecrets].sort();
+    expect(allSecrets).toEqual(
+      Object.keys(loadConnection('trello').secrets ?? {}).sort(),
+    );
   });
 });
