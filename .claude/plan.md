@@ -17,7 +17,7 @@ Each stage ships independently. Later stages do NOT block earlier ones.
 
 ---
 
-## Stage 1: Package Exports + `executeProxyRequest()`
+## Stage 1: Package Exports + `executeProxyRequest()` ✅ COMPLETE
 
 ### Problem
 
@@ -210,6 +210,19 @@ All exports needed by claude-code-ui already exist in the source files. Verify a
 - A test file (or claude-code-ui) can `import { executeProxyRequest } from "mcp-secure-proxy/remote/server"` and call it
 - A test file can `import { HandshakeInitiator, EncryptedChannel } from "mcp-secure-proxy/shared/crypto"` (replacing vendored code)
 - The existing remote server's `http_request` handler behavior is unchanged (it just delegates now)
+
+### Implementation Notes (2026-02-22)
+
+**All criteria met.** Implemented in two files:
+
+1. **`package.json`** — Added 7-entry `exports` map. All dist paths verified to exist post-build.
+2. **`src/remote/server.ts`** — Extracted `executeProxyRequest()` as a new exported function (~100 lines) with `ProxyRequestInput` and `ProxyRequestResult` interfaces. The `http_request` tool handler now delegates with a single line. Required `as unknown as ProxyRequestInput` double-cast because the `ToolHandler` type signature uses `Record<string, unknown>`.
+
+**Verification:**
+- `npm run build` — clean, no errors
+- `npm test` — 438/438 tests pass (15 test files), zero regressions
+- `dist/remote/server.d.ts` exports `executeProxyRequest`, `ProxyRequestInput`, `ProxyRequestResult`
+- All 7 export subpaths resolve to existing `.js` files in `dist/`
 
 ---
 
