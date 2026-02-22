@@ -726,12 +726,15 @@ function main(): void {
   process.on('SIGINT', shutdown);
 }
 
-// Only run when executed directly (not when imported by tests).
-// Check argv (direct node invocation) and pm_id env var (pm2 process manager).
+// Only run when executed directly (not when imported as a library).
+// Check if the entry script is this file (covers both ts-node and compiled js).
+// Also check PM2's pm_exec_path for cluster mode where argv[1] is PM2's internal module.
+const entryScript = process.argv[1] ?? '';
+const pm2ExecPath = process.env.pm_exec_path ?? '';
 const isDirectRun =
-  process.argv[1]?.endsWith('remote/server.ts') ||
-  process.argv[1]?.endsWith('remote/server.js') ||
-  process.env.pm_id !== undefined;
+  entryScript.endsWith('remote/server.ts') ||
+  entryScript.endsWith('remote/server.js') ||
+  pm2ExecPath.endsWith('remote/server.js');
 
 if (isDirectRun) {
   try {

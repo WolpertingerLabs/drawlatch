@@ -5,7 +5,7 @@ module.exports = {
       name: "mcp-secure-proxy",
       script: "dist/remote/server.js",
       cwd: __dirname,
-      instances: 1,
+      exec_mode: "fork",
       autorestart: true,
       watch: false,
       max_memory_restart: "1G",
