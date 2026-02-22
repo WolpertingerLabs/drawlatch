@@ -200,6 +200,132 @@ setInterval(() => {
   cleanupSessions(sessions, pendingHandshakes);
 }, 60_000);
 
+// ── Proxy request execution ────────────────────────────────────────────────
+
+export interface ProxyRequestInput {
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+}
+
+export interface ProxyRequestResult {
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  body: unknown;
+}
+
+/**
+ * Core proxy request execution — route matching, secret injection, and fetch.
+ *
+ * Used by:
+ * - The remote server's `http_request` tool handler (this file)
+ * - claude-code-ui's `LocalProxy` class (in-process, no encryption)
+ *
+ * Pure in the sense that it takes routes as input rather than reading global state.
+ * The only side effect is the outbound fetch().
+ */
+export async function executeProxyRequest(
+  input: ProxyRequestInput,
+  routes: ResolvedRoute[],
+): Promise<ProxyRequestResult> {
+  const { method, url, headers = {}, body } = input;
+
+  // Step 1: Find matching route — try raw URL first
+  let matched: ResolvedRoute | null = matchRoute(url, routes);
+  let resolvedUrl = url;
+
+  if (matched) {
+    // Resolve URL placeholders using matched route's secrets
+    resolvedUrl = resolvePlaceholders(url, matched.secrets);
+  } else {
+    // Try resolving URL with each route's secrets to find a match
+    for (const route of routes) {
+      if (route.allowedEndpoints.length === 0) continue;
+      const candidateUrl = resolvePlaceholders(url, route.secrets);
+      if (isEndpointAllowed(candidateUrl, route.allowedEndpoints)) {
+        matched = route;
+        resolvedUrl = candidateUrl;
+        break;
+      }
+    }
+  }
+
+  if (!matched) {
+    throw new Error(`Endpoint not allowed: ${url}`);
+  }
+
+  // Step 2: Resolve client headers using matched route's secrets
+  const resolvedHeaders: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    resolvedHeaders[k] = resolvePlaceholders(v, matched.secrets);
+  }
+
+  // Step 3: Check for header conflicts — reject if client provides a header
+  // that conflicts with a route-level header (case-insensitive)
+  const routeHeaderKeys = new Set(Object.keys(matched.headers).map((k) => k.toLowerCase()));
+  for (const clientKey of Object.keys(resolvedHeaders)) {
+    if (routeHeaderKeys.has(clientKey.toLowerCase())) {
+      throw new Error(
+        `Header conflict: client-provided header "${clientKey}" conflicts with a route-level header. Remove it from the request.`,
+      );
+    }
+  }
+
+  // Step 4: Merge route-level headers (they take effect after conflict check)
+  for (const [k, v] of Object.entries(matched.headers)) {
+    resolvedHeaders[k] = v;
+  }
+
+  // Step 5: Resolve body placeholders using matched route's secrets.
+  // Only when the route explicitly opts in via resolveSecretsInBody — prevents
+  // exfiltration of secrets by writing placeholder strings into API resources
+  // and reading them back.
+  let resolvedBody: string | undefined;
+  if (typeof body === 'string') {
+    resolvedBody = matched.resolveSecretsInBody
+      ? resolvePlaceholders(body, matched.secrets)
+      : body;
+  } else if (body !== null && body !== undefined) {
+    const serialized = JSON.stringify(body);
+    resolvedBody = matched.resolveSecretsInBody
+      ? resolvePlaceholders(serialized, matched.secrets)
+      : serialized;
+    if (!resolvedHeaders['content-type'] && !resolvedHeaders['Content-Type']) {
+      resolvedHeaders['Content-Type'] = 'application/json';
+    }
+  }
+
+  // Step 6: Final endpoint check on fully resolved URL
+  if (!isEndpointAllowed(resolvedUrl, matched.allowedEndpoints)) {
+    throw new Error(`Endpoint not allowed after resolution: ${url}`);
+  }
+
+  // Step 7: Make the actual HTTP request
+  const resp = await fetch(resolvedUrl, {
+    method,
+    headers: resolvedHeaders,
+    body: resolvedBody,
+  });
+
+  const contentType = resp.headers.get('content-type') ?? '';
+  let responseBody: unknown;
+
+  if (contentType.includes('application/json')) {
+    responseBody = await resp.json();
+  } else {
+    responseBody = await resp.text();
+  }
+
+  return {
+    status: resp.status,
+    statusText: resp.statusText,
+    headers: Object.fromEntries(resp.headers.entries()),
+    body: responseBody,
+  };
+}
+
 // ── Tool handlers ──────────────────────────────────────────────────────────
 
 /** Context passed to every tool handler, providing caller identity and shared services. */
@@ -219,107 +345,10 @@ type ToolHandler = (
 const toolHandlers: Record<string, ToolHandler> = {
   /**
    * Proxied HTTP request with route-scoped secret injection.
+   * Delegates to the extracted executeProxyRequest() function.
    */
   async http_request(input, routes, _context) {
-    const { method, url, headers, body } = input as {
-      method: string;
-      url: string;
-      headers: Record<string, string>;
-      body?: unknown;
-    };
-
-    // Step 1: Find matching route — try raw URL first
-    let matched: ResolvedRoute | null = matchRoute(url, routes);
-    let resolvedUrl = url;
-
-    if (matched) {
-      // Resolve URL placeholders using matched route's secrets
-      resolvedUrl = resolvePlaceholders(url, matched.secrets);
-    } else {
-      // Try resolving URL with each route's secrets to find a match
-      for (const route of routes) {
-        if (route.allowedEndpoints.length === 0) continue;
-        const candidateUrl = resolvePlaceholders(url, route.secrets);
-        if (isEndpointAllowed(candidateUrl, route.allowedEndpoints)) {
-          matched = route;
-          resolvedUrl = candidateUrl;
-          break;
-        }
-      }
-    }
-
-    if (!matched) {
-      throw new Error(`Endpoint not allowed: ${url}`);
-    }
-
-    // Step 2: Resolve client headers using matched route's secrets
-    const resolvedHeaders: Record<string, string> = {};
-    for (const [k, v] of Object.entries(headers)) {
-      resolvedHeaders[k] = resolvePlaceholders(v, matched.secrets);
-    }
-
-    // Step 3: Check for header conflicts — reject if client provides a header
-    // that conflicts with a route-level header (case-insensitive)
-    const routeHeaderKeys = new Set(Object.keys(matched.headers).map((k) => k.toLowerCase()));
-    for (const clientKey of Object.keys(resolvedHeaders)) {
-      if (routeHeaderKeys.has(clientKey.toLowerCase())) {
-        throw new Error(
-          `Header conflict: client-provided header "${clientKey}" conflicts with a route-level header. Remove it from the request.`,
-        );
-      }
-    }
-
-    // Step 4: Merge route-level headers (they take effect after conflict check)
-    for (const [k, v] of Object.entries(matched.headers)) {
-      resolvedHeaders[k] = v;
-    }
-
-    // Step 5: Resolve body placeholders using matched route's secrets.
-    // Only when the route explicitly opts in via resolveSecretsInBody — prevents
-    // exfiltration of secrets by writing placeholder strings into API resources
-    // and reading them back.
-    let resolvedBody: string | undefined;
-    if (typeof body === 'string') {
-      resolvedBody = matched.resolveSecretsInBody
-        ? resolvePlaceholders(body, matched.secrets)
-        : body;
-    } else if (body !== null && body !== undefined) {
-      const serialized = JSON.stringify(body);
-      resolvedBody = matched.resolveSecretsInBody
-        ? resolvePlaceholders(serialized, matched.secrets)
-        : serialized;
-      if (!resolvedHeaders['content-type'] && !resolvedHeaders['Content-Type']) {
-        resolvedHeaders['Content-Type'] = 'application/json';
-      }
-    }
-
-    // Step 6: Final endpoint check on fully resolved URL
-    if (!isEndpointAllowed(resolvedUrl, matched.allowedEndpoints)) {
-      throw new Error(`Endpoint not allowed after resolution: ${url}`);
-    }
-
-    // Step 7: Make the actual HTTP request
-    const resp = await fetch(resolvedUrl, {
-      method,
-      headers: resolvedHeaders,
-      body: resolvedBody,
-    });
-
-    const contentType = resp.headers.get('content-type') ?? '';
-    let responseBody: unknown;
-
-    if (contentType.includes('application/json')) {
-      responseBody = await resp.json();
-    } else {
-      responseBody = await resp.text();
-    }
-
-    return {
-      status: resp.status,
-      statusText: resp.statusText,
-      headers: Object.fromEntries(resp.headers.entries()),
-      body: responseBody,
-    };
+    return executeProxyRequest(input as unknown as ProxyRequestInput, routes);
   },
 
   /**
