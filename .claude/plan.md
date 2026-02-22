@@ -226,7 +226,7 @@ All exports needed by claude-code-ui already exist in the source files. Verify a
 
 ---
 
-## Stage 2: Connection Template Introspection
+## Stage 2: Connection Template Introspection ✅ COMPLETE
 
 ### Problem
 
@@ -281,6 +281,20 @@ export function listConnectionTemplates(): ConnectionTemplateInfo[] {
 - Each template shows correct `requiredSecrets` (parsed from header `${VAR}` placeholders)
 - `hasIngestor` and `ingestorType` accurately reflect the template's ingestor config
 - claude-code-ui can call `import { listConnectionTemplates } from "mcp-secure-proxy/shared/connections"` and render connection cards from the result
+
+### Implementation Notes (2026-02-22)
+
+**All criteria met.** Implemented in two files:
+
+1. **`src/shared/connections.ts`** — Added `ConnectionTemplateInfo` interface, private `extractPlaceholderNames()` helper, and `listConnectionTemplates()` function. Secret categorization: scans header values for `${VAR}` patterns → `requiredSecrets`; remaining secrets map keys → `optionalSecrets`. Optional fields (`description`, `docsUrl`, `openApiUrl`, `ingestorType`) are conditionally spread to avoid `undefined` keys.
+
+2. **`src/shared/connections.test.ts`** — Added 13 new tests: 5 unit tests (mocked fs) covering structure, secret categorization, empty state, and name fallback; 8 integration tests (real templates) spot-checking GitHub (webhook), Anthropic (no ingestor), Slack (websocket), Telegram (poll, token-in-URL edge case), Discord Bot, and Trello (multiple secrets).
+
+**Verification:**
+- `npm run build` — clean, no errors
+- `npm test` — 451/451 tests pass (15 test files), zero regressions
+- Returns metadata for all 21 built-in connection templates
+- `./shared/connections` export already existed from Stage 1 — no `package.json` change needed
 
 ---
 
