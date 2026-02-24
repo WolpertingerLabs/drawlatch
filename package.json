@@ -1,5 +1,5 @@
 {
-  "name": "mcp-secure-proxy",
+  "name": "drawlatch",
   "version": "1.0.0",
   "description": "Encrypted MCP proxy with mutual authentication. Local MCP server forwards requests through an encrypted channel to a remote secrets-holding server.",
   "type": "module",
