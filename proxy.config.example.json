@@ -1,7 +1,7 @@
 {
   "remoteUrl": "http://127.0.0.1:9999",
   "localKeyAlias": "my-laptop",
-  "remotePublicKeysDir": "/absolute/path/to/drawlatch/.drawlatch/keys/peers/remote-server",
+  "remotePublicKeysDir": "~/.drawlatch/keys/peers/remote-server",
   "connectTimeout": 10000,
   "requestTimeout": 300000
 }

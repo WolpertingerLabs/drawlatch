@@ -1,7 +1,7 @@
 {
   "host": "0.0.0.0",
   "port": 9999,
-  "localKeysDir": "/absolute/path/to/.drawlatch/keys/remote",
+  "localKeysDir": "~/.drawlatch/keys/remote",
   "rateLimitPerMinute": 60,
   "connectors": [
     {
@@ -16,17 +16,17 @@
   "callers": {
     "my-laptop": {
       "name": "Personal Laptop",
-      "peerKeyDir": "/absolute/path/to/.drawlatch/keys/peers/my-laptop",
+      "peerKeyDir": "~/.drawlatch/keys/peers/my-laptop",
       "connections": ["github", "stripe", "internal-api"]
     },
     "ci-server": {
       "name": "GitHub Actions CI",
-      "peerKeyDir": "/absolute/path/to/.drawlatch/keys/peers/ci-server",
+      "peerKeyDir": "~/.drawlatch/keys/peers/ci-server",
       "connections": ["github"]
     },
     "alice": {
       "name": "Alice (per-caller env override example)",
-      "peerKeyDir": "/absolute/path/to/.drawlatch/keys/peers/alice",
+      "peerKeyDir": "~/.drawlatch/keys/peers/alice",
       "connections": ["github"],
       "env": {
         "GITHUB_TOKEN": "${ALICE_GITHUB_TOKEN}"
@@ -34,7 +34,7 @@
     },
     "team-member": {
       "name": "Team Member (ingestor override example)",
-      "peerKeyDir": "/absolute/path/to/.drawlatch/keys/peers/team-member",
+      "peerKeyDir": "~/.drawlatch/keys/peers/team-member",
       "connections": ["discord-bot"],
       "ingestorOverrides": {
         "discord-bot": {

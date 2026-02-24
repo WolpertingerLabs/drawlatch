@@ -6,10 +6,10 @@ Instead of manually configuring connectors for popular APIs, you can use **conne
 {
   "host": "0.0.0.0",
   "port": 9999,
-  "localKeysDir": "/absolute/path/to/.drawlatch/keys/remote",
+  "localKeysDir": "~/.drawlatch/keys/remote",
   "callers": {
     "my-laptop": {
-      "peerKeyDir": "/absolute/path/to/.drawlatch/keys/peers/my-laptop",
+      "peerKeyDir": "~/.drawlatch/keys/peers/my-laptop",
       "connections": ["github", "stripe"]
     }
   },

@@ -8,24 +8,25 @@
  * Each loader falls back to a legacy combined config.json (if present)
  * for backward compatibility, then to built-in defaults.
  *
- * Keys directory: .drawlatch/keys/
+ * Keys directory: ~/.drawlatch/keys/
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { loadConnection } from './connections.js';
 import type { IngestorConfig } from '../remote/ingestors/types.js';
 
 /** Resolve the base config directory at call time (not import time).
- *  Defaults to .drawlatch/ in the current working directory (repo-local).
+ *  Defaults to ~/.drawlatch in the user's home directory.
  *  Override with MCP_CONFIG_DIR env var for custom deployments.
  *
  *  These are functions (not constants) so that process.env.MCP_CONFIG_DIR can
  *  be set at runtime before the first call — important for hosts like
  *  callboard that configure the path after ESM imports are resolved. */
 export function getConfigDir(): string {
-  return process.env.MCP_CONFIG_DIR ?? path.join(process.cwd(), '.drawlatch');
+  return process.env.MCP_CONFIG_DIR ?? path.join(os.homedir(), '.drawlatch');
 }
 export function getConfigPath(): string {
   return path.join(getConfigDir(), 'config.json');

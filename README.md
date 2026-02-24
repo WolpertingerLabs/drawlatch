@@ -43,7 +43,7 @@ claude --plugin-dir ./path/to/drawlatch
 Before using, set the `MCP_CONFIG_DIR` environment variable so the proxy can find its config and keys:
 
 ```bash
-export MCP_CONFIG_DIR=/absolute/path/to/drawlatch/.drawlatch
+export MCP_CONFIG_DIR=~/.drawlatch
 ```
 
 The plugin's MCP server starts automatically when enabled. The `secure_request` and `list_routes` tools become available immediately.
@@ -55,7 +55,7 @@ This repo includes a `.mcp.json` file at the root, so Claude Code **automaticall
 Before approving, set the `MCP_CONFIG_DIR` environment variable:
 
 ```bash
-export MCP_CONFIG_DIR=/absolute/path/to/drawlatch/.drawlatch
+export MCP_CONFIG_DIR=~/.drawlatch
 ```
 
 The `.mcp.json` passes this through to the MCP server process. You also need a working setup (keys generated, public keys exchanged, configs in place, remote server running). See [Setup](#setup) below for the full walkthrough.
@@ -75,10 +75,10 @@ npm run build
 
 ### Directory Structure
 
-All config and key files live inside a `.drawlatch/` directory (relative to the project root by default). You can override this by setting the `MCP_CONFIG_DIR` environment variable.
+All config and key files live inside `~/.drawlatch/` in the user's home directory by default. You can override this by setting the `MCP_CONFIG_DIR` environment variable.
 
 ```
-.drawlatch/
+~/.drawlatch/
 ├── proxy.config.json                          # Local proxy config
 ├── remote.config.json                         # Remote server config
 └── keys/
@@ -120,7 +120,7 @@ npm run generate-keys -- local
 npm run generate-keys -- remote
 ```
 
-Each command creates four PEM files (Ed25519 signing + X25519 exchange, public + private) in the appropriate directory under `.drawlatch/keys/`. Local keys are stored under `keys/local/<alias>/` — the alias defaults to `"default"` if omitted.
+Each command creates four PEM files (Ed25519 signing + X25519 exchange, public + private) in the appropriate directory under `~/.drawlatch/keys/`. Local keys are stored under `keys/local/<alias>/` — the alias defaults to `"default"` if omitted.
 
 > **Multiple identities:** Generate multiple local keypairs using different aliases (e.g., `my-laptop`, `ci-server`). Set `MCP_KEY_ALIAS` per agent at spawn time or use `localKeyAlias` in `proxy.config.json` to select which identity the proxy uses. The alias directory name should match the caller alias in the remote server's config.
 
@@ -133,7 +133,7 @@ npm run generate-keys -- --dir /path/to/custom/keys
 Or inspect the fingerprint of an existing keypair:
 
 ```bash
-npm run generate-keys -- show .drawlatch/keys/local/my-laptop
+npm run generate-keys -- show ~/.drawlatch/keys/local/my-laptop
 ```
 
 ### Step 2: Exchange Public Keys
@@ -143,25 +143,25 @@ The local proxy and remote server need each other's public keys for mutual authe
 **From local to remote** — copy the proxy's public keys into a caller directory on the remote server. Since local keys are now stored per-alias, the alias directory name naturally matches the peer directory:
 
 ```bash
-mkdir -p .drawlatch/keys/peers/my-laptop
+mkdir -p ~/.drawlatch/keys/peers/my-laptop
 
-cp .drawlatch/keys/local/my-laptop/signing.pub.pem \
-   .drawlatch/keys/peers/my-laptop/signing.pub.pem
+cp ~/.drawlatch/keys/local/my-laptop/signing.pub.pem \
+   ~/.drawlatch/keys/peers/my-laptop/signing.pub.pem
 
-cp .drawlatch/keys/local/my-laptop/exchange.pub.pem \
-   .drawlatch/keys/peers/my-laptop/exchange.pub.pem
+cp ~/.drawlatch/keys/local/my-laptop/exchange.pub.pem \
+   ~/.drawlatch/keys/peers/my-laptop/exchange.pub.pem
 ```
 
 **From remote to local** — copy the remote server's public keys into the proxy's peer directory:
 
 ```bash
-mkdir -p .drawlatch/keys/peers/remote-server
+mkdir -p ~/.drawlatch/keys/peers/remote-server
 
-cp .drawlatch/keys/remote/signing.pub.pem \
-   .drawlatch/keys/peers/remote-server/signing.pub.pem
+cp ~/.drawlatch/keys/remote/signing.pub.pem \
+   ~/.drawlatch/keys/peers/remote-server/signing.pub.pem
 
-cp .drawlatch/keys/remote/exchange.pub.pem \
-   .drawlatch/keys/peers/remote-server/exchange.pub.pem
+cp ~/.drawlatch/keys/remote/exchange.pub.pem \
+   ~/.drawlatch/keys/peers/remote-server/exchange.pub.pem
 ```
 
 > **Tip:** If the proxy and remote server are on different machines, securely transfer only the `*.pub.pem` files (e.g., via `scp`). Each caller gets its own subdirectory under the peers directory — the directory name becomes the caller's alias used in the remote config and audit logs.
@@ -171,16 +171,16 @@ cp .drawlatch/keys/remote/exchange.pub.pem \
 Copy the example and edit the paths to match your setup:
 
 ```bash
-cp proxy.config.example.json .drawlatch/proxy.config.json
+cp proxy.config.example.json ~/.drawlatch/proxy.config.json
 ```
 
-Edit `.drawlatch/proxy.config.json`:
+Edit `~/.drawlatch/proxy.config.json`:
 
 ```json
 {
   "remoteUrl": "http://127.0.0.1:9999",
   "localKeyAlias": "my-laptop",
-  "remotePublicKeysDir": "/absolute/path/to/drawlatch/.drawlatch/keys/peers/remote-server",
+  "remotePublicKeysDir": "~/.drawlatch/keys/peers/remote-server",
   "connectTimeout": 10000,
   "requestTimeout": 30000
 }
@@ -190,8 +190,8 @@ Edit `.drawlatch/proxy.config.json`:
 | --------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------- |
 | `remoteUrl`           | URL of the remote secure server                                                                 | `http://localhost:9999`               |
 | `localKeyAlias`       | Key alias — resolved to `keys/local/<alias>/`. Overridden by `MCP_KEY_ALIAS` env var at runtime | _(none)_                              |
-| `localKeysDir`        | Absolute path to the proxy's own keypair directory. Ignored when `localKeyAlias` is set         | `.drawlatch/keys/local/default`       |
-| `remotePublicKeysDir` | Absolute path to the remote server's public keys                                                | `.drawlatch/keys/peers/remote-server` |
+| `localKeysDir`        | Absolute path to the proxy's own keypair directory. Ignored when `localKeyAlias` is set         | `~/.drawlatch/keys/local/default`       |
+| `remotePublicKeysDir` | Absolute path to the remote server's public keys                                                | `~/.drawlatch/keys/peers/remote-server` |
 | `connectTimeout`      | Handshake timeout in milliseconds                                                               | `10000` (10s)                         |
 | `requestTimeout`      | Request timeout in milliseconds                                                                 | `30000` (30s)                         |
 
@@ -207,10 +207,10 @@ Edit `.drawlatch/proxy.config.json`:
 Copy the example and edit it to match your setup:
 
 ```bash
-cp remote.config.example.json .drawlatch/remote.config.json
+cp remote.config.example.json ~/.drawlatch/remote.config.json
 ```
 
-Edit `.drawlatch/remote.config.json`. This is where you define your callers, their connections, custom connectors, and secrets.
+Edit `~/.drawlatch/remote.config.json`. This is where you define your callers, their connections, custom connectors, and secrets.
 
 The config is **caller-centric** — each caller is identified by their public key and explicitly declares which connections they can access.
 
@@ -220,11 +220,11 @@ The config is **caller-centric** — each caller is identified by their public k
 {
   "host": "0.0.0.0",
   "port": 9999,
-  "localKeysDir": "/absolute/path/to/.drawlatch/keys/remote",
+  "localKeysDir": "~/.drawlatch/keys/remote",
   "callers": {
     "my-laptop": {
       "name": "Personal Laptop",
-      "peerKeyDir": "/absolute/path/to/.drawlatch/keys/peers/my-laptop",
+      "peerKeyDir": "~/.drawlatch/keys/peers/my-laptop",
       "connections": ["github"]
     }
   },
@@ -240,7 +240,7 @@ Set the `GITHUB_TOKEN` environment variable on the remote server and the built-i
 {
   "host": "0.0.0.0",
   "port": 9999,
-  "localKeysDir": "/absolute/path/to/.drawlatch/keys/remote",
+  "localKeysDir": "~/.drawlatch/keys/remote",
   "connectors": [
     {
       "alias": "internal-api",
@@ -314,7 +314,7 @@ In this example, both Alice and Bob use the same built-in `github` connection, b
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
 | `host`               | Network interface to bind to. Use `0.0.0.0` for all interfaces or `127.0.0.1` for local only                                                 | `127.0.0.1`              |
 | `port`               | Port to listen on                                                                                                                            | `9999`                   |
-| `localKeysDir`       | Absolute path to the remote server's own keypair                                                                                             | `.drawlatch/keys/remote` |
+| `localKeysDir`       | Absolute path to the remote server's own keypair                                                                                             | `~/.drawlatch/keys/remote` |
 | `connectors`         | Array of custom connector definitions, each with an `alias` for referencing from callers (see [Connector Definition](#connector-definition)) | `[]`                     |
 | `callers`            | Per-caller access control. Keys are caller aliases used in audit logs (see [Caller Definition](#caller-definition))                          | `{}`                     |
 | `rateLimitPerMinute` | Max requests per minute per session                                                                                                          | `60`                     |
@@ -397,10 +397,10 @@ npm run start:remote
 
 The repo includes a `.mcp.json` at the root, so Claude Code auto-discovers the proxy when you open the project directory. Just approve the server when prompted — no manual registration needed.
 
-The `.mcp.json` requires the `MCP_CONFIG_DIR` environment variable to be set so the proxy can locate its config and keys. Set it to the absolute path of your `.drawlatch/` directory:
+The `.mcp.json` requires the `MCP_CONFIG_DIR` environment variable to be set so the proxy can locate its config and keys. Set it to the absolute path of your `~/.drawlatch/` directory:
 
 ```bash
-export MCP_CONFIG_DIR=/absolute/path/to/drawlatch/.drawlatch
+export MCP_CONFIG_DIR=~/.drawlatch
 ```
 
 **Alternative: manual registration**
@@ -410,7 +410,7 @@ If you prefer not to use auto-discovery, register the MCP server directly:
 ```bash
 claude mcp add secure-proxy \
   --transport stdio --scope local \
-  -e MCP_CONFIG_DIR=/absolute/path/to/drawlatch/.drawlatch \
+  -e MCP_CONFIG_DIR=~/.drawlatch \
   -- node /absolute/path/to/drawlatch/dist/mcp/server.js
 ```
 
@@ -434,7 +434,7 @@ Each agent's MCP server config specifies its alias via the `MCP_KEY_ALIAS` env v
       "command": "node",
       "args": ["dist/mcp/server.js"],
       "env": {
-        "MCP_CONFIG_DIR": "/path/to/.drawlatch",
+        "MCP_CONFIG_DIR": "~/.drawlatch",
         "MCP_KEY_ALIAS": "alice"
       }
     }

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   resolveSecrets,
@@ -388,7 +389,7 @@ describe('resolveRoutes', () => {
 
 describe('config exports', () => {
   it('should export expected path getter functions', () => {
-    expect(getConfigDir()).toContain('.drawlatch');
+    expect(getConfigDir()).toBe(path.join(os.homedir(), '.drawlatch'));
     expect(getConfigPath()).toContain('config.json');
   });
 
