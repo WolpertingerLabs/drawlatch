@@ -1,15 +1,15 @@
-# Plan: drawlatch — Staged Integration with claude-code-ui
+# Plan: drawlatch — Staged Integration with callboard
 
 ## Stage Dependency Graph
 
 ```
-drawlatch Stage 1  ──→  claude-code-ui Stage 1
+drawlatch Stage 1  ──→  callboard Stage 1
   (exports + executeProxyRequest)    (LocalProxy + proxy tools injection)
 
-drawlatch Stage 2  ──→  claude-code-ui Stage 2
+drawlatch Stage 2  ──→  callboard Stage 2
   (connection template introspection) (connection management UI, local mode)
 
-drawlatch Stage 3  ──→  claude-code-ui Stage 3
+drawlatch Stage 3  ──→  callboard Stage 3
   (admin API + bootstrap)            (remote provisioning + key management)
 ```
 
@@ -21,9 +21,9 @@ Each stage ships independently. Later stages do NOT block earlier ones.
 
 ### Problem
 
-claude-code-ui cannot import from drawlatch as a package — there's no `exports` map in `package.json`, so Node refuses subpath imports like `drawlatch/shared/crypto`. claude-code-ui currently vendors a 410-line copy of the crypto/handshake code in `proxy-client.ts`.
+callboard cannot import from drawlatch as a package — there's no `exports` map in `package.json`, so Node refuses subpath imports like `drawlatch/shared/crypto`. callboard currently vendors a 410-line copy of the crypto/handshake code in `proxy-client.ts`.
 
-Additionally, the core HTTP request logic (route matching → placeholder resolution → header merging → fetch) lives inline in the `http_request` tool handler in `server.ts`. claude-code-ui's `LocalProxy` needs to call this same logic in-process. Without extracting it, the logic would be duplicated and drift over time.
+Additionally, the core HTTP request logic (route matching → placeholder resolution → header merging → fetch) lives inline in the `http_request` tool handler in `server.ts`. callboard's `LocalProxy` needs to call this same logic in-process. Without extracting it, the logic would be duplicated and drift over time.
 
 ### Solution
 
@@ -71,7 +71,7 @@ export interface ProxyRequestResult {
  *
  * Used by:
  * - The remote server's `http_request` tool handler (this file)
- * - claude-code-ui's `LocalProxy` class (in-process, no encryption)
+ * - callboard's `LocalProxy` class (in-process, no encryption)
  *
  * Pure in the sense that it takes routes as input rather than reading global state.
  * The only side effect is the outbound fetch().
@@ -179,7 +179,7 @@ async http_request(input, routes, _context) {
 
 #### 1c. Verify existing exports are sufficient
 
-All exports needed by claude-code-ui already exist in the source files. Verify after adding the `exports` map that these imports resolve:
+All exports needed by callboard already exist in the source files. Verify after adding the `exports` map that these imports resolve:
 
 | Import path                    | Symbols needed                                                                                                                                                                                                  |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -200,7 +200,7 @@ All exports needed by claude-code-ui already exist in the source files. Verify a
 ### Done When
 
 - `npm run build` succeeds
-- A test file (or claude-code-ui) can `import { executeProxyRequest } from "drawlatch/remote/server"` and call it
+- A test file (or callboard) can `import { executeProxyRequest } from "drawlatch/remote/server"` and call it
 - A test file can `import { HandshakeInitiator, EncryptedChannel } from "drawlatch/shared/crypto"` (replacing vendored code)
 - The existing remote server's `http_request` handler behavior is unchanged (it just delegates now)
 
@@ -224,7 +224,7 @@ All exports needed by claude-code-ui already exist in the source files. Verify a
 
 ### Problem
 
-claude-code-ui needs to know what secrets each connection template requires to show form fields in the connections management UI. The current `listAvailableConnections()` only returns alias strings — no metadata about required secrets, ingestor types, or descriptions.
+callboard needs to know what secrets each connection template requires to show form fields in the connections management UI. The current `listAvailableConnections()` only returns alias strings — no metadata about required secrets, ingestor types, or descriptions.
 
 ### Solution
 
@@ -251,7 +251,7 @@ export interface ConnectionTemplateInfo {
  * and categorizes secrets as required vs. optional.
  *
  * Used by:
- * - claude-code-ui's ConnectionManager (local mode, direct import)
+ * - callboard's ConnectionManager (local mode, direct import)
  * - admin_list_connection_templates tool handler (remote mode, Stage 3)
  */
 export function listConnectionTemplates(): ConnectionTemplateInfo[] {
@@ -274,7 +274,7 @@ export function listConnectionTemplates(): ConnectionTemplateInfo[] {
 - `listConnectionTemplates()` returns metadata for all 23+ built-in connection templates
 - Each template shows correct `requiredSecrets` (parsed from header `${VAR}` placeholders)
 - `hasIngestor` and `ingestorType` accurately reflect the template's ingestor config
-- claude-code-ui can call `import { listConnectionTemplates } from "drawlatch/shared/connections"` and render connection cards from the result
+- callboard can call `import { listConnectionTemplates } from "drawlatch/shared/connections"` and render connection cards from the result
 
 ### Implementation Notes (2026-02-22)
 
@@ -297,9 +297,9 @@ export function listConnectionTemplates(): ConnectionTemplateInfo[] {
 
 ### Problem
 
-In remote mode, claude-code-ui can't manage callers, connections, or secrets on the server — it can only make requests through existing registered callers. A management API is needed so the UI can provision new callers, set secrets, and query status through the existing encrypted channel (no new HTTP endpoints).
+In remote mode, callboard can't manage callers, connections, or secrets on the server — it can only make requests through existing registered callers. A management API is needed so the UI can provision new callers, set secrets, and query status through the existing encrypted channel (no new HTTP endpoints).
 
-Additionally, new users need a way to initialize a fresh config directory programmatically (from claude-code-ui's setup wizard).
+Additionally, new users need a way to initialize a fresh config directory programmatically (from callboard's setup wizard).
 
 ### Solution
 
@@ -400,7 +400,7 @@ Per-caller secret naming convention: `{CALLER_ALIAS}_{SECRET_NAME}` (e.g., `AGEN
 
 New file: `src/cli/bootstrap.ts`
 
-Exported for programmatic use by claude-code-ui's setup wizard:
+Exported for programmatic use by callboard's setup wizard:
 
 ```typescript
 export interface BootstrapOptions {
@@ -460,4 +460,4 @@ Add to package.json exports:
 - An admin caller can call `admin_set_secrets` and the secrets are written to `.env` with correct per-caller prefixing
 - A non-admin caller calling any admin tool gets a clear authorization error
 - `bootstrap("/tmp/test-config")` creates a fully initialized config directory
-- claude-code-ui can import `bootstrap` from `drawlatch/bootstrap`
+- callboard can import `bootstrap` from `drawlatch/bootstrap`
