@@ -10,11 +10,11 @@ import {
   loadRemoteConfig,
   saveProxyConfig,
   saveRemoteConfig,
-  CONFIG_DIR,
-  CONFIG_PATH,
-  PROXY_CONFIG_PATH,
-  REMOTE_CONFIG_PATH,
-  LOCAL_KEYS_DIR,
+  getConfigDir,
+  getConfigPath,
+  getProxyConfigPath,
+  getRemoteConfigPath,
+  getLocalKeysDir,
 } from './config.js';
 
 describe('resolvePlaceholders', () => {
@@ -387,14 +387,14 @@ describe('resolveRoutes', () => {
 });
 
 describe('config exports', () => {
-  it('should export expected path constants', () => {
-    expect(CONFIG_DIR).toContain('.mcp-secure-proxy');
-    expect(CONFIG_PATH).toContain('config.json');
+  it('should export expected path getter functions', () => {
+    expect(getConfigDir()).toContain('.drawlatch');
+    expect(getConfigPath()).toContain('config.json');
   });
 
-  it('should export split config path constants', () => {
-    expect(PROXY_CONFIG_PATH).toContain('proxy.config.json');
-    expect(REMOTE_CONFIG_PATH).toContain('remote.config.json');
+  it('should export split config path getter functions', () => {
+    expect(getProxyConfigPath()).toContain('proxy.config.json');
+    expect(getRemoteConfigPath()).toContain('remote.config.json');
   });
 });
 
@@ -413,7 +413,7 @@ describe('loadProxyConfig', () => {
 
   it('should read from proxy.config.json when it exists', () => {
     const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
-      return String(p) === PROXY_CONFIG_PATH;
+      return String(p) === getProxyConfigPath();
     });
     const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
@@ -436,7 +436,7 @@ describe('loadProxyConfig', () => {
   it('should fall back to config.json when proxy.config.json does not exist', () => {
     const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
       // proxy.config.json does not exist, but config.json does
-      return String(p) === CONFIG_PATH;
+      return String(p) === getConfigPath();
     });
     const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
@@ -474,7 +474,7 @@ describe('loadProxyConfig alias resolution', () => {
 
     const config = loadProxyConfig();
 
-    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'alice'));
+    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'alice'));
 
     existsSpy.mockRestore();
   });
@@ -483,14 +483,14 @@ describe('loadProxyConfig alias resolution', () => {
     process.env.MCP_KEY_ALIAS = 'alice';
     const existsSpy = vi
       .spyOn(fs, 'existsSync')
-      .mockImplementation((p) => String(p) === PROXY_CONFIG_PATH);
+      .mockImplementation((p) => String(p) === getProxyConfigPath());
     const readSpy = vi
       .spyOn(fs, 'readFileSync')
       .mockReturnValue(JSON.stringify({ localKeyAlias: 'bob' }));
 
     const config = loadProxyConfig();
 
-    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'alice'));
+    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'alice'));
 
     existsSpy.mockRestore();
     readSpy.mockRestore();
@@ -499,14 +499,14 @@ describe('loadProxyConfig alias resolution', () => {
   it('should resolve localKeyAlias from config when no env var is set', () => {
     const existsSpy = vi
       .spyOn(fs, 'existsSync')
-      .mockImplementation((p) => String(p) === PROXY_CONFIG_PATH);
+      .mockImplementation((p) => String(p) === getProxyConfigPath());
     const readSpy = vi
       .spyOn(fs, 'readFileSync')
       .mockReturnValue(JSON.stringify({ localKeyAlias: 'bob' }));
 
     const config = loadProxyConfig();
 
-    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'bob'));
+    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'bob'));
 
     existsSpy.mockRestore();
     readSpy.mockRestore();
@@ -515,14 +515,14 @@ describe('loadProxyConfig alias resolution', () => {
   it('should let localKeyAlias take precedence over localKeysDir', () => {
     const existsSpy = vi
       .spyOn(fs, 'existsSync')
-      .mockImplementation((p) => String(p) === PROXY_CONFIG_PATH);
+      .mockImplementation((p) => String(p) === getProxyConfigPath());
     const readSpy = vi
       .spyOn(fs, 'readFileSync')
       .mockReturnValue(JSON.stringify({ localKeyAlias: 'bob', localKeysDir: '/explicit/path' }));
 
     const config = loadProxyConfig();
 
-    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'bob'));
+    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'bob'));
 
     existsSpy.mockRestore();
     readSpy.mockRestore();
@@ -531,7 +531,7 @@ describe('loadProxyConfig alias resolution', () => {
   it('should use localKeysDir when no alias is set', () => {
     const existsSpy = vi
       .spyOn(fs, 'existsSync')
-      .mockImplementation((p) => String(p) === PROXY_CONFIG_PATH);
+      .mockImplementation((p) => String(p) === getProxyConfigPath());
     const readSpy = vi
       .spyOn(fs, 'readFileSync')
       .mockReturnValue(JSON.stringify({ localKeysDir: '/explicit/path' }));
@@ -549,7 +549,7 @@ describe('loadProxyConfig alias resolution', () => {
 
     const config = loadProxyConfig();
 
-    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'default'));
+    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'default'));
 
     existsSpy.mockRestore();
   });
@@ -560,7 +560,7 @@ describe('loadProxyConfig alias resolution', () => {
 
     const config = loadProxyConfig();
 
-    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'alice'));
+    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'alice'));
 
     existsSpy.mockRestore();
   });
@@ -569,14 +569,14 @@ describe('loadProxyConfig alias resolution', () => {
     process.env.MCP_KEY_ALIAS = '   ';
     const existsSpy = vi
       .spyOn(fs, 'existsSync')
-      .mockImplementation((p) => String(p) === PROXY_CONFIG_PATH);
+      .mockImplementation((p) => String(p) === getProxyConfigPath());
     const readSpy = vi
       .spyOn(fs, 'readFileSync')
       .mockReturnValue(JSON.stringify({ localKeyAlias: 'bob' }));
 
     const config = loadProxyConfig();
 
-    expect(config.localKeysDir).toBe(path.join(LOCAL_KEYS_DIR, 'bob'));
+    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'bob'));
 
     existsSpy.mockRestore();
     readSpy.mockRestore();
@@ -599,7 +599,7 @@ describe('loadRemoteConfig', () => {
 
   it('should read from remote.config.json when it exists', () => {
     const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
-      return String(p) === REMOTE_CONFIG_PATH;
+      return String(p) === getRemoteConfigPath();
     });
     const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
@@ -637,7 +637,7 @@ describe('loadRemoteConfig', () => {
   it('should fall back to config.json when remote.config.json does not exist', () => {
     const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
       // remote.config.json does not exist, but config.json does
-      return String(p) === CONFIG_PATH;
+      return String(p) === getConfigPath();
     });
     const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
@@ -833,7 +833,7 @@ describe('loadRemoteConfig legacy migration', () => {
       /* noop */
     });
     const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
-      return String(p) === REMOTE_CONFIG_PATH;
+      return String(p) === getRemoteConfigPath();
     });
     const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
@@ -873,8 +873,10 @@ describe('saveProxyConfig', () => {
       requestTimeout: 30_000,
     });
 
-    expect(mkdirSpy).toHaveBeenCalledWith(CONFIG_DIR, { recursive: true, mode: 0o700 });
-    expect(writeSpy).toHaveBeenCalledWith(PROXY_CONFIG_PATH, expect.any(String), { mode: 0o600 });
+    expect(mkdirSpy).toHaveBeenCalledWith(getConfigDir(), { recursive: true, mode: 0o700 });
+    expect(writeSpy).toHaveBeenCalledWith(getProxyConfigPath(), expect.any(String), {
+      mode: 0o600,
+    });
 
     // Verify written content is valid JSON with flat structure (no .proxy wrapper)
     const writtenContent = writeSpy.mock.calls[0][1] as string;
@@ -902,8 +904,10 @@ describe('saveRemoteConfig', () => {
       rateLimitPerMinute: 60,
     });
 
-    expect(mkdirSpy).toHaveBeenCalledWith(CONFIG_DIR, { recursive: true, mode: 0o700 });
-    expect(writeSpy).toHaveBeenCalledWith(REMOTE_CONFIG_PATH, expect.any(String), { mode: 0o600 });
+    expect(mkdirSpy).toHaveBeenCalledWith(getConfigDir(), { recursive: true, mode: 0o700 });
+    expect(writeSpy).toHaveBeenCalledWith(getRemoteConfigPath(), expect.any(String), {
+      mode: 0o600,
+    });
 
     // Verify written content is valid JSON with flat structure (no .remote wrapper)
     const writtenContent = writeSpy.mock.calls[0][1] as string;

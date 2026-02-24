@@ -7,7 +7,7 @@
 
 ## Overview
 
-Ingestors add **real-time data pull** capability to mcp-secure-proxy. Previously the system was purely request/response — Claude could push HTTP requests out to APIs but could not receive asynchronous incoming data. Services like Discord, Slack, and GitHub offer real-time streams (WebSocket gateways, webhooks, event APIs) that can proactively feed data into the system.
+Ingestors add **real-time data pull** capability to drawlatch. Previously the system was purely request/response — Claude could push HTTP requests out to APIs but could not receive asynchronous incoming data. Services like Discord, Slack, and GitHub offer real-time streams (WebSocket gateways, webhooks, event APIs) that can proactively feed data into the system.
 
 Ingestors are **long-lived data collectors** running on the remote server that buffer incoming events in per-caller ring buffers. Claude polls for new events through the existing encrypted MCP channel using `poll_events` and `ingestor_status` tools.
 
@@ -46,14 +46,14 @@ Ingestors are **long-lived data collectors** running on the remote server that b
 
 ### Key Design Decisions
 
-| Decision | Rationale |
-|---|---|
+| Decision                                  | Rationale                                                                                                    |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | Ingestors are per-server, not per-session | Multiple Claude sessions from the same caller share the same ingestor/buffer, avoiding duplicate connections |
-| Ring buffer (not unbounded queue) | Bounded memory usage; oldest events evict naturally. Default 200, max 1000 |
-| Cursor-based polling (`after_id`) | Stateless on the client side; Claude just tracks the last event ID it saw |
-| Config in connection templates | Keeps ingestor config co-located with the connection it belongs to |
-| Native WebSocket (Node 22+) | Zero npm dependency additions |
-| `ToolContext` third parameter | Backward-compatible — existing handlers ignore the extra arg |
+| Ring buffer (not unbounded queue)         | Bounded memory usage; oldest events evict naturally. Default 200, max 1000                                   |
+| Cursor-based polling (`after_id`)         | Stateless on the client side; Claude just tracks the last event ID it saw                                    |
+| Config in connection templates            | Keeps ingestor config co-located with the connection it belongs to                                           |
+| Native WebSocket (Node 22+)               | Zero npm dependency additions                                                                                |
+| `ToolContext` third parameter             | Backward-compatible — existing handlers ignore the extra arg                                                 |
 
 ---
 
@@ -61,26 +61,26 @@ Ingestors are **long-lived data collectors** running on the remote server that b
 
 ### New Files
 
-| File | Purpose |
-|---|---|
-| `src/remote/ingestors/types.ts` | All shared types: `IngestorConfig`, `IngestedEvent`, `IngestorStatus`, `IngestorState`, config interfaces for websocket/webhook/poll, constants |
-| `src/remote/ingestors/ring-buffer.ts` | Generic bounded circular buffer with `push()`, `toArray()`, `since(afterId)`, `size`, `clear()` |
-| `src/remote/ingestors/base-ingestor.ts` | Abstract base class extending `EventEmitter`. Owns ring buffer, tracks state/counters, provides `pushEvent()`, `getEvents()`, `getStatus()` |
-| `src/remote/ingestors/manager.ts` | `IngestorManager` — lifecycle management keyed by `callerAlias:connectionAlias`. Provides `startAll()`, `stopAll()`, `getEvents()`, `getAllEvents()`, `getStatuses()` |
-| `src/remote/ingestors/discord-gateway.ts` | Full Discord Gateway v10 WebSocket implementation with heartbeat, resume, reconnect, event filtering |
-| `src/remote/ingestors/index.ts` | Barrel exports |
-| `src/remote/ingestors/ring-buffer.test.ts` | 11 unit tests covering ordering, eviction, wrapping, cursors, edge cases |
-| `src/remote/ingestors/manager.test.ts` | 4 unit tests covering empty states and lifecycle |
+| File                                       | Purpose                                                                                                                                                               |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/remote/ingestors/types.ts`            | All shared types: `IngestorConfig`, `IngestedEvent`, `IngestorStatus`, `IngestorState`, config interfaces for websocket/webhook/poll, constants                       |
+| `src/remote/ingestors/ring-buffer.ts`      | Generic bounded circular buffer with `push()`, `toArray()`, `since(afterId)`, `size`, `clear()`                                                                       |
+| `src/remote/ingestors/base-ingestor.ts`    | Abstract base class extending `EventEmitter`. Owns ring buffer, tracks state/counters, provides `pushEvent()`, `getEvents()`, `getStatus()`                           |
+| `src/remote/ingestors/manager.ts`          | `IngestorManager` — lifecycle management keyed by `callerAlias:connectionAlias`. Provides `startAll()`, `stopAll()`, `getEvents()`, `getAllEvents()`, `getStatuses()` |
+| `src/remote/ingestors/discord-gateway.ts`  | Full Discord Gateway v10 WebSocket implementation with heartbeat, resume, reconnect, event filtering                                                                  |
+| `src/remote/ingestors/index.ts`            | Barrel exports                                                                                                                                                        |
+| `src/remote/ingestors/ring-buffer.test.ts` | 11 unit tests covering ordering, eviction, wrapping, cursors, edge cases                                                                                              |
+| `src/remote/ingestors/manager.test.ts`     | 4 unit tests covering empty states and lifecycle                                                                                                                      |
 
 ### Modified Files
 
-| File | Changes |
-|---|---|
-| `src/remote/server.ts` | Added `ToolContext` interface, updated `ToolHandler` type signature, added `poll_events` and `ingestor_status` handlers, integrated `IngestorManager` into `createApp()`, lifecycle hooks in `main()`/`shutdown()`, DI support via `CreateAppOptions` |
-| `src/mcp/server.ts` | Registered `poll_events` and `ingestor_status` MCP tools that delegate through the encrypted channel |
-| `src/shared/config.ts` | Added `ingestor?: IngestorConfig` field to `Route` interface |
-| `src/connections/discord-bot.json` | Added ingestor config block with Discord Gateway WebSocket settings |
-| `src/remote/server.e2e.test.ts` | Added 4 e2e tests for `poll_events` and `ingestor_status` tools |
+| File                               | Changes                                                                                                                                                                                                                                               |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/remote/server.ts`             | Added `ToolContext` interface, updated `ToolHandler` type signature, added `poll_events` and `ingestor_status` handlers, integrated `IngestorManager` into `createApp()`, lifecycle hooks in `main()`/`shutdown()`, DI support via `CreateAppOptions` |
+| `src/mcp/server.ts`                | Registered `poll_events` and `ingestor_status` MCP tools that delegate through the encrypted channel                                                                                                                                                  |
+| `src/shared/config.ts`             | Added `ingestor?: IngestorConfig` field to `Route` interface                                                                                                                                                                                          |
+| `src/connections/discord-bot.json` | Added ingestor config block with Discord Gateway WebSocket settings                                                                                                                                                                                   |
+| `src/remote/server.e2e.test.ts`    | Added 4 e2e tests for `poll_events` and `ingestor_status` tools                                                                                                                                                                                       |
 
 ---
 
@@ -123,6 +123,7 @@ Singleton per remote server. Keyed by `callerAlias:connectionAlias`.
 Full implementation of the [Discord Gateway v10](https://discord.com/developers/docs/events/gateway) protocol:
 
 **Lifecycle:**
+
 1. `connect(url)` — Opens native WebSocket to `wss://gateway.discord.gg/?v=10&encoding=json`
 2. Server sends `HELLO` with heartbeat interval
 3. Client starts heartbeat with jitter, sends `IDENTIFY` (or `RESUME` if reconnecting)
@@ -130,6 +131,7 @@ Full implementation of the [Discord Gateway v10](https://discord.com/developers/
 5. Dispatch events flow in continuously
 
 **Features:**
+
 - **Heartbeat**: Initial jitter delay, then fixed interval. Tracks ACKs; zombie detection triggers reconnect
 - **Resume**: Stores `session_id`, `sequence`, and `resume_gateway_url` from `READY`. On reconnect, sends `RESUME` instead of `IDENTIFY` to replay missed events
 - **Reconnect**: Exponential backoff (1s → 30s max), up to 10 attempts
@@ -140,6 +142,7 @@ Full implementation of the [Discord Gateway v10](https://discord.com/developers/
 - **Intents**: Configurable via config, default `4609` = `GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES`. The `discord-bot.json` template uses `3276799` (all intents including privileged)
 
 **Exported:**
+
 - `DiscordGatewayIngestor` class
 - `DiscordIntents` const (all intent flags for easy composition)
 - `ALL_INTENTS` const (all intents OR'd together, including privileged: `3276799`)
@@ -148,22 +151,27 @@ Full implementation of the [Discord Gateway v10](https://discord.com/developers/
 ### MCP Tool Registrations
 
 **`poll_events`** (in `src/mcp/server.ts`):
+
 ```
 Parameters:
   connection? (string) — filter by connection alias, omit for all
   after_id? (number)   — cursor; returns events with id > after_id
 ```
+
 Delegates through `sendEncryptedRequest('poll_events', ...)` to the remote server's `poll_events` handler.
 
 **`ingestor_status`** (in `src/mcp/server.ts`):
+
 ```
 Parameters: none
 ```
+
 Returns status of all ingestors for the calling user. Includes connection state, buffer sizes, event counts, errors.
 
 ### Connection Template (`discord-bot.json`)
 
 Added `ingestor` block:
+
 ```json
 {
   "ingestor": {
@@ -184,6 +192,7 @@ The intents value `3276799` includes all Discord Gateway intents, including the 
 ## Test Coverage
 
 ### Ring Buffer (`ring-buffer.test.ts`) — 11 tests
+
 - Push and retrieve in correct order
 - Evicts oldest items when over capacity
 - Wraps correctly with interleaved push/read
@@ -197,18 +206,21 @@ The intents value `3276799` includes all Discord Gateway intents, including the 
 - `since()` handles non-numeric IDs gracefully
 
 ### Manager (`manager.test.ts`) — 4 tests
+
 - Returns empty events for caller with no ingestors
 - Returns empty for unknown caller
 - Handles connections without ingestor config
 - Start/stop lifecycle
 
 ### E2E (`server.e2e.test.ts`) — 4 tests
+
 - `poll_events` returns empty array when no ingestors configured
 - `poll_events` with connection filter returns empty array
 - `poll_events` with `after_id` cursor returns empty array
 - `ingestor_status` returns empty array when no ingestors configured
 
 ### Build Verification
+
 - `npm run build` — TypeScript compiles cleanly
 - `npm test` — 139 tests pass (2 pre-existing suite failures unrelated to ingestors)
 - `npm run lint` — No lint errors
@@ -225,30 +237,32 @@ Added support for receiving HTTP webhooks. GitHub is the first webhook provider,
 
 **New Files:**
 
-| File | Purpose |
-|---|---|
-| `src/remote/ingestors/webhook/github-types.ts` | GitHub-specific types, HMAC-SHA256 signature verification (`verifyGitHubSignature`), header extraction (`extractGitHubHeaders`) |
-| `src/remote/ingestors/webhook/github-webhook-ingestor.ts` | `GitHubWebhookIngestor` class extending `WebhookIngestor`. Passive lifecycle (`start()` → immediately `'connected'`). Implements `verifySignature()`, `extractEventType()`, `extractEventData()`. Self-registers as `'webhook:generic'` factory. |
-| `src/remote/ingestors/webhook/index.ts` | Barrel exports |
-| `src/remote/ingestors/webhook/github-webhook-ingestor.test.ts` | 25 unit tests covering signature verification, header extraction, lifecycle, event buffering, factory registration |
+| File                                                           | Purpose                                                                                                                                                                                                                                          |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/remote/ingestors/webhook/github-types.ts`                 | GitHub-specific types, HMAC-SHA256 signature verification (`verifyGitHubSignature`), header extraction (`extractGitHubHeaders`)                                                                                                                  |
+| `src/remote/ingestors/webhook/github-webhook-ingestor.ts`      | `GitHubWebhookIngestor` class extending `WebhookIngestor`. Passive lifecycle (`start()` → immediately `'connected'`). Implements `verifySignature()`, `extractEventType()`, `extractEventData()`. Self-registers as `'webhook:generic'` factory. |
+| `src/remote/ingestors/webhook/index.ts`                        | Barrel exports                                                                                                                                                                                                                                   |
+| `src/remote/ingestors/webhook/github-webhook-ingestor.test.ts` | 25 unit tests covering signature verification, header extraction, lifecycle, event buffering, factory registration                                                                                                                               |
 
 **Modified Files:**
 
-| File | Changes |
-|---|---|
-| `src/remote/server.ts` | Added `express.raw()` body parser for `/webhooks` path. Added `POST /webhooks/:path` route with fan-out dispatch to matching ingestors. Returns 200 if any ingestor accepts, 403 if all reject, 404 if no ingestors match. |
-| `src/remote/ingestors/manager.ts` | Added `import './webhook/github-webhook-ingestor.js'` for self-registration. Added `getWebhookIngestors(path)` method to find matching webhook ingestors across all callers. |
-| `src/remote/ingestors/index.ts` | Added webhook barrel exports |
-| `src/connections/github.json` | Added `GITHUB_WEBHOOK_SECRET` to secrets. Added `ingestor` block with `type: "webhook"` and GitHub signature verification config. |
-| `src/remote/server.e2e.test.ts` | Added 6 e2e tests: valid webhook → poll_events, invalid signature → 403, missing signature → 403, unregistered path → 404, ingestor_status reporting, cursor-based polling |
+| File                              | Changes                                                                                                                                                                                                                    |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/remote/server.ts`            | Added `express.raw()` body parser for `/webhooks` path. Added `POST /webhooks/:path` route with fan-out dispatch to matching ingestors. Returns 200 if any ingestor accepts, 403 if all reject, 404 if no ingestors match. |
+| `src/remote/ingestors/manager.ts` | Added `import './webhook/github-webhook-ingestor.js'` for self-registration. Added `getWebhookIngestors(path)` method to find matching webhook ingestors across all callers.                                               |
+| `src/remote/ingestors/index.ts`   | Added webhook barrel exports                                                                                                                                                                                               |
+| `src/connections/github.json`     | Added `GITHUB_WEBHOOK_SECRET` to secrets. Added `ingestor` block with `type: "webhook"` and GitHub signature verification config.                                                                                          |
+| `src/remote/server.e2e.test.ts`   | Added 6 e2e tests: valid webhook → poll_events, invalid signature → 403, missing signature → 403, unregistered path → 404, ingestor_status reporting, cursor-based polling                                                 |
 
 **Signature Verification:**
+
 - Optional: if `signatureHeader` and `signatureSecret` are both configured, incoming webhooks are verified; if either is absent, verification is skipped entirely
 - GitHub uses `X-Hub-Signature-256` header with `sha256=<hex-encoded HMAC-SHA256>`
 - Timing-safe comparison via `crypto.timingSafeEqual` to prevent timing attacks
 - If the secret name is configured but the resolved value is missing, the webhook is rejected (config error)
 
 **Config example (GitHub):**
+
 ```json
 {
   "ingestor": {
@@ -263,6 +277,7 @@ Added support for receiving HTTP webhooks. GitHub is the first webhook provider,
 ```
 
 **Setup requirements:**
+
 - Set `GITHUB_WEBHOOK_SECRET` env var on the remote server (matching the secret configured in GitHub's webhook settings)
 - The remote server needs to be publicly accessible for webhooks (or behind a tunnel like ngrok/Cloudflare Tunnel)
 - Point the GitHub webhook URL to `https://<server>/webhooks/github`
@@ -274,6 +289,7 @@ Added support for receiving HTTP webhooks. GitHub is the first webhook provider,
 Refactored the webhook ingestor into a generic `WebhookIngestor` base class with pluggable signature verification and event extraction. GitHub and Stripe are now thin subclasses. This sets the pattern for future webhook providers (Linear, Trello, etc.).
 
 **Architecture:** The `WebhookIngestor` abstract base class extends `BaseIngestor` and provides the common webhook handling pipeline (`handleWebhook()` → verify → parse → extract → filter → buffer). Subclasses override three abstract methods:
+
 - `verifySignature(headers, rawBody)` — service-specific signature verification
 - `extractEventType(headers, body)` — how to determine the event type
 - `extractEventData(headers, body)` — what data shape to store in the ring buffer
@@ -282,26 +298,27 @@ The factory registry now uses `webhook:<protocol>` keys (mirroring `websocket:<p
 
 **New Files:**
 
-| File | Purpose |
-|---|---|
-| `src/remote/ingestors/webhook/base-webhook-ingestor.ts` | `WebhookIngestor` abstract base class. Owns `webhookPath`, `eventFilter`, passive `start()`/`stop()`, and concrete `handleWebhook()` pipeline. Defines abstract `verifySignature()`, `extractEventType()`, `extractEventData()`. |
-| `src/remote/ingestors/webhook/stripe-types.ts` | Stripe-specific types, signature verification (`verifyStripeSignature`), header parsing (`parseStripeSignatureHeader`), `STRIPE_SIGNATURE_HEADER` constant, `DEFAULT_TIMESTAMP_TOLERANCE` (300s) |
-| `src/remote/ingestors/webhook/stripe-webhook-ingestor.ts` | `StripeWebhookIngestor` class extending `WebhookIngestor`. Implements Stripe `Stripe-Signature` verification with timestamp tolerance and replay protection. Extracts event type from JSON body `type` field. Self-registers as `'webhook:stripe'` factory. |
-| `src/remote/ingestors/webhook/stripe-webhook-ingestor.test.ts` | 39 unit tests covering signature parsing, verification (valid, invalid, expired, malformed), lifecycle, event extraction, factory registration |
+| File                                                           | Purpose                                                                                                                                                                                                                                                     |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/remote/ingestors/webhook/base-webhook-ingestor.ts`        | `WebhookIngestor` abstract base class. Owns `webhookPath`, `eventFilter`, passive `start()`/`stop()`, and concrete `handleWebhook()` pipeline. Defines abstract `verifySignature()`, `extractEventType()`, `extractEventData()`.                            |
+| `src/remote/ingestors/webhook/stripe-types.ts`                 | Stripe-specific types, signature verification (`verifyStripeSignature`), header parsing (`parseStripeSignatureHeader`), `STRIPE_SIGNATURE_HEADER` constant, `DEFAULT_TIMESTAMP_TOLERANCE` (300s)                                                            |
+| `src/remote/ingestors/webhook/stripe-webhook-ingestor.ts`      | `StripeWebhookIngestor` class extending `WebhookIngestor`. Implements Stripe `Stripe-Signature` verification with timestamp tolerance and replay protection. Extracts event type from JSON body `type` field. Self-registers as `'webhook:stripe'` factory. |
+| `src/remote/ingestors/webhook/stripe-webhook-ingestor.test.ts` | 39 unit tests covering signature parsing, verification (valid, invalid, expired, malformed), lifecycle, event extraction, factory registration                                                                                                              |
 
 **Modified Files:**
 
-| File | Changes |
-|---|---|
+| File                                                      | Changes                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/remote/ingestors/webhook/github-webhook-ingestor.ts` | Refactored `GitHubWebhookIngestor` to extend `WebhookIngestor` instead of `BaseIngestor`. Renamed from `webhook-ingestor.ts` for symmetry with `stripe-webhook-ingestor.ts`. Signature verification, event type extraction, and data shaping now implemented as overrides. Factory key changed from `'webhook'` to `'webhook:generic'`. |
-| `src/remote/ingestors/types.ts` | Added optional `protocol?: string` field to `WebhookIngestorConfig` |
-| `src/remote/ingestors/registry.ts` | Updated `createIngestor()` key logic to use `webhook:<protocol>` keys (matching the `websocket:<protocol>` convention) |
-| `src/remote/ingestors/manager.ts` | `getWebhookIngestors()` now checks `instanceof WebhookIngestor` (base class) instead of `GitHubWebhookIngestor`. Added Stripe factory self-registration import. |
-| `src/remote/ingestors/webhook/index.ts` | Added `WebhookIngestor`, `StripeWebhookIngestor`, and Stripe utility exports |
-| `src/remote/ingestors/index.ts` | Added `WebhookIngestor`, `StripeWebhookIngestor`, and Stripe-related exports |
-| `src/connections/stripe.json` | Added `STRIPE_WEBHOOK_SECRET` to secrets. Added `ingestor` block with `type: "webhook"`, `protocol: "stripe"`, and Stripe signature verification config. |
+| `src/remote/ingestors/types.ts`                           | Added optional `protocol?: string` field to `WebhookIngestorConfig`                                                                                                                                                                                                                                                                     |
+| `src/remote/ingestors/registry.ts`                        | Updated `createIngestor()` key logic to use `webhook:<protocol>` keys (matching the `websocket:<protocol>` convention)                                                                                                                                                                                                                  |
+| `src/remote/ingestors/manager.ts`                         | `getWebhookIngestors()` now checks `instanceof WebhookIngestor` (base class) instead of `GitHubWebhookIngestor`. Added Stripe factory self-registration import.                                                                                                                                                                         |
+| `src/remote/ingestors/webhook/index.ts`                   | Added `WebhookIngestor`, `StripeWebhookIngestor`, and Stripe utility exports                                                                                                                                                                                                                                                            |
+| `src/remote/ingestors/index.ts`                           | Added `WebhookIngestor`, `StripeWebhookIngestor`, and Stripe-related exports                                                                                                                                                                                                                                                            |
+| `src/connections/stripe.json`                             | Added `STRIPE_WEBHOOK_SECRET` to secrets. Added `ingestor` block with `type: "webhook"`, `protocol: "stripe"`, and Stripe signature verification config.                                                                                                                                                                                |
 
 **Stripe Signature Verification:**
+
 - Stripe uses the `Stripe-Signature` header with format: `t=<unix_timestamp>,v1=<hex_sig>,v1=<hex_sig>,...`
 - HMAC-SHA256 is computed over `${timestamp}.${rawBody}` (not the raw body alone)
 - Timing-safe comparison against each `v1` signature (accept if ANY match)
@@ -309,6 +326,7 @@ The factory registry now uses `webhook:<protocol>` keys (mirroring `websocket:<p
 - If the secret name is configured but the resolved value is missing, the webhook is rejected (config error)
 
 **Config example (Stripe):**
+
 ```json
 {
   "ingestor": {
@@ -324,12 +342,14 @@ The factory registry now uses `webhook:<protocol>` keys (mirroring `websocket:<p
 ```
 
 **Setup requirements:**
+
 - Set `STRIPE_WEBHOOK_SECRET` env var on the remote server (the `whsec_...` signing secret from the Stripe Dashboard → Developers → Webhooks)
 - Set `STRIPE_SECRET_KEY` env var for API access
 - The remote server needs to be publicly accessible for webhooks (or behind a tunnel like ngrok/Cloudflare Tunnel)
 - Point the Stripe webhook URL to `https://<server>/webhooks/stripe`
 
 **Factory Key Convention (Updated):**
+
 ```
 websocket:<protocol>  → websocket:discord, websocket:slack
 webhook:<protocol>    → webhook:generic (GitHub, no protocol), webhook:stripe
@@ -341,6 +361,7 @@ poll                  → poll (no protocol sub-key needed)
 Added support for interval-based HTTP polling for APIs that lack real-time push mechanisms (WebSocket or webhooks). Notion and Linear are the first poll providers.
 
 **Architecture:** Unlike WebSocket ingestors (which maintain persistent outbound connections) or webhook ingestors (which passively receive POSTs), poll ingestors are active HTTP requesters on a timer. Each poll cycle:
+
 1. Makes an HTTP request (GET or POST) using the connection's resolved headers
 2. Parses the JSON response and extracts an array of items via `responsePath`
 3. Deduplicates items by a configurable field (`deduplicateBy`)
@@ -350,24 +371,25 @@ The PollIngestor is a single concrete class (not an abstract base with subclasse
 
 **New Files:**
 
-| File | Purpose |
-|---|---|
-| `src/remote/ingestors/poll/poll-ingestor.ts` | `PollIngestor` class. Interval management, HTTP fetch, response parsing via `responsePath`, deduplication via seen-ID Set with pruning, error tolerance with consecutive error tracking. Self-registers as `'poll'` factory. |
-| `src/remote/ingestors/poll/poll-ingestor.test.ts` | ~25 unit tests covering lifecycle, polling, response parsing, deduplication, error handling, factory registration |
-| `src/remote/ingestors/poll/index.ts` | Barrel exports |
+| File                                              | Purpose                                                                                                                                                                                                                      |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/remote/ingestors/poll/poll-ingestor.ts`      | `PollIngestor` class. Interval management, HTTP fetch, response parsing via `responsePath`, deduplication via seen-ID Set with pruning, error tolerance with consecutive error tracking. Self-registers as `'poll'` factory. |
+| `src/remote/ingestors/poll/poll-ingestor.test.ts` | ~25 unit tests covering lifecycle, polling, response parsing, deduplication, error handling, factory registration                                                                                                            |
+| `src/remote/ingestors/poll/index.ts`              | Barrel exports                                                                                                                                                                                                               |
 
 **Modified Files:**
 
-| File | Changes |
-|---|---|
-| `src/remote/ingestors/types.ts` | Added `responsePath`, `eventType`, and `headers` fields to `PollIngestorConfig` |
+| File                              | Changes                                                                                                                                                                      |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/remote/ingestors/types.ts`   | Added `responsePath`, `eventType`, and `headers` fields to `PollIngestorConfig`                                                                                              |
 | `src/remote/ingestors/manager.ts` | Added poll factory self-registration import. `startAll()` injects resolved route headers for poll ingestors. `mergeIngestorConfig()` handles `intervalMs` override for poll. |
-| `src/remote/ingestors/index.ts` | Added `PollIngestor` export |
-| `src/shared/config.ts` | Added `intervalMs` field to `IngestorOverrides` |
-| `src/connections/notion.json` | Added poll ingestor config: POST to `/v1/search`, 60s interval, `responsePath: "results"`, dedup by `id` |
-| `src/connections/linear.json` | Added poll ingestor config: POST GraphQL, 60s interval, `responsePath: "data.issues.nodes"`, dedup by `id` |
+| `src/remote/ingestors/index.ts`   | Added `PollIngestor` export                                                                                                                                                  |
+| `src/shared/config.ts`            | Added `intervalMs` field to `IngestorOverrides`                                                                                                                              |
+| `src/connections/notion.json`     | Added poll ingestor config: POST to `/v1/search`, 60s interval, `responsePath: "results"`, dedup by `id`                                                                     |
+| `src/connections/linear.json`     | Added poll ingestor config: POST GraphQL, 60s interval, `responsePath: "data.issues.nodes"`, dedup by `id`                                                                   |
 
 **Config example (Notion):**
+
 ```json
 {
   "ingestor": {
@@ -386,6 +408,7 @@ The PollIngestor is a single concrete class (not an abstract base with subclasse
 ```
 
 **Config example (Linear):**
+
 ```json
 {
   "ingestor": {
@@ -394,7 +417,9 @@ The PollIngestor is a single concrete class (not an abstract base with subclasse
       "url": "https://api.linear.app/graphql",
       "intervalMs": 60000,
       "method": "POST",
-      "body": { "query": "{ issues(orderBy: updatedAt, first: 50) { nodes { id identifier title state { name } priority updatedAt createdAt assignee { name } } } }" },
+      "body": {
+        "query": "{ issues(orderBy: updatedAt, first: 50) { nodes { id identifier title state { name } priority updatedAt createdAt assignee { name } } } }"
+      },
       "responsePath": "data.issues.nodes",
       "deduplicateBy": "id",
       "eventType": "issue_updated"
@@ -404,6 +429,7 @@ The PollIngestor is a single concrete class (not an abstract base with subclasse
 ```
 
 **Caller overrides (poll-specific):**
+
 ```json
 {
   "ingestorOverrides": {
@@ -416,12 +442,14 @@ The PollIngestor is a single concrete class (not an abstract base with subclasse
 ```
 
 **Deduplication:**
+
 - Items are tracked by the value of their `deduplicateBy` field (stringified)
 - A Set of seen IDs prevents duplicate pushes across poll cycles
 - Maximum 10,000 tracked IDs; pruned by removing the oldest half when exceeded
 - Items without the deduplication field are always pushed (fail-open)
 
 **Error handling:**
+
 - Transient HTTP errors set state to `'reconnecting'` (timer continues)
 - After 10 consecutive errors, state transitions to `'error'` and the timer stops
 - A single successful poll resets the error counter and returns to `'connected'`
@@ -430,6 +458,7 @@ The PollIngestor is a single concrete class (not an abstract base with subclasse
 **Factory key:** `poll` (no protocol sub-key needed)
 
 **Setup requirements:**
+
 - Set the relevant API key environment variable (e.g., `NOTION_API_KEY`, `LINEAR_API_KEY`)
 - No external setup needed (unlike webhooks, which require public URLs and webhook registration)
 
@@ -438,6 +467,7 @@ The PollIngestor is a single concrete class (not an abstract base with subclasse
 Second WebSocket protocol implementation for Slack real-time events.
 
 **Implementation:**
+
 - Add `protocol: 'slack'` to `WebSocketIngestorConfig`
 - Create `src/remote/ingestors/slack-socket.ts`
 - Slack Socket Mode uses a different handshake: POST to `apps.connections.open` to get a WSS URL, then connect
@@ -450,17 +480,18 @@ Callers can customize ingestor behavior without modifying connection templates v
 
 **Supported override fields (all optional):**
 
-| Field | Type | Description |
-|---|---|---|
-| `intents` | `number` | Override the Discord Gateway intents bitmask |
+| Field         | Type       | Description                                             |
+| ------------- | ---------- | ------------------------------------------------------- |
+| `intents`     | `number`   | Override the Discord Gateway intents bitmask            |
 | `eventFilter` | `string[]` | Override event type filter (e.g., `["MESSAGE_CREATE"]`) |
-| `guildIds` | `string[]` | Only buffer events from these guild IDs |
-| `channelIds` | `string[]` | Only buffer events from these channel IDs |
-| `userIds` | `string[]` | Only buffer events from these user IDs |
-| `bufferSize` | `number` | Override ring buffer capacity |
-| `disabled` | `boolean` | Disable the ingestor for this connection entirely |
+| `guildIds`    | `string[]` | Only buffer events from these guild IDs                 |
+| `channelIds`  | `string[]` | Only buffer events from these channel IDs               |
+| `userIds`     | `string[]` | Only buffer events from these user IDs                  |
+| `bufferSize`  | `number`   | Override ring buffer capacity                           |
+| `disabled`    | `boolean`  | Disable the ingestor for this connection entirely       |
 
 **Config example (`remote.config.json`):**
+
 ```json
 {
   "callers": {
@@ -480,6 +511,7 @@ Callers can customize ingestor behavior without modifying connection templates v
 ```
 
 **How it works:**
+
 - `IngestorManager.startAll()` merges overrides with the connection template config via `mergeIngestorConfig()`
 - Override fields replace template values; omitted fields inherit template defaults
 - `disabled: true` skips ingestor creation entirely
@@ -491,6 +523,7 @@ Callers can customize ingestor behavior without modifying connection templates v
 When multiple callers use the same bot token (same `DISCORD_BOT_TOKEN`), they currently each get their own Gateway connection. Discord rate-limits `IDENTIFY` (max 1 per 5 seconds per token), so this doesn't scale.
 
 **Implementation:**
+
 - Detect when multiple callers resolve to the same token for the same connection template
 - Share a single Gateway connection, fan out events to per-caller ring buffers
 - Reference counting for start/stop lifecycle
@@ -501,6 +534,7 @@ When multiple callers use the same bot token (same `DISCORD_BOT_TOKEN`), they cu
 Large Discord events (e.g., `GUILD_CREATE` with thousands of members) can consume significant memory in the ring buffer.
 
 **Implementation:**
+
 - Configurable field stripping: remove unnecessary nested objects before buffering
 - Payload size limits with truncation
 - Optional compression for large payloads
@@ -511,6 +545,7 @@ Large Discord events (e.g., `GUILD_CREATE` with thousands of members) can consum
 Currently, if Claude's session restarts, it loses its `after_id` cursor and may re-process events still in the buffer.
 
 **Implementation:**
+
 - Store last-seen cursor per caller in a lightweight persistence layer (file or SQLite)
 - New tool parameter: `resume: true` to automatically start from the last acknowledged cursor
 - Acknowledgment: `ack_events` tool to explicitly mark events as processed
@@ -563,16 +598,16 @@ Currently, if Claude's session restarts, it loses its `after_id` cursor and may 
 
 ### Poll Ingestor Configuration
 
-| Field | Type | Default | Required | Description |
-|---|---|---|---|---|
-| `url` | `string` | — | Yes | URL to poll. May contain `${VAR}` placeholders. |
-| `intervalMs` | `number` | — | Yes | Poll interval in milliseconds (minimum 5000). |
-| `method` | `string` | `GET` | No | HTTP method. |
-| `body` | `unknown` | — | No | Request body (for POST/PUT/PATCH). `${VAR}` placeholders resolved. |
-| `responsePath` | `string` | — | No | Dot-separated path to extract items array from response. Omit for top-level arrays. |
-| `deduplicateBy` | `string` | — | No | Field name to use for deduplication. Omit to push all items every cycle. |
-| `eventType` | `string` | `poll` | No | Event type string assigned to all items. |
-| `headers` | `Record<string, string>` | — | No | Additional headers merged with connection route headers. |
+| Field           | Type                     | Default | Required | Description                                                                         |
+| --------------- | ------------------------ | ------- | -------- | ----------------------------------------------------------------------------------- |
+| `url`           | `string`                 | —       | Yes      | URL to poll. May contain `${VAR}` placeholders.                                     |
+| `intervalMs`    | `number`                 | —       | Yes      | Poll interval in milliseconds (minimum 5000).                                       |
+| `method`        | `string`                 | `GET`   | No       | HTTP method.                                                                        |
+| `body`          | `unknown`                | —       | No       | Request body (for POST/PUT/PATCH). `${VAR}` placeholders resolved.                  |
+| `responsePath`  | `string`                 | —       | No       | Dot-separated path to extract items array from response. Omit for top-level arrays. |
+| `deduplicateBy` | `string`                 | —       | No       | Field name to use for deduplication. Omit to push all items every cycle.            |
+| `eventType`     | `string`                 | `poll`  | No       | Event type string assigned to all items.                                            |
+| `headers`       | `Record<string, string>` | —       | No       | Additional headers merged with connection route headers.                            |
 
 ### Caller-Level Ingestor Overrides
 
@@ -600,18 +635,19 @@ Callers can override any of the template's ingestor settings without modifying t
 }
 ```
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `intents` | `number` | Template value | Override Discord Gateway intents bitmask |
-| `eventFilter` | `string[]` | Template value | Override event type filter; empty = all |
-| `guildIds` | `string[]` | `[]` (all) | Only buffer events from these guild IDs |
-| `channelIds` | `string[]` | `[]` (all) | Only buffer events from these channel IDs |
-| `userIds` | `string[]` | `[]` (all) | Only buffer events from these user IDs |
-| `bufferSize` | `number` | `200` | Override ring buffer capacity (max 1000) |
-| `disabled` | `boolean` | `false` | Disable the ingestor entirely |
-| `intervalMs` | `number` | Template value | Override poll interval in milliseconds (poll ingestors only) |
+| Field         | Type       | Default        | Description                                                  |
+| ------------- | ---------- | -------------- | ------------------------------------------------------------ |
+| `intents`     | `number`   | Template value | Override Discord Gateway intents bitmask                     |
+| `eventFilter` | `string[]` | Template value | Override event type filter; empty = all                      |
+| `guildIds`    | `string[]` | `[]` (all)     | Only buffer events from these guild IDs                      |
+| `channelIds`  | `string[]` | `[]` (all)     | Only buffer events from these channel IDs                    |
+| `userIds`     | `string[]` | `[]` (all)     | Only buffer events from these user IDs                       |
+| `bufferSize`  | `number`   | `200`          | Override ring buffer capacity (max 1000)                     |
+| `disabled`    | `boolean`  | `false`        | Disable the ingestor entirely                                |
+| `intervalMs`  | `number`   | Template value | Override poll interval in milliseconds (poll ingestors only) |
 
 **Filtering behavior:**
+
 - Payload filters (`guildIds`, `channelIds`, `userIds`) inspect the event's `d` payload
 - Events **without** the filtered field pass through (e.g., `READY` has no `guild_id` — always kept)
 - Filters are AND logic: if both `guildIds` and `channelIds` are set, events must match both
@@ -619,27 +655,27 @@ Callers can override any of the template's ingestor settings without modifying t
 
 ### Discord Intent Values
 
-| Intent | Value | Privileged |
-|---|---|---|
-| `GUILDS` | `1` | No |
-| `GUILD_MEMBERS` | `2` | **Yes** |
-| `GUILD_MODERATION` | `4` | No |
-| `GUILD_EXPRESSIONS` | `8` | No |
-| `GUILD_INTEGRATIONS` | `16` | No |
-| `GUILD_WEBHOOKS` | `32` | No |
-| `GUILD_INVITES` | `64` | No |
-| `GUILD_VOICE_STATES` | `128` | No |
-| `GUILD_PRESENCES` | `256` | **Yes** |
-| `GUILD_MESSAGES` | `512` | No |
-| `GUILD_MESSAGE_REACTIONS` | `1024` | No |
-| `GUILD_MESSAGE_TYPING` | `2048` | No |
-| `DIRECT_MESSAGES` | `4096` | No |
-| `DIRECT_MESSAGE_REACTIONS` | `8192` | No |
-| `DIRECT_MESSAGE_TYPING` | `16384` | No |
-| `MESSAGE_CONTENT` | `32768` | **Yes** |
-| `GUILD_SCHEDULED_EVENTS` | `65536` | No |
-| `AUTO_MODERATION_CONFIGURATION` | `1048576` | No |
-| `AUTO_MODERATION_EXECUTION` | `2097152` | No |
+| Intent                          | Value     | Privileged |
+| ------------------------------- | --------- | ---------- |
+| `GUILDS`                        | `1`       | No         |
+| `GUILD_MEMBERS`                 | `2`       | **Yes**    |
+| `GUILD_MODERATION`              | `4`       | No         |
+| `GUILD_EXPRESSIONS`             | `8`       | No         |
+| `GUILD_INTEGRATIONS`            | `16`      | No         |
+| `GUILD_WEBHOOKS`                | `32`      | No         |
+| `GUILD_INVITES`                 | `64`      | No         |
+| `GUILD_VOICE_STATES`            | `128`     | No         |
+| `GUILD_PRESENCES`               | `256`     | **Yes**    |
+| `GUILD_MESSAGES`                | `512`     | No         |
+| `GUILD_MESSAGE_REACTIONS`       | `1024`    | No         |
+| `GUILD_MESSAGE_TYPING`          | `2048`    | No         |
+| `DIRECT_MESSAGES`               | `4096`    | No         |
+| `DIRECT_MESSAGE_REACTIONS`      | `8192`    | No         |
+| `DIRECT_MESSAGE_TYPING`         | `16384`   | No         |
+| `MESSAGE_CONTENT`               | `32768`   | **Yes**    |
+| `GUILD_SCHEDULED_EVENTS`        | `65536`   | No         |
+| `AUTO_MODERATION_CONFIGURATION` | `1048576` | No         |
+| `AUTO_MODERATION_EXECUTION`     | `2097152` | No         |
 
 **Code default (when omitted):** `4609` = `GUILDS (1) + GUILD_MESSAGES (512) + DIRECT_MESSAGES (4096)`
 
@@ -648,6 +684,7 @@ Callers can override any of the template's ingestor settings without modifying t
 **All non-privileged:** `3243775` = all intents except `GUILD_MEMBERS`, `GUILD_PRESENCES`, `MESSAGE_CONTENT`
 
 To use all intents, enable the three privileged intents in the Discord Developer Portal:
+
 - Server Members Intent (`GUILD_MEMBERS`)
 - Presence Intent (`GUILD_PRESENCES`)
 - Message Content Intent (`MESSAGE_CONTENT`)
@@ -656,17 +693,17 @@ To use all intents, enable the three privileged intents in the Discord Developer
 
 For `eventFilter` in Discord WebSocket config:
 
-| Filter | Description |
-|---|---|
-| `MESSAGE_CREATE` | New messages in channels the bot can see |
-| `MESSAGE_UPDATE` | Message edits |
-| `MESSAGE_DELETE` | Message deletions |
-| `MESSAGE_REACTION_ADD` | Reactions added to messages |
-| `MESSAGE_REACTION_REMOVE` | Reactions removed |
-| `GUILD_MEMBER_ADD` | New member joins (requires GUILD_MEMBERS intent) |
-| `GUILD_MEMBER_REMOVE` | Member leaves/kicked |
-| `PRESENCE_UPDATE` | User status changes (requires GUILD_PRESENCES intent) |
-| `TYPING_START` | User starts typing |
-| `INTERACTION_CREATE` | Slash commands, buttons, modals |
+| Filter                    | Description                                           |
+| ------------------------- | ----------------------------------------------------- |
+| `MESSAGE_CREATE`          | New messages in channels the bot can see              |
+| `MESSAGE_UPDATE`          | Message edits                                         |
+| `MESSAGE_DELETE`          | Message deletions                                     |
+| `MESSAGE_REACTION_ADD`    | Reactions added to messages                           |
+| `MESSAGE_REACTION_REMOVE` | Reactions removed                                     |
+| `GUILD_MEMBER_ADD`        | New member joins (requires GUILD_MEMBERS intent)      |
+| `GUILD_MEMBER_REMOVE`     | Member leaves/kicked                                  |
+| `PRESENCE_UPDATE`         | User status changes (requires GUILD_PRESENCES intent) |
+| `TYPING_START`            | User starts typing                                    |
+| `INTERACTION_CREATE`      | Slash commands, buttons, modals                       |
 
 Empty `eventFilter` (or omitted) captures all dispatch events.

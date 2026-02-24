@@ -182,8 +182,8 @@ export class DiscordGatewayIngestor extends BaseIngestor {
         intents: this.intents,
         properties: {
           os: 'linux',
-          browser: 'mcp-secure-proxy',
-          device: 'mcp-secure-proxy',
+          browser: 'drawlatch',
+          device: 'drawlatch',
         },
       },
     });

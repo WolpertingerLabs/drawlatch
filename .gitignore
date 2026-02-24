@@ -5,6 +5,7 @@ dist/
 
 # Never commit keys or config with secrets
 .mcp-secure-proxy/
+.drawlatch/
 *.key.pem
 
 # Environment files with secrets

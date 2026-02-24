@@ -19,13 +19,13 @@ import {
   fingerprint,
   extractPublicKeys,
 } from '../shared/crypto/index.js';
-import { LOCAL_KEYS_DIR, REMOTE_KEYS_DIR, CONFIG_DIR } from '../shared/config.js';
+import { getLocalKeysDir, getRemoteKeysDir, getConfigDir } from '../shared/config.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
 function usage(): void {
   console.log(`
-mcp-secure-proxy key generation
+Drawlatch key generation
 
 Usage:
   generate-keys local [alias]   Generate MCP proxy (local) keypair
@@ -88,22 +88,23 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
 }
 
 // Ensure base config directory exists
-fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+fs.mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
 
 if (args[0] === 'local') {
   const alias = args[1] && !args[1].startsWith('-') ? args[1] : 'default';
-  const targetDir = path.join(LOCAL_KEYS_DIR, alias);
+  const localKeysDir = getLocalKeysDir();
+  const targetDir = path.join(localKeysDir, alias);
 
-  // Check for legacy flat key layout (PEM files directly in LOCAL_KEYS_DIR)
-  const legacyKeyPath = path.join(LOCAL_KEYS_DIR, 'signing.key.pem');
+  // Check for legacy flat key layout (PEM files directly in keys/local/)
+  const legacyKeyPath = path.join(localKeysDir, 'signing.key.pem');
   if (fs.existsSync(legacyKeyPath)) {
     console.error(
-      `\n⚠️  Legacy key layout detected: PEM files found directly in ${LOCAL_KEYS_DIR}\n` +
+      `\n⚠️  Legacy key layout detected: PEM files found directly in ${localKeysDir}\n` +
         `   Local keys are now stored per-alias: keys/local/<alias>/\n` +
         `   To migrate, move your existing keys:\n\n` +
         `     mkdir -p ${targetDir}\n` +
-        `     mv ${LOCAL_KEYS_DIR}/signing.* ${targetDir}/\n` +
-        `     mv ${LOCAL_KEYS_DIR}/exchange.* ${targetDir}/\n\n` +
+        `     mv ${localKeysDir}/signing.* ${targetDir}/\n` +
+        `     mv ${localKeysDir}/exchange.* ${targetDir}/\n\n` +
         `   Then update localKeysDir in your proxy.config.json to point to:\n` +
         `     ${targetDir}\n`,
     );
@@ -112,7 +113,7 @@ if (args[0] === 'local') {
 
   generateAndSave(targetDir, `MCP proxy (local) — alias "${alias}"`);
 } else if (args[0] === 'remote') {
-  generateAndSave(REMOTE_KEYS_DIR, 'remote server');
+  generateAndSave(getRemoteKeysDir(), 'remote server');
 } else if (args[0] === '--dir' && args[1]) {
   generateAndSave(args[1], 'custom');
 } else if (args[0] === 'show' && args[1]) {

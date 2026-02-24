@@ -1,15 +1,15 @@
-# Plan: mcp-secure-proxy — Staged Integration with claude-code-ui
+# Plan: drawlatch — Staged Integration with claude-code-ui
 
 ## Stage Dependency Graph
 
 ```
-mcp-secure-proxy Stage 1  ──→  claude-code-ui Stage 1
+drawlatch Stage 1  ──→  claude-code-ui Stage 1
   (exports + executeProxyRequest)    (LocalProxy + proxy tools injection)
 
-mcp-secure-proxy Stage 2  ──→  claude-code-ui Stage 2
+drawlatch Stage 2  ──→  claude-code-ui Stage 2
   (connection template introspection) (connection management UI, local mode)
 
-mcp-secure-proxy Stage 3  ──→  claude-code-ui Stage 3
+drawlatch Stage 3  ──→  claude-code-ui Stage 3
   (admin API + bootstrap)            (remote provisioning + key management)
 ```
 
@@ -21,7 +21,7 @@ Each stage ships independently. Later stages do NOT block earlier ones.
 
 ### Problem
 
-claude-code-ui cannot import from mcp-secure-proxy as a package — there's no `exports` map in `package.json`, so Node refuses subpath imports like `mcp-secure-proxy/shared/crypto`. claude-code-ui currently vendors a 410-line copy of the crypto/handshake code in `proxy-client.ts`.
+claude-code-ui cannot import from drawlatch as a package — there's no `exports` map in `package.json`, so Node refuses subpath imports like `drawlatch/shared/crypto`. claude-code-ui currently vendors a 410-line copy of the crypto/handshake code in `proxy-client.ts`.
 
 Additionally, the core HTTP request logic (route matching → placeholder resolution → header merging → fetch) lives inline in the `http_request` tool handler in `server.ts`. claude-code-ui's `LocalProxy` needs to call this same logic in-process. Without extracting it, the logic would be duplicated and drift over time.
 
@@ -112,9 +112,7 @@ export async function executeProxyRequest(
   }
 
   // Step 3: Reject conflicting headers
-  const routeHeaderKeys = new Set(
-    Object.keys(matched.headers).map((k) => k.toLowerCase()),
-  );
+  const routeHeaderKeys = new Set(Object.keys(matched.headers).map((k) => k.toLowerCase()));
   for (const clientKey of Object.keys(resolvedHeaders)) {
     if (routeHeaderKeys.has(clientKey.toLowerCase())) {
       throw new Error(
@@ -130,20 +128,15 @@ export async function executeProxyRequest(
 
   // Step 5: Resolve body placeholders
   let resolvedBody: string | undefined;
-  if (typeof body === "string") {
-    resolvedBody = matched.resolveSecretsInBody
-      ? resolvePlaceholders(body, matched.secrets)
-      : body;
+  if (typeof body === 'string') {
+    resolvedBody = matched.resolveSecretsInBody ? resolvePlaceholders(body, matched.secrets) : body;
   } else if (body !== null && body !== undefined) {
     const serialized = JSON.stringify(body);
     resolvedBody = matched.resolveSecretsInBody
       ? resolvePlaceholders(serialized, matched.secrets)
       : serialized;
-    if (
-      !resolvedHeaders["content-type"] &&
-      !resolvedHeaders["Content-Type"]
-    ) {
-      resolvedHeaders["Content-Type"] = "application/json";
+    if (!resolvedHeaders['content-type'] && !resolvedHeaders['Content-Type']) {
+      resolvedHeaders['Content-Type'] = 'application/json';
     }
   }
 
@@ -159,9 +152,9 @@ export async function executeProxyRequest(
     body: resolvedBody,
   });
 
-  const contentType = resp.headers.get("content-type") ?? "";
+  const contentType = resp.headers.get('content-type') ?? '';
   let responseBody: unknown;
-  if (contentType.includes("application/json")) {
+  if (contentType.includes('application/json')) {
     responseBody = await resp.json();
   } else {
     responseBody = await resp.text();
@@ -188,27 +181,27 @@ async http_request(input, routes, _context) {
 
 All exports needed by claude-code-ui already exist in the source files. Verify after adding the `exports` map that these imports resolve:
 
-| Import path | Symbols needed |
-|---|---|
-| `mcp-secure-proxy/shared/crypto` | `generateKeyBundle`, `saveKeyBundle`, `loadKeyBundle`, `loadPublicKeys`, `extractPublicKeys`, `fingerprint`, `EncryptedChannel`, `deriveSessionKeys` + types |
-| `mcp-secure-proxy/shared/protocol` | `HandshakeInitiator`, `HandshakeResponder` + types |
-| `mcp-secure-proxy/shared/config` | `loadRemoteConfig`, `saveRemoteConfig`, `resolveCallerRoutes`, `resolveRoutes`, `resolveSecrets`, `resolvePlaceholders`, `CONFIG_DIR`, `KEYS_DIR`, `LOCAL_KEYS_DIR`, `REMOTE_KEYS_DIR`, `PEER_KEYS_DIR` + types |
-| `mcp-secure-proxy/shared/connections` | `loadConnection`, `listAvailableConnections` |
-| `mcp-secure-proxy/remote/server` | `executeProxyRequest`, `matchRoute`, `isEndpointAllowed` + types |
-| `mcp-secure-proxy/remote/ingestors` | `IngestorManager` + types |
+| Import path                    | Symbols needed                                                                                                                                                                                                  |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `drawlatch/shared/crypto`      | `generateKeyBundle`, `saveKeyBundle`, `loadKeyBundle`, `loadPublicKeys`, `extractPublicKeys`, `fingerprint`, `EncryptedChannel`, `deriveSessionKeys` + types                                                    |
+| `drawlatch/shared/protocol`    | `HandshakeInitiator`, `HandshakeResponder` + types                                                                                                                                                              |
+| `drawlatch/shared/config`      | `loadRemoteConfig`, `saveRemoteConfig`, `resolveCallerRoutes`, `resolveRoutes`, `resolveSecrets`, `resolvePlaceholders`, `CONFIG_DIR`, `KEYS_DIR`, `LOCAL_KEYS_DIR`, `REMOTE_KEYS_DIR`, `PEER_KEYS_DIR` + types |
+| `drawlatch/shared/connections` | `loadConnection`, `listAvailableConnections`                                                                                                                                                                    |
+| `drawlatch/remote/server`      | `executeProxyRequest`, `matchRoute`, `isEndpointAllowed` + types                                                                                                                                                |
+| `drawlatch/remote/ingestors`   | `IngestorManager` + types                                                                                                                                                                                       |
 
 ### Files to Change
 
-| File | Change |
-|---|---|
-| `package.json` | Add `exports` map |
+| File                   | Change                                                                                         |
+| ---------------------- | ---------------------------------------------------------------------------------------------- |
+| `package.json`         | Add `exports` map                                                                              |
 | `src/remote/server.ts` | Extract `executeProxyRequest()` function, export it, update `http_request` handler to delegate |
 
 ### Done When
 
 - `npm run build` succeeds
-- A test file (or claude-code-ui) can `import { executeProxyRequest } from "mcp-secure-proxy/remote/server"` and call it
-- A test file can `import { HandshakeInitiator, EncryptedChannel } from "mcp-secure-proxy/shared/crypto"` (replacing vendored code)
+- A test file (or claude-code-ui) can `import { executeProxyRequest } from "drawlatch/remote/server"` and call it
+- A test file can `import { HandshakeInitiator, EncryptedChannel } from "drawlatch/shared/crypto"` (replacing vendored code)
 - The existing remote server's `http_request` handler behavior is unchanged (it just delegates now)
 
 ### Implementation Notes (2026-02-22)
@@ -219,6 +212,7 @@ All exports needed by claude-code-ui already exist in the source files. Verify a
 2. **`src/remote/server.ts`** — Extracted `executeProxyRequest()` as a new exported function (~100 lines) with `ProxyRequestInput` and `ProxyRequestResult` interfaces. The `http_request` tool handler now delegates with a single line. Required `as unknown as ProxyRequestInput` double-cast because the `ToolHandler` type signature uses `Record<string, unknown>`.
 
 **Verification:**
+
 - `npm run build` — clean, no errors
 - `npm test` — 438/438 tests pass (15 test files), zero regressions
 - `dist/remote/server.d.ts` exports `executeProxyRequest`, `ProxyRequestInput`, `ProxyRequestResult`
@@ -243,10 +237,10 @@ export interface ConnectionTemplateInfo {
   description?: string;
   docsUrl?: string;
   openApiUrl?: string;
-  requiredSecrets: string[];     // Secrets referenced in headers (always required)
-  optionalSecrets: string[];     // Secrets referenced elsewhere (body templates, etc.)
+  requiredSecrets: string[]; // Secrets referenced in headers (always required)
+  optionalSecrets: string[]; // Secrets referenced elsewhere (body templates, etc.)
   hasIngestor: boolean;
-  ingestorType?: "websocket" | "webhook" | "poll";
+  ingestorType?: 'websocket' | 'webhook' | 'poll';
   allowedEndpoints: string[];
 }
 
@@ -271,8 +265,8 @@ export function listConnectionTemplates(): ConnectionTemplateInfo[] {
 
 ### Files to Change
 
-| File | Change |
-|---|---|
+| File                        | Change                                                                        |
+| --------------------------- | ----------------------------------------------------------------------------- |
 | `src/shared/connections.ts` | Add `ConnectionTemplateInfo` interface + `listConnectionTemplates()` function |
 
 ### Done When
@@ -280,7 +274,7 @@ export function listConnectionTemplates(): ConnectionTemplateInfo[] {
 - `listConnectionTemplates()` returns metadata for all 23+ built-in connection templates
 - Each template shows correct `requiredSecrets` (parsed from header `${VAR}` placeholders)
 - `hasIngestor` and `ingestorType` accurately reflect the template's ingestor config
-- claude-code-ui can call `import { listConnectionTemplates } from "mcp-secure-proxy/shared/connections"` and render connection cards from the result
+- claude-code-ui can call `import { listConnectionTemplates } from "drawlatch/shared/connections"` and render connection cards from the result
 
 ### Implementation Notes (2026-02-22)
 
@@ -291,6 +285,7 @@ export function listConnectionTemplates(): ConnectionTemplateInfo[] {
 2. **`src/shared/connections.test.ts`** — Added 13 new tests: 5 unit tests (mocked fs) covering structure, secret categorization, empty state, and name fallback; 8 integration tests (real templates) spot-checking GitHub (webhook), Anthropic (no ingestor), Slack (websocket), Telegram (poll, token-in-URL edge case), Discord Bot, and Trello (multiple secrets).
 
 **Verification:**
+
 - `npm run build` — clean, no errors
 - `npm test` — 451/451 tests pass (15 test files), zero regressions
 - Returns metadata for all 21 built-in connection templates
@@ -322,7 +317,7 @@ export interface CallerConfig {
   ingestorOverrides?: Record<string, IngestorOverrides>;
 
   /** "admin" grants access to management tools. Default: "user". */
-  role?: "admin" | "user";
+  role?: 'admin' | 'user';
 }
 ```
 
@@ -333,12 +328,14 @@ New file: `src/remote/admin-handlers.ts`
 Start with three tools. Add more only when a real use case demands them.
 
 **`admin_list_callers`** — List all registered callers and their connections.
+
 ```typescript
 // Returns: [{ alias, name, connections, role, fingerprint }]
 // No secret values are ever returned.
 ```
 
 **`admin_set_secrets`** — Set or update secrets for a caller's connection.
+
 ```typescript
 // Input: { callerAlias, connectionAlias, secrets: { KEY: "value" } }
 // Writes to .env with per-caller prefix (CALLER_ALIAS_SECRET_NAME=value)
@@ -347,6 +344,7 @@ Start with three tools. Add more only when a real use case demands them.
 ```
 
 **`admin_register_caller`** — Register a new caller by providing their public keys.
+
 ```typescript
 // Input: { callerAlias, name?, signingPubPem, exchangePubPem, connections }
 // Writes public keys to keys/peers/{callerAlias}/
@@ -360,7 +358,7 @@ Each handler is gated by `assertAdmin(context)`:
 function assertAdmin(context: ToolContext): void {
   const config = loadRemoteConfig();
   const caller = config.callers[context.callerAlias];
-  if (!caller || caller.role !== "admin") {
+  if (!caller || caller.role !== 'admin') {
     throw new Error(`Caller "${context.callerAlias}" is not authorized for admin operations`);
   }
 }
@@ -374,7 +372,7 @@ New file: `src/remote/config-manager.ts`
 export class ConfigManager {
   constructor(configDir: string);
   load(): RemoteServerConfig;
-  save(config: RemoteServerConfig): void;  // atomic: write-to-tmp + rename
+  save(config: RemoteServerConfig): void; // atomic: write-to-tmp + rename
   addCaller(alias: string, caller: CallerConfig): RemoteServerConfig;
   removeCaller(alias: string): RemoteServerConfig;
   updateCallerConnections(alias: string, connections: string[]): RemoteServerConfig;
@@ -390,7 +388,7 @@ New file: `src/remote/env-manager.ts`
 export class EnvManager {
   constructor(configDir: string);
   readAll(): Record<string, string>;
-  set(vars: Record<string, string>): void;       // merge + write 0600 + update process.env
+  set(vars: Record<string, string>): void; // merge + write 0600 + update process.env
   remove(keys: string[]): void;
   status(keys: string[]): Record<string, boolean>; // presence check, never returns values
 }
@@ -425,6 +423,7 @@ export async function bootstrap(
 Creates: directory structure, default keypair, `remote.config.json` (with default admin caller), empty `.env`.
 
 Add to package.json exports:
+
 ```json
 {
   "./bootstrap": "./dist/cli/bootstrap.js",
@@ -435,16 +434,16 @@ Add to package.json exports:
 
 ### Files to Change
 
-| File | Change |
-|---|---|
-| `src/shared/config.ts` | Add `role` to `CallerConfig` interface |
+| File                           | Change                                               |
+| ------------------------------ | ---------------------------------------------------- |
+| `src/shared/config.ts`         | Add `role` to `CallerConfig` interface               |
 | `src/remote/admin-handlers.ts` | **New.** Three admin tool handlers + `assertAdmin()` |
-| `src/remote/config-manager.ts` | **New.** Atomic config read/modify/write |
-| `src/remote/env-manager.ts` | **New.** .env file management |
-| `src/cli/bootstrap.ts` | **New.** First-run initialization |
-| `src/remote/server.ts` | Register admin tool handlers in `toolHandlers` map |
-| `src/mcp/server.ts` | Register admin tools in MCP tool list |
-| `package.json` | Add new export paths |
+| `src/remote/config-manager.ts` | **New.** Atomic config read/modify/write             |
+| `src/remote/env-manager.ts`    | **New.** .env file management                        |
+| `src/cli/bootstrap.ts`         | **New.** First-run initialization                    |
+| `src/remote/server.ts`         | Register admin tool handlers in `toolHandlers` map   |
+| `src/mcp/server.ts`            | Register admin tools in MCP tool list                |
+| `package.json`                 | Add new export paths                                 |
 
 ### Security Considerations
 
@@ -461,4 +460,4 @@ Add to package.json exports:
 - An admin caller can call `admin_set_secrets` and the secrets are written to `.env` with correct per-caller prefixing
 - A non-admin caller calling any admin tool gets a clear authorization error
 - `bootstrap("/tmp/test-config")` creates a fully initialized config directory
-- claude-code-ui can import `bootstrap` from `mcp-secure-proxy/bootstrap`
+- claude-code-ui can import `bootstrap` from `drawlatch/bootstrap`

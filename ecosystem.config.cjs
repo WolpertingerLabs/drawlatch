@@ -2,15 +2,15 @@
 module.exports = {
   apps: [
     {
-      name: "mcp-secure-proxy",
-      script: "dist/remote/server.js",
+      name: 'drawlatch',
+      script: 'dist/remote/server.js',
       cwd: __dirname,
-      exec_mode: "fork",
+      exec_mode: 'fork',
       autorestart: true,
       watch: false,
-      max_memory_restart: "1G",
+      max_memory_restart: '1G',
       env: {
-        NODE_ENV: "production",
+        NODE_ENV: 'production',
       },
     },
   ],

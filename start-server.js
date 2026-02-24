@@ -2,7 +2,7 @@
 
 import { spawn } from 'child_process';
 
-const PROCESS_NAME = 'mcp-secure-proxy';
+const PROCESS_NAME = 'drawlatch';
 const SCRIPT_PATH = 'dist/remote/server.js';
 
 function runCommand(cmd, args) {

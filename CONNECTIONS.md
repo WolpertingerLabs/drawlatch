@@ -6,10 +6,10 @@ Instead of manually configuring connectors for popular APIs, you can use **conne
 {
   "host": "0.0.0.0",
   "port": 9999,
-  "localKeysDir": "/absolute/path/to/.mcp-secure-proxy/keys/remote",
+  "localKeysDir": "/absolute/path/to/.drawlatch/keys/remote",
   "callers": {
     "my-laptop": {
-      "peerKeyDir": "/absolute/path/to/.mcp-secure-proxy/keys/peers/my-laptop",
+      "peerKeyDir": "/absolute/path/to/.drawlatch/keys/peers/my-laptop",
       "connections": ["github", "stripe"]
     }
   },
@@ -21,30 +21,30 @@ Connection templates are loaded when a caller's session is established. Custom c
 
 ## Available Connections
 
-| Connection      | API                                                                                           | Required Environment Variable(s) | Auth Method                      |
-| --------------- | --------------------------------------------------------------------------------------------- | -------------------------------- | -------------------------------- |
-| `anthropic`     | [Anthropic Claude API](https://docs.anthropic.com/en/api)                                     | `ANTHROPIC_API_KEY`              | x-api-key header (see note)      |
-| `bluesky`       | [Bluesky API (AT Protocol)](https://docs.bsky.app/)                                           | `BLUESKY_ACCESS_TOKEN`           | Bearer token header (see note)   |
-| `devin`         | [Devin AI API](https://docs.devin.ai/api-reference/overview)                                  | `DEVIN_API_KEY`                  | Bearer token header              |
-| `discord-bot`   | [Discord Bot API](https://discord.com/developers/docs/intro)                                  | `DISCORD_BOT_TOKEN`              | Bot token header (see note)      |
-| `discord-oauth` | [Discord OAuth2 API](https://discord.com/developers/docs/topics/oauth2)                       | `DISCORD_OAUTH_TOKEN`            | Bearer token header (see note)   |
-| `github`        | [GitHub REST API](https://docs.github.com/en/rest)                                            | `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET` | Bearer token header (see note) |
-| `google`        | [Google APIs](https://developers.google.com/apis-explorer)                                    | `GOOGLE_API_TOKEN`               | Bearer token header (see note)   |
-| `google-ai`     | [Google AI Gemini API](https://ai.google.dev/api)                                             | `GOOGLE_AI_API_KEY`              | x-goog-api-key header (see note) |
-| `hex`           | [Hex API](https://learn.hex.tech/docs/api/api-overview)                                       | `HEX_TOKEN`                      | Bearer token header              |
-| `lichess`       | [Lichess API](https://lichess.org/api)                                                        | `LICHESS_API_TOKEN`              | Bearer token header (see note)   |
-| `linear`        | [Linear GraphQL API](https://developers.linear.app/docs/graphql/working-with-the-graphql-api) | `LINEAR_API_KEY`                 | API key header (see note)        |
-| `mastodon`      | [Mastodon API](https://docs.joinmastodon.org/api/)                                            | `MASTODON_ACCESS_TOKEN`          | Bearer token header (see note)   |
-| `notion`        | [Notion API](https://developers.notion.com/reference)                                         | `NOTION_API_KEY`                 | Bearer token header (see note)   |
-| `openai`        | [OpenAI API](https://platform.openai.com/docs/api-reference)                                  | `OPENAI_API_KEY`                 | Bearer token header              |
-| `openrouter`    | [OpenRouter API](https://openrouter.ai/docs/api-reference)                                    | `OPENROUTER_API_KEY`             | Bearer token header              |
-| `reddit`        | [Reddit API](https://www.reddit.com/dev/api/)                                                 | `REDDIT_ACCESS_TOKEN`, `REDDIT_USER_AGENT` | Bearer token header (see note) |
-| `slack`         | [Slack Web API](https://docs.slack.dev/apis/web-api)                                          | `SLACK_BOT_TOKEN`                | Bearer token header              |
-| `stripe`        | [Stripe Payments API](https://docs.stripe.com/api)                                            | `STRIPE_SECRET_KEY`              | Bearer token header              |
-| `telegram`      | [Telegram Bot API](https://core.telegram.org/bots/api)                                        | `TELEGRAM_BOT_TOKEN`             | URL path token (see note)        |
-| `trello`        | [Trello Boards API](https://developer.atlassian.com/cloud/trello/rest/)                       | `TRELLO_API_KEY`, `TRELLO_TOKEN` | Query parameters (see note)      |
-| `twitch`        | [Twitch Helix API](https://dev.twitch.tv/docs/api/reference/)                                 | `TWITCH_ACCESS_TOKEN`, `TWITCH_CLIENT_ID` | Bearer + Client-Id headers (see note) |
-| `x`             | [X (Twitter) API v2](https://developer.x.com/en/docs/x-api)                                  | `X_BEARER_TOKEN`                 | Bearer token header (see note)   |
+| Connection      | API                                                                                           | Required Environment Variable(s)           | Auth Method                           |
+| --------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------- |
+| `anthropic`     | [Anthropic Claude API](https://docs.anthropic.com/en/api)                                     | `ANTHROPIC_API_KEY`                        | x-api-key header (see note)           |
+| `bluesky`       | [Bluesky API (AT Protocol)](https://docs.bsky.app/)                                           | `BLUESKY_ACCESS_TOKEN`                     | Bearer token header (see note)        |
+| `devin`         | [Devin AI API](https://docs.devin.ai/api-reference/overview)                                  | `DEVIN_API_KEY`                            | Bearer token header                   |
+| `discord-bot`   | [Discord Bot API](https://discord.com/developers/docs/intro)                                  | `DISCORD_BOT_TOKEN`                        | Bot token header (see note)           |
+| `discord-oauth` | [Discord OAuth2 API](https://discord.com/developers/docs/topics/oauth2)                       | `DISCORD_OAUTH_TOKEN`                      | Bearer token header (see note)        |
+| `github`        | [GitHub REST API](https://docs.github.com/en/rest)                                            | `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`    | Bearer token header (see note)        |
+| `google`        | [Google APIs](https://developers.google.com/apis-explorer)                                    | `GOOGLE_API_TOKEN`                         | Bearer token header (see note)        |
+| `google-ai`     | [Google AI Gemini API](https://ai.google.dev/api)                                             | `GOOGLE_AI_API_KEY`                        | x-goog-api-key header (see note)      |
+| `hex`           | [Hex API](https://learn.hex.tech/docs/api/api-overview)                                       | `HEX_TOKEN`                                | Bearer token header                   |
+| `lichess`       | [Lichess API](https://lichess.org/api)                                                        | `LICHESS_API_TOKEN`                        | Bearer token header (see note)        |
+| `linear`        | [Linear GraphQL API](https://developers.linear.app/docs/graphql/working-with-the-graphql-api) | `LINEAR_API_KEY`                           | API key header (see note)             |
+| `mastodon`      | [Mastodon API](https://docs.joinmastodon.org/api/)                                            | `MASTODON_ACCESS_TOKEN`                    | Bearer token header (see note)        |
+| `notion`        | [Notion API](https://developers.notion.com/reference)                                         | `NOTION_API_KEY`                           | Bearer token header (see note)        |
+| `openai`        | [OpenAI API](https://platform.openai.com/docs/api-reference)                                  | `OPENAI_API_KEY`                           | Bearer token header                   |
+| `openrouter`    | [OpenRouter API](https://openrouter.ai/docs/api-reference)                                    | `OPENROUTER_API_KEY`                       | Bearer token header                   |
+| `reddit`        | [Reddit API](https://www.reddit.com/dev/api/)                                                 | `REDDIT_ACCESS_TOKEN`, `REDDIT_USER_AGENT` | Bearer token header (see note)        |
+| `slack`         | [Slack Web API](https://docs.slack.dev/apis/web-api)                                          | `SLACK_BOT_TOKEN`                          | Bearer token header                   |
+| `stripe`        | [Stripe Payments API](https://docs.stripe.com/api)                                            | `STRIPE_SECRET_KEY`                        | Bearer token header                   |
+| `telegram`      | [Telegram Bot API](https://core.telegram.org/bots/api)                                        | `TELEGRAM_BOT_TOKEN`                       | URL path token (see note)             |
+| `trello`        | [Trello Boards API](https://developer.atlassian.com/cloud/trello/rest/)                       | `TRELLO_API_KEY`, `TRELLO_TOKEN`           | Query parameters (see note)           |
+| `twitch`        | [Twitch Helix API](https://dev.twitch.tv/docs/api/reference/)                                 | `TWITCH_ACCESS_TOKEN`, `TWITCH_CLIENT_ID`  | Bearer + Client-Id headers (see note) |
+| `x`             | [X (Twitter) API v2](https://developer.x.com/en/docs/x-api)                                   | `X_BEARER_TOKEN`                           | Bearer token header (see note)        |
 
 > **Anthropic note:** The Anthropic API uses a custom `x-api-key` header instead of the standard `Authorization: Bearer` pattern. The `anthropic-version` header is pinned to `2023-06-01`. To use a different API version, override with a custom route.
 

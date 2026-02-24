@@ -8,7 +8,7 @@
  * Each loader falls back to a legacy combined config.json (if present)
  * for backward compatibility, then to built-in defaults.
  *
- * Keys directory: .mcp-secure-proxy/keys/
+ * Keys directory: .drawlatch/keys/
  */
 
 import fs from 'node:fs';
@@ -17,18 +17,37 @@ import path from 'node:path';
 import { loadConnection } from './connections.js';
 import type { IngestorConfig } from '../remote/ingestors/types.js';
 
-/** Base directory for all config and keys.
- *  Defaults to .mcp-secure-proxy/ in the current working directory (repo-local).
- *  Override with MCP_CONFIG_DIR env var for custom deployments. */
-export const CONFIG_DIR =
-  process.env.MCP_CONFIG_DIR ?? path.join(process.cwd(), '.mcp-secure-proxy');
-export const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
-export const PROXY_CONFIG_PATH = path.join(CONFIG_DIR, 'proxy.config.json');
-export const REMOTE_CONFIG_PATH = path.join(CONFIG_DIR, 'remote.config.json');
-export const KEYS_DIR = path.join(CONFIG_DIR, 'keys');
-export const LOCAL_KEYS_DIR = path.join(KEYS_DIR, 'local');
-export const REMOTE_KEYS_DIR = path.join(KEYS_DIR, 'remote');
-export const PEER_KEYS_DIR = path.join(KEYS_DIR, 'peers');
+/** Resolve the base config directory at call time (not import time).
+ *  Defaults to .drawlatch/ in the current working directory (repo-local).
+ *  Override with MCP_CONFIG_DIR env var for custom deployments.
+ *
+ *  These are functions (not constants) so that process.env.MCP_CONFIG_DIR can
+ *  be set at runtime before the first call — important for hosts like
+ *  claude-code-ui that configure the path after ESM imports are resolved. */
+export function getConfigDir(): string {
+  return process.env.MCP_CONFIG_DIR ?? path.join(process.cwd(), '.drawlatch');
+}
+export function getConfigPath(): string {
+  return path.join(getConfigDir(), 'config.json');
+}
+export function getProxyConfigPath(): string {
+  return path.join(getConfigDir(), 'proxy.config.json');
+}
+export function getRemoteConfigPath(): string {
+  return path.join(getConfigDir(), 'remote.config.json');
+}
+export function getKeysDir(): string {
+  return path.join(getConfigDir(), 'keys');
+}
+export function getLocalKeysDir(): string {
+  return path.join(getKeysDir(), 'local');
+}
+export function getRemoteKeysDir(): string {
+  return path.join(getKeysDir(), 'remote');
+}
+export function getPeerKeysDir(): string {
+  return path.join(getKeysDir(), 'peers');
+}
 
 /** MCP proxy (local) configuration */
 export interface ProxyConfig {
@@ -165,8 +184,8 @@ export interface RemoteServerConfig {
 function proxyDefaults(): ProxyConfig {
   return {
     remoteUrl: 'http://localhost:9999',
-    localKeysDir: path.join(LOCAL_KEYS_DIR, 'default'),
-    remotePublicKeysDir: path.join(PEER_KEYS_DIR, 'remote-server'),
+    localKeysDir: path.join(getLocalKeysDir(), 'default'),
+    remotePublicKeysDir: path.join(getPeerKeysDir(), 'remote-server'),
     connectTimeout: 10_000,
     requestTimeout: 30_000,
   };
@@ -176,7 +195,7 @@ function remoteDefaults(): RemoteServerConfig {
   return {
     host: '127.0.0.1',
     port: 9999,
-    localKeysDir: REMOTE_KEYS_DIR,
+    localKeysDir: getRemoteKeysDir(),
     callers: {},
     rateLimitPerMinute: 60,
   };
@@ -204,12 +223,12 @@ export function loadProxyConfig(): ProxyConfig {
   let config: ProxyConfig;
 
   // Try dedicated proxy config file first
-  if (fs.existsSync(PROXY_CONFIG_PATH)) {
-    const raw = JSON.parse(fs.readFileSync(PROXY_CONFIG_PATH, 'utf-8'));
+  if (fs.existsSync(getProxyConfigPath())) {
+    const raw = JSON.parse(fs.readFileSync(getProxyConfigPath(), 'utf-8'));
     config = { ...def, ...raw };
-  } else if (fs.existsSync(CONFIG_PATH)) {
+  } else if (fs.existsSync(getConfigPath())) {
     // Fall back to combined config.json
-    const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    const raw = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'));
     config = raw.proxy ? { ...def, ...raw.proxy } : def;
   } else {
     config = def;
@@ -220,7 +239,7 @@ export function loadProxyConfig(): ProxyConfig {
   const alias = envAlias ?? config.localKeyAlias;
 
   if (alias) {
-    config.localKeysDir = path.join(LOCAL_KEYS_DIR, alias);
+    config.localKeysDir = path.join(getLocalKeysDir(), alias);
   }
 
   return config;
@@ -243,12 +262,12 @@ export function loadRemoteConfig(): RemoteServerConfig {
   let config: RemoteServerConfig;
 
   // Try dedicated remote config file first
-  if (fs.existsSync(REMOTE_CONFIG_PATH)) {
-    const raw = JSON.parse(fs.readFileSync(REMOTE_CONFIG_PATH, 'utf-8'));
+  if (fs.existsSync(getRemoteConfigPath())) {
+    const raw = JSON.parse(fs.readFileSync(getRemoteConfigPath(), 'utf-8'));
     config = { ...def, ...raw };
-  } else if (fs.existsSync(CONFIG_PATH)) {
+  } else if (fs.existsSync(getConfigPath())) {
     // Fall back to combined config.json
-    const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    const raw = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'));
     config = raw.remote ? { ...def, ...raw.remote } : def;
   } else {
     config = def;
@@ -266,7 +285,7 @@ export function loadRemoteConfig(): RemoteServerConfig {
     const legacyRoutes: Route[] = rawConfig.routes;
     const legacyConnections: string[] = rawConfig.connections ?? [];
     const legacyPeersDir: string =
-      rawConfig.authorizedPeersDir ?? path.join(PEER_KEYS_DIR, 'authorized-clients');
+      rawConfig.authorizedPeersDir ?? path.join(getPeerKeysDir(), 'authorized-clients');
 
     // Auto-assign aliases to unnamed routes for the default caller
     const connectors = legacyRoutes.map((r, i) => ({
@@ -298,13 +317,13 @@ export function loadRemoteConfig(): RemoteServerConfig {
 // ── Split config saving ─────────────────────────────────────────────────────
 
 export function saveProxyConfig(config: ProxyConfig): void {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(PROXY_CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+  fs.mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(getProxyConfigPath(), JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
 export function saveRemoteConfig(config: RemoteServerConfig): void {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(REMOTE_CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+  fs.mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(getRemoteConfigPath(), JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
 // ── Per-caller route resolution ──────────────────────────────────────────
