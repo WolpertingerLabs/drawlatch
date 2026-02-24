@@ -113,7 +113,7 @@ function extractPlaceholderNames(str: string): Set<string> {
  *     referenced in headers (used by ingestors, URL placeholders, etc.).
  *
  * Used by:
- *   - claude-code-ui's ConnectionManager (local mode, direct import)
+ *   - callboard's ConnectionManager (local mode, direct import)
  *   - admin_list_connection_templates tool handler (remote mode, Stage 3)
  */
 export function listConnectionTemplates(): ConnectionTemplateInfo[] {

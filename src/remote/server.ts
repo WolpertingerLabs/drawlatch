@@ -221,7 +221,7 @@ export interface ProxyRequestResult {
  *
  * Used by:
  * - The remote server's `http_request` tool handler (this file)
- * - claude-code-ui's `LocalProxy` class (in-process, no encryption)
+ * - callboard's `LocalProxy` class (in-process, no encryption)
  *
  * Pure in the sense that it takes routes as input rather than reading global state.
  * The only side effect is the outbound fetch().
@@ -284,9 +284,7 @@ export async function executeProxyRequest(
   // and reading them back.
   let resolvedBody: string | undefined;
   if (typeof body === 'string') {
-    resolvedBody = matched.resolveSecretsInBody
-      ? resolvePlaceholders(body, matched.secrets)
-      : body;
+    resolvedBody = matched.resolveSecretsInBody ? resolvePlaceholders(body, matched.secrets) : body;
   } else if (body !== null && body !== undefined) {
     const serialized = JSON.stringify(body);
     resolvedBody = matched.resolveSecretsInBody

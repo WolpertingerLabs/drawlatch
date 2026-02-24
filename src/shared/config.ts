@@ -23,7 +23,7 @@ import type { IngestorConfig } from '../remote/ingestors/types.js';
  *
  *  These are functions (not constants) so that process.env.MCP_CONFIG_DIR can
  *  be set at runtime before the first call — important for hosts like
- *  claude-code-ui that configure the path after ESM imports are resolved. */
+ *  callboard that configure the path after ESM imports are resolved. */
 export function getConfigDir(): string {
   return process.env.MCP_CONFIG_DIR ?? path.join(process.cwd(), '.drawlatch');
 }

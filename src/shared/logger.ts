@@ -13,7 +13,7 @@
  * The logger is lazily initialised so that `dotenv/config` has loaded the
  * .env file before the log level is read from `process.env`.
  *
- * Follows the same `createLogger(module)` pattern used in ../claude-code-ui.
+ * Follows the same `createLogger(module)` pattern used in ../callboard.
  */
 
 // ── Log levels (lower = more severe) ────────────────────────────────────
