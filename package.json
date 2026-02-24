@@ -3,9 +3,48 @@
   "version": "1.0.0",
   "description": "Encrypted MCP proxy with mutual authentication. Local MCP server forwards requests through an encrypted channel to a remote secrets-holding server.",
   "type": "module",
+  "main": "./dist/mcp/server.js",
+  "types": "./dist/mcp/server.d.ts",
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "README.md",
+    "CONNECTIONS.md",
+    "INGESTORS.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/mcp/server.d.ts",
+      "import": "./dist/mcp/server.js"
+    },
+    "./shared/crypto": {
+      "types": "./dist/shared/crypto/index.d.ts",
+      "import": "./dist/shared/crypto/index.js"
+    },
+    "./shared/protocol": {
+      "types": "./dist/shared/protocol/index.d.ts",
+      "import": "./dist/shared/protocol/index.js"
+    },
+    "./shared/config": {
+      "types": "./dist/shared/config.d.ts",
+      "import": "./dist/shared/config.js"
+    },
+    "./shared/connections": {
+      "types": "./dist/shared/connections.d.ts",
+      "import": "./dist/shared/connections.js"
+    },
+    "./remote/server": {
+      "types": "./dist/remote/server.d.ts",
+      "import": "./dist/remote/server.js"
+    },
+    "./remote/ingestors": {
+      "types": "./dist/remote/ingestors/index.d.ts",
+      "import": "./dist/remote/ingestors/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc && rm -rf dist/connections && cp -r src/connections dist/connections",
-    "postinstall": "npm run build",
+    "prepare": "npm run build",
     "dev:remote": "tsx src/remote/server.ts",
     "dev:mcp": "tsx src/mcp/server.ts",
     "generate-keys": "tsx src/cli/generate-keys.ts",
@@ -18,7 +57,19 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "format": "prettier --write 'src/**/*.ts' '*.{json,ts,js}'",
-    "format:check": "prettier --check 'src/**/*.ts' '*.{json,ts,js}'"
+    "format:check": "prettier --check 'src/**/*.ts' '*.{json,ts,js}'",
+    "prepublishOnly": "npm run lint && npm test && npm run build",
+    "publish:dry-run": "npm publish --dry-run"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WolpertingerLabs/drawlatch.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "mcp",
@@ -28,16 +79,7 @@
     "secrets"
   ],
   "author": "",
-  "license": "ISC",
-  "exports": {
-    ".": "./dist/mcp/server.js",
-    "./shared/crypto": "./dist/shared/crypto/index.js",
-    "./shared/protocol": "./dist/shared/protocol/index.js",
-    "./shared/config": "./dist/shared/config.js",
-    "./shared/connections": "./dist/shared/connections.js",
-    "./remote/server": "./dist/remote/server.js",
-    "./remote/ingestors": "./dist/remote/ingestors/index.js"
-  },
+  "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
     "dotenv": "^17.3.1",
