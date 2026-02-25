@@ -239,7 +239,7 @@ describe('Encrypted requests', () => {
     const response = await sendToolRequest(channel, 'list_routes', {});
     expect(response.success).toBe(true);
 
-    const routes = response.result as Array<Record<string, unknown>>;
+    const routes = response.result as Record<string, unknown>[];
     expect(routes).toHaveLength(1);
     expect(routes[0].index).toBe(0);
     expect(routes[0].secretNames).toContain('TEST_SECRET');
@@ -1082,7 +1082,7 @@ describe('Route isolation', () => {
     const response = await sendIsolationRequest(channel, 'list_routes', {});
 
     expect(response.success).toBe(true);
-    const routes = response.result as Array<Record<string, unknown>>;
+    const routes = response.result as Record<string, unknown>[];
     expect(routes).toHaveLength(2);
 
     // Route 0 — targets server A
@@ -1216,7 +1216,7 @@ describe('Route metadata in list_routes', () => {
     const response = await sendMetadataRequest(channel, 'list_routes', {});
 
     expect(response.success).toBe(true);
-    const routes = response.result as Array<Record<string, unknown>>;
+    const routes = response.result as Record<string, unknown>[];
     expect(routes).toHaveLength(3);
 
     // Route 0 — full metadata
@@ -1384,7 +1384,7 @@ describe('loadCallerPeers via createApp', () => {
       expect(resp.ok).toBe(true);
       const decrypted = channel.decryptJSON<ProxyResponse>(Buffer.from(await resp.arrayBuffer()));
       expect(decrypted.success).toBe(true);
-      const routes = decrypted.result as Array<Record<string, unknown>>;
+      const routes = decrypted.result as Record<string, unknown>[];
       expect(routes).toHaveLength(1);
       expect(routes[0].secretNames).toContain('TEST');
     } finally {
@@ -1638,8 +1638,8 @@ describe('Per-caller access control', () => {
     expect(fullRoutes.success).toBe(true);
     expect(limitedRoutes.success).toBe(true);
 
-    const fullList = fullRoutes.result as Array<Record<string, unknown>>;
-    const limitedList = limitedRoutes.result as Array<Record<string, unknown>>;
+    const fullList = fullRoutes.result as Record<string, unknown>[];
+    const limitedList = limitedRoutes.result as Record<string, unknown>[];
 
     // Full caller sees both connectors
     expect(fullList).toHaveLength(2);
@@ -2100,12 +2100,12 @@ describe('Webhook ingestor', () => {
     });
 
     expect(response.success).toBe(true);
-    const events = response.result as Array<{
+    const events = response.result as {
       id: number;
       source: string;
       eventType: string;
       data: { deliveryId: string; event: string; payload: unknown };
-    }>;
+    }[];
     expect(events.length).toBeGreaterThanOrEqual(1);
 
     const event = events[0];
@@ -2164,11 +2164,11 @@ describe('Webhook ingestor', () => {
     const response = await sendWebhookToolRequest(channel, 'ingestor_status', {});
 
     expect(response.success).toBe(true);
-    const statuses = response.result as Array<{
+    const statuses = response.result as {
       connection: string;
       type: string;
       state: string;
-    }>;
+    }[];
     expect(statuses).toHaveLength(1);
     expect(statuses[0].connection).toBe('github');
     expect(statuses[0].type).toBe('webhook');
@@ -2197,7 +2197,7 @@ describe('Webhook ingestor', () => {
     const allResponse = await sendWebhookToolRequest(channel, 'poll_events', {
       connection: 'github',
     });
-    const allEvents = allResponse.result as Array<{ id: number }>;
+    const allEvents = allResponse.result as { id: number }[];
     expect(allEvents.length).toBeGreaterThanOrEqual(2);
 
     // Now poll with a cursor to get only newer events
@@ -2206,7 +2206,7 @@ describe('Webhook ingestor', () => {
       connection: 'github',
       after_id: lastButOneId,
     });
-    const cursorEvents = cursorResponse.result as Array<{ id: number }>;
+    const cursorEvents = cursorResponse.result as { id: number }[];
     expect(cursorEvents.length).toBeGreaterThanOrEqual(1);
     expect(cursorEvents.every((e) => e.id > lastButOneId)).toBe(true);
   });

@@ -236,6 +236,7 @@ export function loadProxyConfig(): ProxyConfig {
   }
 
   // Alias resolution: env var > config alias > localKeysDir > default
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- intentionally coerces empty string to undefined
   const envAlias = process.env.MCP_KEY_ALIAS?.trim() || undefined;
   const alias = envAlias ?? config.localKeyAlias;
 
@@ -277,7 +278,7 @@ export function loadRemoteConfig(): RemoteServerConfig {
   // Legacy migration: old format had routes/authorizedPeersDir/connections at top level
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reading unknown legacy config shape
   const rawConfig = config as any;
-  if (rawConfig.routes && !config.callers?.default && !rawConfig.connectors) {
+  if (rawConfig.routes && !('default' in config.callers) && !rawConfig.connectors) {
     console.error(
       '[config] Warning: legacy config format detected (routes/authorizedPeersDir/connections). ' +
         'Migrating to caller-centric format. Please update your remote.config.json.',
@@ -294,7 +295,7 @@ export function loadRemoteConfig(): RemoteServerConfig {
       alias: r.alias ?? r.name?.toLowerCase().replace(/\s+/g, '-') ?? `route-${i}`,
     }));
 
-    const allConnectionNames = [...legacyConnections, ...connectors.map((c) => c.alias!)];
+    const allConnectionNames = [...legacyConnections, ...connectors.map((c) => c.alias)];
 
     config = {
       ...def,
@@ -339,8 +340,8 @@ export function saveRemoteConfig(config: RemoteServerConfig): void {
  * Returns an array of Route objects ready for `resolveRoutes()`.
  */
 export function resolveCallerRoutes(config: RemoteServerConfig, callerAlias: string): Route[] {
+  if (!(callerAlias in config.callers)) return [];
   const caller = config.callers[callerAlias];
-  if (!caller) return [];
 
   // Build lookup map for custom connectors by alias
   const connectorsByAlias = new Map<string, Route>();

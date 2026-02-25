@@ -327,7 +327,12 @@ describe('DiscordGatewayIngestor — payload filtering', () => {
       const ingestor = createTestIngestor({});
 
       // Simulate a READY event to set the session ID
-      dispatch(ingestor, 'READY', { session_id: 'sess_abc', resume_gateway_url: 'wss://resume.discord.gg' }, 1);
+      dispatch(
+        ingestor,
+        'READY',
+        { session_id: 'sess_abc', resume_gateway_url: 'wss://resume.discord.gg' },
+        1,
+      );
 
       // Now send a real event — key should include the session ID
       dispatch(ingestor, 'MESSAGE_CREATE', { guild_id: 'g1', author: { id: 'u1' } }, 42);

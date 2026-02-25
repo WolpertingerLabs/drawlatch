@@ -465,7 +465,7 @@ export function createApp(options: CreateAppOptions = {}) {
       // Resolve per-caller routes (with optional env overrides)
       const callerRoutes = resolveCallerRoutes(config, callerAlias);
       const caller = config.callers[callerAlias];
-      const callerEnvResolved = resolveSecrets(caller?.env ?? {});
+      const callerEnvResolved = resolveSecrets(caller.env ?? {});
       const callerResolvedRoutes = resolveRoutes(callerRoutes, callerEnvResolved);
 
       // Store pending handshake for the finish step

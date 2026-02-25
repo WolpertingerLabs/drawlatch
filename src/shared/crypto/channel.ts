@@ -180,9 +180,7 @@ export class EncryptedChannel {
 
       // Reject duplicate counters (replay)
       if (this.replayWindow.has(counter)) {
-        throw new Error(
-          `Duplicate counter ${counter}. Possible replay attack.`,
-        );
+        throw new Error(`Duplicate counter ${counter}. Possible replay attack.`);
       }
     }
 

@@ -26,10 +26,7 @@ function signTrelloPayload(
   return crypto.createHmac('sha1', secret).update(content).digest('base64');
 }
 
-function makeTrelloPayload(
-  actionType: string = 'updateCard',
-  actionId: string = 'action-123',
-): object {
+function makeTrelloPayload(actionType = 'updateCard', actionId = 'action-123'): object {
   return {
     action: {
       id: actionId,

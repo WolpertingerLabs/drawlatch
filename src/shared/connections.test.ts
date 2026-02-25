@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'node:fs';
-import { loadConnection, listAvailableConnections, listConnectionTemplates } from './connections.js';
-import type { ConnectionTemplateInfo } from './connections.js';
+import {
+  loadConnection,
+  listAvailableConnections,
+  listConnectionTemplates,
+} from './connections.js';
+
 
 // Helper: readdirSync returns string[] when called with encoding, but
 // vi.spyOn infers the Dirent[] overload. Cast through unknown to satisfy tsc.
@@ -476,8 +480,6 @@ describe('listConnectionTemplates (integration)', () => {
     expect(trello.ingestorType).toBe('webhook');
     // All secrets should be accounted for
     const allSecrets = [...trello.requiredSecrets, ...trello.optionalSecrets].sort();
-    expect(allSecrets).toEqual(
-      Object.keys(loadConnection('trello').secrets ?? {}).sort(),
-    );
+    expect(allSecrets).toEqual(Object.keys(loadConnection('trello').secrets ?? {}).sort());
   });
 });

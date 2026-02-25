@@ -36,8 +36,8 @@ let resolvedThreshold: number | null = null;
 
 function threshold(): number {
   if (resolvedThreshold === null) {
-    const env = (process.env.LOG_LEVEL ?? 'info').toLowerCase() as LevelName;
-    resolvedThreshold = LEVELS[env] ?? LEVELS.info;
+    const env = (process.env.LOG_LEVEL ?? 'info').toLowerCase();
+    resolvedThreshold = env in LEVELS ? LEVELS[env as LevelName] : LEVELS.info;
   }
   return resolvedThreshold;
 }
