@@ -1,7 +1,7 @@
 # Ingestors: Real-Time Data Collection for MCP Secure Proxy
 
-> **Status:** Phase 2b (Stripe Webhook Ingestor + Generic Webhook Base Class) — **Complete**
-> **Date:** 2026-02-18
+> **Status:** Phases 1–5 complete. WebSocket (Discord, Slack), Webhook (GitHub, Stripe, Trello), and Poll (Notion, Linear, Reddit, X, Bluesky, Mastodon, Telegram, Twitch) ingestors are all implemented.
+> **Last updated:** 2026-02-26
 
 ---
 
@@ -352,13 +352,54 @@ The factory registry now uses `webhook:<protocol>` keys (mirroring `websocket:<p
 
 ```
 websocket:<protocol>  → websocket:discord, websocket:slack
-webhook:<protocol>    → webhook:generic (GitHub, no protocol), webhook:stripe
+webhook:<protocol>    → webhook:generic (GitHub, no protocol), webhook:stripe, webhook:trello
 poll                  → poll (no protocol sub-key needed)
 ```
 
+### Phase 2c: Trello Webhook Ingestor — **Complete**
+
+Added Trello as a third webhook provider, using its unique HMAC-SHA1 signature scheme.
+
+**Trello Signature Verification:**
+
+- Trello uses the `X-Trello-Webhook` header with Base64-encoded HMAC-SHA1
+- The HMAC is computed over `${rawBody}${callbackURL}` — requiring the callback URL to be configured (unlike GitHub/Stripe which only hash the body)
+- Timing-safe comparison via `crypto.timingSafeEqual`
+
+**New Files:**
+
+| File                                                              | Purpose                                                                                                     |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `src/remote/ingestors/webhook/trello-types.ts`                    | Trello-specific types, HMAC-SHA1 verification, action type/ID extraction                                    |
+| `src/remote/ingestors/webhook/trello-webhook-ingestor.ts`          | `TrelloWebhookIngestor` extending `WebhookIngestor`. Self-registers as `'webhook:trello'` factory.          |
+| `src/remote/ingestors/webhook/trello-webhook-ingestor.test.ts`     | Unit tests covering signature verification, lifecycle, factory registration                                  |
+
+**Config example (Trello):**
+
+```json
+{
+  "ingestor": {
+    "type": "webhook",
+    "webhook": {
+      "path": "trello",
+      "protocol": "trello",
+      "signatureHeader": "X-Trello-Webhook",
+      "signatureSecret": "TRELLO_API_SECRET",
+      "callbackUrl": "${TRELLO_CALLBACK_URL}"
+    }
+  }
+}
+```
+
+**Setup requirements:**
+
+- Set `TRELLO_API_SECRET` env var on the remote server (your Trello API secret from the [Power-Up admin](https://trello.com/power-ups/admin))
+- Set `TRELLO_CALLBACK_URL` to the public URL of your webhook endpoint (e.g., `https://example.com/webhooks/trello`) — this is included in the HMAC computation
+- Register a webhook via the Trello API pointing to your callback URL
+
 ### Phase 3: Polling Ingestor — **Complete**
 
-Added support for interval-based HTTP polling for APIs that lack real-time push mechanisms (WebSocket or webhooks). Notion and Linear are the first poll providers.
+Added support for interval-based HTTP polling for APIs that lack real-time push mechanisms (WebSocket or webhooks). Notion and Linear are the first poll providers, with Reddit, X, Bluesky, Mastodon, Telegram, and Twitch added subsequently.
 
 **Architecture:** Unlike WebSocket ingestors (which maintain persistent outbound connections) or webhook ingestors (which passively receive POSTs), poll ingestors are active HTTP requesters on a timer. Each poll cycle:
 
@@ -462,17 +503,57 @@ The PollIngestor is a single concrete class (not an abstract base with subclasse
 - Set the relevant API key environment variable (e.g., `NOTION_API_KEY`, `LINEAR_API_KEY`)
 - No external setup needed (unlike webhooks, which require public URLs and webhook registration)
 
-### Phase 4: Slack Socket Mode
+**All connections with poll ingestors:** Notion, Linear, Reddit, X (Twitter), Bluesky, Mastodon, Telegram, and Twitch. See each connection's JSON template in `src/connections/` for the specific poll configuration.
 
-Second WebSocket protocol implementation for Slack real-time events.
+### Phase 4: Slack Socket Mode — **Complete**
 
-**Implementation:**
+Second WebSocket protocol implementation for Slack real-time events via [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode).
 
-- Add `protocol: 'slack'` to `WebSocketIngestorConfig`
-- Create `src/remote/ingestors/slack-socket.ts`
-- Slack Socket Mode uses a different handshake: POST to `apps.connections.open` to get a WSS URL, then connect
-- Events require acknowledgment (`acknowledge` envelope)
-- Map Slack event types to `IngestedEvent`
+**Architecture:** Slack Socket Mode uses a different lifecycle from Discord Gateway:
+
+1. POST `apps.connections.open` (using the app-level token `SLACK_APP_TOKEN`) → get a WebSocket URL
+2. Connect to WebSocket → receive `hello` message
+3. Receive envelopes → acknowledge each envelope → buffer events
+4. Handle `disconnect` messages → reconnect
+
+**New Files:**
+
+| File                                                   | Purpose                                                                                                                                                      |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/remote/ingestors/slack/socket-mode.ts`            | `SlackSocketModeIngestor` class extending `BaseIngestor`. Full Socket Mode lifecycle with envelope acknowledgment, reconnect on disconnect, exponential backoff |
+| `src/remote/ingestors/slack/types.ts`                  | Slack-specific types: envelope shapes, hello/disconnect messages, event type extraction, channel/user ID extraction                                          |
+| `src/remote/ingestors/slack/index.ts`                  | Barrel exports                                                                                                                                               |
+| `src/remote/ingestors/slack/socket-mode.test.ts`       | Unit tests covering lifecycle, envelope handling, reconnection, factory registration                                                                          |
+
+**Modified Files:**
+
+| File                              | Changes                                                                                                  |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `src/connections/slack.json`      | Added `SLACK_APP_TOKEN` to secrets. Added ingestor config with `type: "websocket"`, `protocol: "slack"`. |
+| `src/remote/ingestors/manager.ts` | Added Slack factory self-registration import                                                              |
+
+**Config example (Slack):**
+
+```json
+{
+  "ingestor": {
+    "type": "websocket",
+    "websocket": {
+      "gatewayUrl": "https://slack.com/api/apps.connections.open",
+      "protocol": "slack"
+    }
+  }
+}
+```
+
+**Setup requirements:**
+
+- Create a Slack app with Socket Mode enabled in the [Slack API dashboard](https://api.slack.com/apps)
+- Generate an App-Level Token (`SLACK_APP_TOKEN`, starts with `xapp-`) with `connections:write` scope
+- Set `SLACK_BOT_TOKEN` (starts with `xoxb-`) for API access and `SLACK_APP_TOKEN` for Socket Mode
+- Subscribe to the events you want to receive in Event Subscriptions
+
+**Factory key:** `websocket:slack`
 
 ### Phase 5: Caller-Level Ingestor Overrides — **Complete**
 

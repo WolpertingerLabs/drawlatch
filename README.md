@@ -1,10 +1,17 @@
 # drawlatch
 
-An encrypted MCP (Model Context Protocol) proxy that lets Claude Code make authenticated HTTP requests through a secure, end-to-end encrypted channel. Your API keys and secrets never leave the remote server.
+A config-driven MCP (Model Context Protocol) proxy that lets Claude Code make authenticated HTTP requests to external APIs. Supports 22 pre-built API connections with endpoint allowlisting, per-caller access control, and real-time event ingestion — all configured through a single JSON file.
+
+Drawlatch can run in two modes:
+
+- **Remote mode** — local proxy + remote server, with end-to-end encryption. Secrets never leave the remote server.
+- **Local mode** — imported as a library and called in-process (no server, no encryption). Secrets are on the same machine, but you get the same config-driven route resolution, endpoint allowlisting, and ingestor support.
 
 ## How It Works
 
-The system has two components:
+### Remote Mode (Two-Component)
+
+In remote mode, the system has two components:
 
 1. **Local MCP Proxy** — runs on your machine as a Claude Code MCP server (stdio transport). It holds **no secrets**. It encrypts requests and forwards them to the remote server.
 2. **Remote Secure Server** — holds all secrets (API keys, tokens, etc.) and only communicates through encrypted channels after mutual authentication. It injects secrets into outgoing HTTP requests on the proxy's behalf.
@@ -19,6 +26,27 @@ The system has two components:
 ```
 
 The crypto layer uses **Ed25519** signatures for authentication and **X25519 ECDH** for key exchange, deriving **AES-256-GCM** session keys — all built on Node.js native `crypto` with zero external crypto dependencies.
+
+### Local Mode (In-Process Library)
+
+In local mode, there is no separate server, no network port, and no encryption. Your application imports drawlatch's core functions directly and calls them in-process:
+
+```
+┌──────────────────────────────────────────┐     Authenticated     ┌──────────────┐
+│  Your Application                        │────  HTTPS ───────────►│  External API │
+│  ┌──────────┐   in-process   ┌────────┐ │                        │               │
+│  │  Agent   │◄──  call  ────►│ drawl. │ │  Reads secrets from    └──────────────┘
+│  │          │                │ routes │ │  local env / config
+│  └──────────┘                └────────┘ │
+└──────────────────────────────────────────┘
+         Secrets are on the same machine
+```
+
+**What you get in local mode:** The same config-driven route resolution, endpoint allowlisting, per-caller access control, connection templates, ingestor support (WebSocket, webhook, polling), and the exact same `executeProxyRequest()` function the remote server uses — no behavioral drift.
+
+**What you don't get:** Secret isolation from the agent. When running locally, secrets live in `process.env` on the same machine. The value proposition shifts from cryptographic secret hiding to **convenience and structured access** — a single config file managing many API connections with consistent patterns.
+
+> **When to use which mode:** Use remote mode when you need to hide secrets from the machine running the agent (e.g., shared CI servers, untrusted environments). Use local mode when running on your own machine and you want the convenience of config-driven API management without the overhead of running a separate server.
 
 ## Quick Start
 
@@ -60,7 +88,7 @@ export MCP_CONFIG_DIR=~/.drawlatch
 
 The `.mcp.json` passes this through to the MCP server process. You also need a working setup (keys generated, public keys exchanged, configs in place, remote server running). See [Setup](#setup) below for the full walkthrough.
 
-> **Note:** Auto-discovery uses the `dist/mcp/server.js` entrypoint. The `dist/` directory is built automatically when you run `npm install` (via the `postinstall` script). If you need to rebuild manually, run `npm run build`.
+> **Note:** Auto-discovery uses the `dist/mcp/server.js` entrypoint. The `dist/` directory is built automatically when you run `npm install` (via the `prepare` script). If you need to rebuild manually, run `npm run build`.
 
 ## Setup
 
@@ -337,12 +365,13 @@ Custom connectors define reusable route templates referenced by `alias` from cal
 
 #### Caller Definition
 
-| Field         | Required | Description                                                                                                                                       |
-| ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `peerKeyDir`  | Yes      | Path to this caller's public key files (`signing.pub.pem` + `exchange.pub.pem`)                                                                   |
-| `connections` | Yes      | Array of connection names — references built-in templates (e.g., `"github"`) or custom connector aliases                                          |
-| `name`        | No       | Human-readable name for audit logs                                                                                                                |
-| `env`         | No       | Per-caller environment variable overrides (see [env overrides example](#example-per-caller-env-overrides-shared-connector-different-credentials)) |
+| Field               | Required | Description                                                                                                                                       |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `peerKeyDir`        | Yes      | Path to this caller's public key files (`signing.pub.pem` + `exchange.pub.pem`)                                                                   |
+| `connections`       | Yes      | Array of connection names — references built-in templates (e.g., `"github"`) or custom connector aliases                                          |
+| `name`              | No       | Human-readable name for audit logs                                                                                                                |
+| `env`               | No       | Per-caller environment variable overrides (see [env overrides example](#example-per-caller-env-overrides-shared-connector-different-credentials)) |
+| `ingestorOverrides` | No       | Per-caller ingestor config overrides keyed by connection alias. Override event filters, buffer sizes, intents, or disable ingestors entirely. See **[INGESTORS.md](INGESTORS.md#caller-level-ingestor-overrides)** for full reference |
 
 #### How Secrets Work
 
@@ -416,6 +445,18 @@ claude mcp add secure-proxy \
 
 After connecting (either via auto-discovery or manual registration), the proxy will automatically perform the encrypted handshake with the remote server on first use.
 
+### Step 6: Webhook Endpoints (Optional)
+
+If any of your connections use webhook ingestors (e.g., GitHub, Stripe, Trello), the remote server automatically exposes `POST /webhooks/:path` routes on the same port. External services send webhook POSTs to these endpoints, and the server verifies signatures, buffers events in per-caller ring buffers, and makes them available via `poll_events`.
+
+**Setup:**
+
+1. The remote server must be **publicly accessible** for webhook delivery (or behind a tunnel like [ngrok](https://ngrok.com/) or [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/))
+2. Point the external service's webhook URL to `https://<your-server>/webhooks/<path>` (e.g., `https://example.com/webhooks/github`)
+3. Set the webhook signing secret as an environment variable on the remote server (e.g., `GITHUB_WEBHOOK_SECRET`, `STRIPE_WEBHOOK_SECRET`)
+
+The webhook path is configured in each connection template's `ingestor.webhook.path` field. See **[INGESTORS.md](INGESTORS.md)** for full details on webhook, WebSocket, and poll ingestors.
+
 ### Multiple Agents (Multi-Identity)
 
 When multiple agents share the same machine, each needs its own key identity. Generate a keypair per agent:
@@ -446,11 +487,11 @@ The proxy auto-resolves `MCP_KEY_ALIAS=alice` to `keys/local/alice/`. On the rem
 
 ## MCP Tools
 
-Once connected, Claude Code gets access to three tools:
+Once connected, Claude Code gets access to four tools:
 
 ### `secure_request`
 
-Make an authenticated HTTP request through the encrypted proxy. Route-level headers (e.g., `Authorization`) are injected automatically by the remote server.
+Make an authenticated HTTP request through the proxy. Route-level headers (e.g., `Authorization`) are injected automatically — the agent never sees the secret values.
 
 ```
 method: GET | POST | PUT | PATCH | DELETE
@@ -462,6 +503,77 @@ body: Optional request body
 ### `list_routes`
 
 List all available routes for the current caller. Returns metadata (name, description, docs link), allowed endpoint patterns, available secret placeholder names (not values), and auto-injected header names. Different callers may see different routes based on their `connections` configuration.
+
+### `poll_events`
+
+Poll for new events from ingestors (Discord messages, GitHub webhooks, Notion updates, etc.). Returns events received since the given cursor.
+
+```
+connection: Optional — filter by connection alias (e.g., "discord-bot"), omit for all
+after_id: Optional — cursor; returns events with id > after_id
+```
+
+Pass `after_id` from the last event you received to get only new events. Omit to get all buffered events. See **[INGESTORS.md](INGESTORS.md)** for details on configuring event sources.
+
+### `ingestor_status`
+
+Get the status of all active ingestors for the current caller. Returns connection state, buffer sizes, event counts, and any errors. Takes no parameters.
+
+## Library Usage (Local Mode)
+
+Drawlatch can be imported as a library for in-process use — no separate server, no encryption overhead. The `package.json` exports map provides clean entry points:
+
+```typescript
+// Core request execution (same function the remote server uses)
+import { executeProxyRequest } from "drawlatch/remote/server";
+
+// Config loading and route resolution
+import {
+  loadRemoteConfig,
+  resolveCallerRoutes,
+  resolveRoutes,
+  resolveSecrets,
+} from "drawlatch/shared/config";
+
+// Ingestor management (WebSocket, webhook, poll)
+import { IngestorManager } from "drawlatch/remote/ingestors";
+
+// Crypto primitives (if building custom transport)
+import { loadKeyBundle, loadPublicKeys, EncryptedChannel } from "drawlatch/shared/crypto";
+```
+
+### Available Exports
+
+| Export Path                  | Description                                                        |
+| ---------------------------- | ------------------------------------------------------------------ |
+| `drawlatch`                  | MCP proxy server (stdio transport) — the default entry point       |
+| `drawlatch/remote/server`    | Remote server functions including `executeProxyRequest()`          |
+| `drawlatch/remote/ingestors` | `IngestorManager` and all ingestor types                           |
+| `drawlatch/shared/config`    | Config loading, caller/route resolution, secret resolution         |
+| `drawlatch/shared/connections`| Connection template loading                                       |
+| `drawlatch/shared/crypto`    | Key generation, encrypted channel, key serialization               |
+| `drawlatch/shared/protocol`  | Handshake protocol, message types                                  |
+
+### Example: In-Process Proxy
+
+```typescript
+import { loadRemoteConfig, resolveCallerRoutes, resolveRoutes, resolveSecrets } from "drawlatch/shared/config";
+import { executeProxyRequest } from "drawlatch/remote/server";
+
+// Load config and resolve routes for a specific caller
+const config = loadRemoteConfig();
+const callerRoutes = resolveCallerRoutes(config, "my-laptop");
+const callerEnv = resolveSecrets(config.callers["my-laptop"]?.env ?? {});
+const routes = resolveRoutes(callerRoutes, callerEnv);
+
+// Make a request — same function the remote server uses
+const result = await executeProxyRequest(
+  { method: "GET", url: "https://api.github.com/user" },
+  routes,
+);
+```
+
+> **Note:** In local mode, secrets are resolved from `process.env` on the same machine. The encryption layer is not used. See [How It Works → Local Mode](#local-mode-in-process-library) for the security tradeoff.
 
 ## Development
 
@@ -496,7 +608,7 @@ drawlatch/
 │   ├── plugin.json              # Plugin manifest (name, version, description)
 │   └── marketplace.json         # Marketplace catalog for distribution
 ├── .mcp.json                    # MCP server config (used by plugin system + auto-discovery)
-├── dist/                        # Compiled JavaScript (built via `npm run build` or `postinstall`)
+├── dist/                        # Compiled JavaScript (built via `npm run build` or `prepare`)
 │   └── mcp/server.js            # MCP proxy entrypoint
 └── src/                         # TypeScript source
 ```
@@ -510,16 +622,27 @@ src/
 ├── connections/                 # Pre-built route templates (JSON)
 │   ├── github.json             # GitHub REST API
 │   ├── stripe.json             # Stripe Payments API
-│   └── ...                     # 15 templates total
+│   └── ...                     # 22 templates total
 ├── mcp/
 │   └── server.ts               # Local MCP proxy server (stdio transport)
 ├── remote/
 │   ├── server.ts               # Remote secure server (Express HTTP)
 │   ├── server.test.ts          # Unit tests
-│   └── server.e2e.test.ts      # End-to-end tests
+│   ├── server.e2e.test.ts      # End-to-end tests
+│   └── ingestors/              # Real-time event ingestion system
+│       ├── base-ingestor.ts    # Abstract base class (state machine, ring buffer)
+│       ├── ring-buffer.ts      # Generic bounded circular buffer
+│       ├── manager.ts          # Lifecycle management, per-caller routing
+│       ├── registry.ts         # Factory registry for ingestor types
+│       ├── types.ts            # Shared types and config interfaces
+│       ├── discord/            # Discord Gateway WebSocket (v10)
+│       ├── slack/              # Slack Socket Mode WebSocket
+│       ├── webhook/            # Webhook receivers (GitHub, Stripe, Trello)
+│       └── poll/               # Interval-based HTTP polling (Notion, Linear, etc.)
 └── shared/
     ├── config.ts               # Config loading/saving, caller & route resolution
     ├── connections.ts           # Connection template loading
+    ├── logger.ts               # Structured logging
     ├── crypto/
     │   ├── keys.ts             # Ed25519 + X25519 key generation/serialization
     │   ├── channel.ts          # AES-256-GCM encrypted channel
@@ -532,18 +655,31 @@ src/
 
 ## Security Model
 
+### Both Modes
+
+These protections apply regardless of whether you use remote or local mode:
+
+- **Per-caller access control** — each caller only sees and can use the connections explicitly assigned to them
+- **Per-caller credential isolation** — callers sharing the same connector can have different credentials via `env` overrides
+- **Endpoint allowlisting** — requests are only proxied to explicitly configured URL patterns
+- **Rate limiting** — configurable per-session request rate limiting (default: 60/min)
+- **Audit logging** — all operations are logged with caller identity, session ID, and timestamps
+
+### Remote Mode Only
+
+These additional protections apply when running the two-component remote architecture:
+
 - **Zero secrets on the client** — the local MCP proxy never sees API keys or tokens
 - **Mutual authentication** — both sides prove their identity using Ed25519 signatures before any data is exchanged
 - **End-to-end encryption** — all requests/responses are encrypted with AES-256-GCM session keys derived via X25519 ECDH
 - **Replay protection** — monotonic counters prevent replay attacks
 - **Session isolation** — each handshake produces unique session keys with a 30-minute TTL
-- **Per-caller access control** — each caller only sees and can use the connections explicitly assigned to them
-- **Per-caller credential isolation** — callers sharing the same connector can have different credentials via `env` overrides
-- **Endpoint allowlisting** — the remote server only proxies requests to explicitly configured URL patterns
-- **Rate limiting** — configurable per-session request rate limiting (default: 60/min)
-- **Audit logging** — all operations are logged with caller identity, session ID, and timestamps
 - **File permissions** — private keys are saved with `0600`, directories with `0700`
+
+### Local Mode Caveat
+
+When using drawlatch as an in-process library (local mode), secrets are resolved from `process.env` on the same machine as the agent. The encryption and mutual authentication layers are not used. The security value in local mode comes from **structured access control** (endpoint allowlisting, per-caller route isolation) rather than cryptographic secret isolation.
 
 ## License
 
-ISC
+MIT
