@@ -8,6 +8,8 @@
   "files": [
     "dist",
     "!dist/**/*.test.*",
+    "!dist/**/*.js.map",
+    "!dist/**/*.d.ts.map",
     "README.md",
     "CONNECTIONS.md",
     "INGESTORS.md"
