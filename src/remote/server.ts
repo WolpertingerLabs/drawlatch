@@ -13,7 +13,7 @@
  *   - Rate-limits requests per session
  */
 
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import express from 'express';
 import fs from 'node:fs';
 
@@ -23,6 +23,7 @@ import {
   resolveCallerRoutes,
   resolveSecrets,
   resolvePlaceholders,
+  getEnvFilePath,
   type RemoteServerConfig,
   type CallerConfig,
   type ResolvedRoute,
@@ -41,6 +42,27 @@ import {
   type ProxyResponse,
 } from '../shared/protocol/index.js';
 import { IngestorManager } from './ingestors/index.js';
+
+// ── Environment loading ─────────────────────────────────────────────────────
+
+/** Load environment from ~/.drawlatch/.env, falling back to cwd .env (legacy). */
+function loadEnvFile(): void {
+  const configDirEnvPath = getEnvFilePath();
+  if (fs.existsSync(configDirEnvPath)) {
+    dotenv.config({ path: configDirEnvPath });
+    return;
+  }
+  // Backward compat: fall back to cwd .env
+  const result = dotenv.config();
+  if (result.parsed) {
+    console.warn(
+      `[remote] Loaded .env from working directory. ` +
+        `Move it to ${configDirEnvPath} for portable operation.`,
+    );
+  }
+}
+
+loadEnvFile();
 
 // ── Types ──────────────────────────────────────────────────────────────────
 

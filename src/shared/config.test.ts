@@ -15,6 +15,7 @@ import {
   getConfigPath,
   getProxyConfigPath,
   getRemoteConfigPath,
+  getEnvFilePath,
   getLocalKeysDir,
 } from './config.js';
 
@@ -396,6 +397,27 @@ describe('config exports', () => {
   it('should export split config path getter functions', () => {
     expect(getProxyConfigPath()).toContain('proxy.config.json');
     expect(getRemoteConfigPath()).toContain('remote.config.json');
+  });
+});
+
+describe('getEnvFilePath', () => {
+  const originalEnv = process.env;
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('should return .env path under default config dir', () => {
+    process.env = { ...originalEnv };
+    delete process.env.MCP_CONFIG_DIR;
+
+    expect(getEnvFilePath()).toBe(path.join(os.homedir(), '.drawlatch', '.env'));
+  });
+
+  it('should respect MCP_CONFIG_DIR override', () => {
+    process.env = { ...originalEnv, MCP_CONFIG_DIR: '/custom/config' };
+
+    expect(getEnvFilePath()).toBe(path.join('/custom/config', '.env'));
   });
 });
 

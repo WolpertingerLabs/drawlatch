@@ -49,6 +49,9 @@ export function getRemoteKeysDir(): string {
 export function getPeerKeysDir(): string {
   return path.join(getKeysDir(), 'peers');
 }
+export function getEnvFilePath(): string {
+  return path.join(getConfigDir(), '.env');
+}
 
 /** MCP proxy (local) configuration */
 export interface ProxyConfig {
