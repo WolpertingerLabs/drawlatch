@@ -5,11 +5,15 @@
   "type": "module",
   "main": "./dist/mcp/server.js",
   "types": "./dist/mcp/server.d.ts",
+  "bin": {
+    "drawlatch": "./bin/drawlatch.js"
+  },
   "files": [
     "dist",
     "!dist/**/*.test.*",
     "!dist/**/*.js.map",
     "!dist/**/*.d.ts.map",
+    "bin",
     "README.md",
     "CONNECTIONS.md",
     "INGESTORS.md"
@@ -52,7 +56,6 @@
     "generate-keys": "tsx src/cli/generate-keys.ts",
     "start:remote": "NODE_ENV=production node dist/remote/server.js",
     "start:mcp": "node dist/mcp/server.js",
-    "redeploy:prod": "node start-server.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

@@ -705,13 +705,15 @@ export function createApp(options: CreateAppOptions = {}) {
 
 // ── Start ──────────────────────────────────────────────────────────────────
 
-function main(): void {
+export function main(): void {
   const config = loadRemoteConfig();
+  const port = process.env.DRAWLATCH_PORT ? parseInt(process.env.DRAWLATCH_PORT, 10) : config.port;
+  const host = process.env.DRAWLATCH_HOST ?? config.host;
   const app = createApp();
   const ingestorManager = app.locals.ingestorManager as IngestorManager;
 
-  const server = app.listen(config.port, config.host, () => {
-    console.log(`[remote] Secure remote server listening on ${config.host}:${config.port}`);
+  const server = app.listen(port, host, () => {
+    console.log(`[remote] Secure remote server listening on ${host}:${port}`);
 
     // Start ingestors after the server is listening
     ingestorManager.startAll().catch((err: unknown) => {
@@ -748,13 +750,9 @@ function main(): void {
 
 // Only run when executed directly (not when imported as a library).
 // Check if the entry script is this file (covers both ts-node and compiled js).
-// Also check PM2's pm_exec_path for cluster mode where argv[1] is PM2's internal module.
 const entryScript = process.argv[1] ?? '';
-const pm2ExecPath = process.env.pm_exec_path ?? '';
 const isDirectRun =
-  entryScript.endsWith('remote/server.ts') ||
-  entryScript.endsWith('remote/server.js') ||
-  pm2ExecPath.endsWith('remote/server.js');
+  entryScript.endsWith('remote/server.ts') || entryScript.endsWith('remote/server.js');
 
 if (isDirectRun) {
   try {
