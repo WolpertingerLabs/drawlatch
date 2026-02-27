@@ -6,7 +6,6 @@ import {
   listConnectionTemplates,
 } from './connections.js';
 
-
 // Helper: readdirSync returns string[] when called with encoding, but
 // vi.spyOn infers the Dirent[] overload. Cast through unknown to satisfy tsc.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return
