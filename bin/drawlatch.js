@@ -83,7 +83,7 @@ if (values.help && !subcommand) {
 
 switch (subcommand) {
   case null:
-    await cmdStartForeground();
+    await cmdDefault();
     break;
   case "start":
     if (values.help) {
@@ -144,6 +144,16 @@ switch (subcommand) {
 }
 
 // ── Commands ──────────────────────────────────────────────────────
+
+async function cmdDefault() {
+  const pid = readPid();
+  if (pid) {
+    await cmdStatus();
+  } else {
+    console.log("Drawlatch remote server is not running.\n");
+    printHelp();
+  }
+}
 
 async function cmdStart() {
   if (values.foreground) return cmdStartForeground();
@@ -521,11 +531,12 @@ Options:
   -h, --help         Show this help message
   -v, --version      Show version number
 
-Running 'drawlatch' with no arguments starts the remote server in the foreground.
+Running 'drawlatch' with no arguments shows status (if running) or this help.
 
 Examples:
-  drawlatch                            Start remote server in foreground
+  drawlatch                            Show status or help
   drawlatch start                      Start remote server in background
+  drawlatch start -f                   Start remote server in foreground
   drawlatch start --port 8080          Start on a custom port
   drawlatch status                     Check if server is running
   drawlatch logs -n 100                View last 100 log lines
