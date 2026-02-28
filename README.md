@@ -1,4 +1,6 @@
-# drawlatch
+# Drawlatch
+
+> **Alpha Software:** This project is in alpha. Expect breaking changes between updates.
 
 A config-driven MCP (Model Context Protocol) proxy that lets Claude Code make authenticated HTTP requests to external APIs. Supports 22 pre-built API connections with endpoint allowlisting, per-caller access control, and real-time event ingestion — all configured through a single JSON file.
 
@@ -29,7 +31,7 @@ The crypto layer uses **Ed25519** signatures for authentication and **X25519 ECD
 
 ### Local Mode (In-Process Library)
 
-In local mode, there is no separate server, no network port, and no encryption. Your application imports drawlatch's core functions directly and calls them in-process:
+In local mode, there is no separate server, no network port, and no encryption. Your application imports Drawlatch's core functions directly and calls them in-process:
 
 ```
 ┌──────────────────────────────────────────┐     Authenticated     ┌──────────────┐
@@ -678,7 +680,7 @@ These additional protections apply when running the two-component remote archite
 
 ### Local Mode Caveat
 
-When using drawlatch as an in-process library (local mode), secrets are resolved from `process.env` on the same machine as the agent. The encryption and mutual authentication layers are not used. The security value in local mode comes from **structured access control** (endpoint allowlisting, per-caller route isolation) rather than cryptographic secret isolation.
+When using Drawlatch as an in-process library (local mode), secrets are resolved from `process.env` on the same machine as the agent. The encryption and mutual authentication layers are not used. The security value in local mode comes from **structured access control** (endpoint allowlisting, per-caller route isolation) rather than cryptographic secret isolation.
 
 ## License
 
