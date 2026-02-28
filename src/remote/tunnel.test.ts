@@ -109,9 +109,7 @@ describe('startTunnel', () => {
     // Second call: actual tunnel spawn
     const tunnelChild = createFakeChild();
 
-    mockSpawn
-      .mockReturnValueOnce(versionChild)
-      .mockReturnValueOnce(tunnelChild);
+    mockSpawn.mockReturnValueOnce(versionChild).mockReturnValueOnce(tunnelChild);
 
     const promise = startTunnel({ port: 9999, host: '127.0.0.1', timeout: 5000 });
 
@@ -137,18 +135,13 @@ describe('startTunnel', () => {
     const versionChild = new EventEmitter() as ChildProcess;
     const tunnelChild = createFakeChild();
 
-    mockSpawn
-      .mockReturnValueOnce(versionChild)
-      .mockReturnValueOnce(tunnelChild);
+    mockSpawn.mockReturnValueOnce(versionChild).mockReturnValueOnce(tunnelChild);
 
     const promise = startTunnel({ port: 9999, host: '127.0.0.1', timeout: 5000 });
     versionChild.emit('close', 0);
     await new Promise((r) => setTimeout(r, 0));
 
-    tunnelChild._stdout.emit(
-      'data',
-      Buffer.from('https://bright-moon-test.trycloudflare.com\n'),
-    );
+    tunnelChild._stdout.emit('data', Buffer.from('https://bright-moon-test.trycloudflare.com\n'));
 
     const result = await promise;
     expect(result.url).toBe('https://bright-moon-test.trycloudflare.com');
@@ -168,9 +161,7 @@ describe('startTunnel', () => {
     const versionChild = new EventEmitter() as ChildProcess;
     const tunnelChild = createFakeChild();
 
-    mockSpawn
-      .mockReturnValueOnce(versionChild)
-      .mockReturnValueOnce(tunnelChild);
+    mockSpawn.mockReturnValueOnce(versionChild).mockReturnValueOnce(tunnelChild);
 
     const promise = startTunnel({ port: 9999, host: '127.0.0.1', timeout: 50 });
     versionChild.emit('close', 0);
@@ -182,9 +173,7 @@ describe('startTunnel', () => {
     const versionChild = new EventEmitter() as ChildProcess;
     const tunnelChild = createFakeChild();
 
-    mockSpawn
-      .mockReturnValueOnce(versionChild)
-      .mockReturnValueOnce(tunnelChild);
+    mockSpawn.mockReturnValueOnce(versionChild).mockReturnValueOnce(tunnelChild);
 
     const promise = startTunnel({ port: 9999, host: '127.0.0.1', timeout: 5000 });
     versionChild.emit('close', 0);
@@ -199,9 +188,7 @@ describe('startTunnel', () => {
     const versionChild = new EventEmitter() as ChildProcess;
     const tunnelChild = createFakeChild();
 
-    mockSpawn
-      .mockReturnValueOnce(versionChild)
-      .mockReturnValueOnce(tunnelChild);
+    mockSpawn.mockReturnValueOnce(versionChild).mockReturnValueOnce(tunnelChild);
 
     const promise = startTunnel({ port: 9999, host: '127.0.0.1', timeout: 5000 });
     versionChild.emit('close', 0);
@@ -216,22 +203,18 @@ describe('startTunnel', () => {
     const versionChild = new EventEmitter() as ChildProcess;
     const tunnelChild = createFakeChild();
 
-    mockSpawn
-      .mockReturnValueOnce(versionChild)
-      .mockReturnValueOnce(tunnelChild);
+    mockSpawn.mockReturnValueOnce(versionChild).mockReturnValueOnce(tunnelChild);
 
     const promise = startTunnel({ port: 9999, host: '127.0.0.1', timeout: 5000 });
     versionChild.emit('close', 0);
     await new Promise((r) => setTimeout(r, 0));
 
-    tunnelChild._stderr.emit(
-      'data',
-      Buffer.from('https://test-stop.trycloudflare.com\n'),
-    );
+    tunnelChild._stderr.emit('data', Buffer.from('https://test-stop.trycloudflare.com\n'));
 
     const result = await promise;
     await result.stop();
 
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(tunnelChild.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
@@ -239,18 +222,13 @@ describe('startTunnel', () => {
     const versionChild = new EventEmitter() as ChildProcess;
     const tunnelChild = createFakeChild();
 
-    mockSpawn
-      .mockReturnValueOnce(versionChild)
-      .mockReturnValueOnce(tunnelChild);
+    mockSpawn.mockReturnValueOnce(versionChild).mockReturnValueOnce(tunnelChild);
 
     const promise = startTunnel({ port: 9999, host: '127.0.0.1', timeout: 5000 });
     versionChild.emit('close', 0);
     await new Promise((r) => setTimeout(r, 0));
 
-    tunnelChild._stderr.emit(
-      'data',
-      Buffer.from('https://test-noop.trycloudflare.com\n'),
-    );
+    tunnelChild._stderr.emit('data', Buffer.from('https://test-noop.trycloudflare.com\n'));
 
     const result = await promise;
 
@@ -259,6 +237,7 @@ describe('startTunnel', () => {
 
     // stop() should resolve immediately without calling kill
     await result.stop();
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(tunnelChild.kill).not.toHaveBeenCalled();
   });
 
@@ -266,9 +245,7 @@ describe('startTunnel', () => {
     const versionChild = new EventEmitter() as ChildProcess;
     const tunnelChild = createFakeChild();
 
-    mockSpawn
-      .mockReturnValueOnce(versionChild)
-      .mockReturnValueOnce(tunnelChild);
+    mockSpawn.mockReturnValueOnce(versionChild).mockReturnValueOnce(tunnelChild);
 
     const promise = startTunnel({ port: 8080, host: '0.0.0.0', timeout: 5000 });
     versionChild.emit('close', 0);
@@ -282,10 +259,7 @@ describe('startTunnel', () => {
     );
 
     // Clean up
-    tunnelChild._stderr.emit(
-      'data',
-      Buffer.from('https://test-args.trycloudflare.com\n'),
-    );
+    tunnelChild._stderr.emit('data', Buffer.from('https://test-args.trycloudflare.com\n'));
     const result = await promise;
     await result.stop();
   });
