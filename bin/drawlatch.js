@@ -198,9 +198,15 @@ async function cmdStart() {
     console.log(`\nRemote server is running (PID ${child.pid}).`);
     console.log(`  Listening: ${host}:${port}`);
     if (values.tunnel) {
-      const hdata = await healthCheckFull(host, port);
-      if (hdata?.tunnelUrl) {
-        console.log(`  Tunnel:    ${hdata.tunnelUrl}`);
+      // The tunnel starts asynchronously after the server is healthy —
+      // poll the health endpoint until the tunnel URL appears (up to 20s).
+      console.log(`  Tunnel:    waiting for cloudflared...`);
+      const tunnelUrl = await waitForTunnelUrl(host, port, 20000);
+      if (tunnelUrl) {
+        console.log(`  Tunnel:    ${tunnelUrl}`);
+        console.log(`  Webhooks:  ${tunnelUrl}/webhooks/<path>`);
+      } else {
+        console.log(`  Tunnel:    not available (check logs: drawlatch logs)`);
       }
     }
     console.log(`  Logs:      drawlatch logs`);
@@ -259,6 +265,17 @@ async function cmdStop() {
 async function cmdRestart() {
   const pid = readPid();
   if (pid) {
+    // If the previous server had an active tunnel, carry the flag forward
+    // so the restarted server also starts a tunnel (unless --tunnel is
+    // already set or the user explicitly omitted it).
+    if (!values.tunnel) {
+      const config = loadRemoteConfig();
+      const prevHealth = await healthCheckFull(config.host, config.port);
+      if (prevHealth?.tunnelUrl) {
+        console.log("Previous server had an active tunnel — re-enabling --tunnel.");
+        values.tunnel = true;
+      }
+    }
     await cmdStop();
   }
   await cmdStart();
@@ -459,6 +476,16 @@ async function healthCheckFull(host, port) {
   } catch {
     return null;
   }
+}
+
+async function waitForTunnelUrl(host, port, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const data = await healthCheckFull(host, port);
+    if (data?.tunnelUrl) return data.tunnelUrl;
+    await sleep(500);
+  }
+  return null;
 }
 
 async function waitForHealth(host, port, timeoutMs) {
