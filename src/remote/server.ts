@@ -657,6 +657,7 @@ export function createApp(options: CreateAppOptions = {}) {
       status: 'ok',
       activeSessions: sessions.size,
       uptime: process.uptime(),
+      tunnelUrl: process.env.DRAWLATCH_TUNNEL_URL ?? null,
     });
   });
 
@@ -709,33 +710,87 @@ export function main(): void {
   const config = loadRemoteConfig();
   const port = process.env.DRAWLATCH_PORT ? parseInt(process.env.DRAWLATCH_PORT, 10) : config.port;
   const host = process.env.DRAWLATCH_HOST ?? config.host;
+  const useTunnel = process.env.DRAWLATCH_TUNNEL === '1';
   const app = createApp();
   const ingestorManager = app.locals.ingestorManager as IngestorManager;
 
-  const server = app.listen(port, host, () => {
+  // Holds the tunnel stop function if a tunnel is active (set inside the
+  // listen callback, read by the shutdown handler — both share this scope).
+  let stopTunnel: (() => Promise<void>) | undefined;
+
+  const server = app.listen(port, host, async () => {
     console.log(`[remote] Secure remote server listening on ${host}:${port}`);
 
-    // Start ingestors after the server is listening
+    // If a tunnel was requested, start it before ingestors so that
+    // process.env.DRAWLATCH_TUNNEL_URL is available during secret resolution.
+    if (useTunnel) {
+      try {
+        const { startTunnel } = await import('./tunnel.js');
+        const tunnel = await startTunnel({ port, host });
+        stopTunnel = tunnel.stop;
+
+        process.env.DRAWLATCH_TUNNEL_URL = tunnel.url;
+
+        // Auto-populate callback URL env vars for webhook ingestors whose
+        // connection templates reference an env var that is not yet set.
+        for (const [callerAlias, callerConfig] of Object.entries(config.callers)) {
+          const rawRoutes = resolveCallerRoutes(config, callerAlias);
+          for (const route of rawRoutes) {
+            const callbackTpl = route.ingestor?.webhook?.callbackUrl;
+            const webhookPath = route.ingestor?.webhook?.path;
+            if (!callbackTpl || !webhookPath) continue;
+
+            // Extract env var name from "${VAR}" pattern
+            const match = /^\$\{(\w+)\}$/.exec(callbackTpl);
+            if (match) {
+              const envVar = match[1];
+              if (!process.env[envVar]) {
+                const fullUrl = `${tunnel.url}/webhooks/${webhookPath}`;
+                process.env[envVar] = fullUrl;
+                console.log(`[remote] Auto-set ${envVar}=${fullUrl}`);
+              }
+            }
+          }
+        }
+
+        console.log(`[remote] Tunnel active: ${tunnel.url}`);
+        console.log(`[remote] Webhook URL:   ${tunnel.url}/webhooks/<path>`);
+      } catch (err) {
+        console.error('[remote] Failed to start tunnel:', err);
+        console.error('[remote] Continuing without tunnel. Webhooks will only work on localhost.');
+      }
+    }
+
+    // Start ingestors after tunnel (if any) is ready
     ingestorManager.startAll().catch((err: unknown) => {
       console.error('[remote] Failed to start ingestors:', err);
     });
   });
 
-  // Graceful shutdown: stop ingestors, then close the server.
+  // Graceful shutdown: stop tunnel, then ingestors, then close the server.
   const shutdown = () => {
     console.log('[remote] Shutting down gracefully...');
 
-    ingestorManager
-      .stopAll()
-      .catch((err: unknown) => {
-        console.error('[remote] Error stopping ingestors:', err);
-      })
-      .finally(() => {
-        server.close(() => {
-          console.log('[remote] Server closed.');
-          process.exit(0);
+    // Stop tunnel first (fast — just kills a child process)
+    const tunnelDone = stopTunnel
+      ? stopTunnel().catch((err: unknown) => {
+          console.error('[remote] Error stopping tunnel:', err);
+        })
+      : Promise.resolve();
+
+    tunnelDone.then(() => {
+      ingestorManager
+        .stopAll()
+        .catch((err: unknown) => {
+          console.error('[remote] Error stopping ingestors:', err);
+        })
+        .finally(() => {
+          server.close(() => {
+            console.log('[remote] Server closed.');
+            process.exit(0);
+          });
         });
-      });
+    });
 
     // Force exit after 10 seconds if connections don't drain
     setTimeout(() => {
