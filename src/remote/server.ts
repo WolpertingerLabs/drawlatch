@@ -733,54 +733,61 @@ export function main(): void {
   // listen callback, read by the shutdown handler — both share this scope).
   let stopTunnel: (() => Promise<void>) | undefined;
 
-  const server = app.listen(port, host, async () => {
-    console.log(`[remote] Secure remote server listening on ${host}:${port}`);
+  const server = app.listen(
+    port,
+    host,
+    () =>
+      void (async () => {
+        console.log(`[remote] Secure remote server listening on ${host}:${port}`);
 
-    // If a tunnel was requested, start it before ingestors so that
-    // process.env.DRAWLATCH_TUNNEL_URL is available during secret resolution.
-    if (useTunnel) {
-      try {
-        const { startTunnel } = await import('./tunnel.js');
-        const tunnel = await startTunnel({ port, host });
-        stopTunnel = tunnel.stop;
+        // If a tunnel was requested, start it before ingestors so that
+        // process.env.DRAWLATCH_TUNNEL_URL is available during secret resolution.
+        if (useTunnel) {
+          try {
+            const { startTunnel } = await import('./tunnel.js');
+            const tunnel = await startTunnel({ port, host });
+            stopTunnel = tunnel.stop;
 
-        process.env.DRAWLATCH_TUNNEL_URL = tunnel.url;
+            process.env.DRAWLATCH_TUNNEL_URL = tunnel.url;
 
-        // Auto-populate callback URL env vars for webhook ingestors whose
-        // connection templates reference an env var that is not yet set.
-        for (const [callerAlias, callerConfig] of Object.entries(config.callers)) {
-          const rawRoutes = resolveCallerRoutes(config, callerAlias);
-          for (const route of rawRoutes) {
-            const callbackTpl = route.ingestor?.webhook?.callbackUrl;
-            const webhookPath = route.ingestor?.webhook?.path;
-            if (!callbackTpl || !webhookPath) continue;
+            // Auto-populate callback URL env vars for webhook ingestors whose
+            // connection templates reference an env var that is not yet set.
+            for (const [callerAlias, _callerConfig] of Object.entries(config.callers)) {
+              const rawRoutes = resolveCallerRoutes(config, callerAlias);
+              for (const route of rawRoutes) {
+                const callbackTpl = route.ingestor?.webhook?.callbackUrl;
+                const webhookPath = route.ingestor?.webhook?.path;
+                if (!callbackTpl || !webhookPath) continue;
 
-            // Extract env var name from "${VAR}" pattern
-            const match = /^\$\{(\w+)\}$/.exec(callbackTpl);
-            if (match) {
-              const envVar = match[1];
-              if (!process.env[envVar]) {
-                const fullUrl = `${tunnel.url}/webhooks/${webhookPath}`;
-                process.env[envVar] = fullUrl;
-                console.log(`[remote] Auto-set ${envVar}=${fullUrl}`);
+                // Extract env var name from "${VAR}" pattern
+                const match = /^\$\{(\w+)\}$/.exec(callbackTpl);
+                if (match) {
+                  const envVar = match[1];
+                  if (!process.env[envVar]) {
+                    const fullUrl = `${tunnel.url}/webhooks/${webhookPath}`;
+                    process.env[envVar] = fullUrl;
+                    console.log(`[remote] Auto-set ${envVar}=${fullUrl}`);
+                  }
+                }
               }
             }
+
+            console.log(`[remote] Tunnel active: ${tunnel.url}`);
+            console.log(`[remote] Webhook URL:   ${tunnel.url}/webhooks/<path>`);
+          } catch (err) {
+            console.error('[remote] Failed to start tunnel:', err);
+            console.error(
+              '[remote] Continuing without tunnel. Webhooks will only work on localhost.',
+            );
           }
         }
 
-        console.log(`[remote] Tunnel active: ${tunnel.url}`);
-        console.log(`[remote] Webhook URL:   ${tunnel.url}/webhooks/<path>`);
-      } catch (err) {
-        console.error('[remote] Failed to start tunnel:', err);
-        console.error('[remote] Continuing without tunnel. Webhooks will only work on localhost.');
-      }
-    }
-
-    // Start ingestors after tunnel (if any) is ready
-    ingestorManager.startAll().catch((err: unknown) => {
-      console.error('[remote] Failed to start ingestors:', err);
-    });
-  });
+        // Start ingestors after tunnel (if any) is ready
+        ingestorManager.startAll().catch((err: unknown) => {
+          console.error('[remote] Failed to start ingestors:', err);
+        });
+      })(),
+  );
 
   // Graceful shutdown: stop tunnel, then ingestors, then close the server.
   const shutdown = () => {
@@ -793,7 +800,7 @@ export function main(): void {
         })
       : Promise.resolve();
 
-    tunnelDone.then(() => {
+    void tunnelDone.then(() => {
       ingestorManager
         .stopAll()
         .catch((err: unknown) => {
