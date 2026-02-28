@@ -24,5 +24,43 @@
       "deduplicateBy": "id",
       "eventType": "stream_online"
     }
+  },
+  "testIngestor": {
+    "description": "Fetches the authenticated Twitch user to verify API access",
+    "strategy": "poll_once",
+    "request": {
+      "url": "https://api.twitch.tv/helix/users",
+      "expectedStatus": [200]
+    }
+  },
+  "listenerConfig": {
+    "name": "Twitch Poll Listener",
+    "description": "Polls Twitch for followed live streams at a configurable interval.",
+    "fields": [
+      {
+        "key": "intervalMs",
+        "label": "Poll Interval (ms)",
+        "description": "How often to check for live streams, in milliseconds.",
+        "type": "number",
+        "default": 60000,
+        "min": 10000,
+        "max": 3600000,
+        "group": "Connection"
+      },
+      {
+        "key": "bufferSize",
+        "label": "Buffer Size",
+        "description": "Maximum number of events to keep in memory.",
+        "type": "number",
+        "default": 200,
+        "min": 10,
+        "max": 1000,
+        "group": "Advanced"
+      }
+    ]
+  },
+  "testConnection": {
+    "url": "https://api.twitch.tv/helix/users",
+    "description": "Fetches the authenticated Twitch user"
   }
 }

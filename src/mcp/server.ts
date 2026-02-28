@@ -300,6 +300,166 @@ server.tool(
   },
 );
 
+/**
+ * Test connectivity for a specific connection by running a pre-configured,
+ * non-destructive read-only request against its API.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'test_connection',
+  'Test connectivity to a specific connection by making a non-destructive read-only request. Verifies that API credentials are valid. Returns success/failure with status details.',
+  {
+    connection: z.string().describe('Connection alias to test (e.g., "github", "discord-bot")'),
+  },
+  async ({ connection }) => {
+    try {
+      const result = await sendEncryptedRequest('test_connection', { connection });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
+ * Test event listener / ingestor configuration for a specific connection.
+ * Verifies credentials and listener parameters are correct.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'test_ingestor',
+  'Test event listener configuration for a connection. Verifies credentials and listener parameters are correct without starting the full listener. Returns success/failure with details.',
+  {
+    connection: z.string().describe('Connection alias to test listener for (e.g., "discord-bot")'),
+  },
+  async ({ connection }) => {
+    try {
+      const result = await sendEncryptedRequest('test_ingestor', { connection });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
+ * List listener configuration schemas for all connections with configurable event listeners.
+ * Returns field schemas that UIs can use to render configuration forms.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'list_listener_configs',
+  'List configurable event listener schemas for all connections. Returns field definitions (type, label, options, defaults) that can be used to render configuration forms.',
+  { _: z.string().optional().describe('unused') },
+  async () => {
+    try {
+      const result = await sendEncryptedRequest('list_listener_configs', {});
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
+ * Resolve dynamic options for a listener configuration field by fetching
+ * them from the external API (e.g., list of Trello boards, Discord guilds).
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'resolve_listener_options',
+  'Fetch dynamic options for a listener configuration field. Some fields (like Trello boards) require an API call to populate their options list.',
+  {
+    connection: z.string().describe('Connection alias (e.g., "trello")'),
+    paramKey: z.string().describe('The field key to resolve options for (e.g., "boardId")'),
+  },
+  async ({ connection, paramKey }) => {
+    try {
+      const result = await sendEncryptedRequest('resolve_listener_options', { connection, paramKey });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
+ * Start, stop, or restart an event listener for a specific connection.
+ * Controls the lifecycle of ingestors at runtime without restarting the server.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'control_listener',
+  'Start, stop, or restart an event listener for a connection. Stopping a listener pauses event collection; starting resumes it. Use restart after configuration changes.',
+  {
+    connection: z.string().describe('Connection alias (e.g., "discord-bot")'),
+    action: z.enum(['start', 'stop', 'restart']).describe('Lifecycle action to perform'),
+  },
+  async ({ connection, action }) => {
+    try {
+      const result = await sendEncryptedRequest('control_listener', { connection, action });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
 // ── Start ──────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {

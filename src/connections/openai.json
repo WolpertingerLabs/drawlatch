@@ -12,5 +12,9 @@
   },
   "allowedEndpoints": [
     "https://api.openai.com/**"
-  ]
+  ],
+  "testConnection": {
+    "url": "https://api.openai.com/v1/models",
+    "description": "Lists available models"
+  }
 }

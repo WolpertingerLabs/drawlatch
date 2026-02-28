@@ -11,5 +11,9 @@
   },
   "allowedEndpoints": [
     "https://generativelanguage.googleapis.com/**"
-  ]
+  ],
+  "testConnection": {
+    "url": "https://generativelanguage.googleapis.com/v1beta/models",
+    "description": "Lists available Gemini models"
+  }
 }
