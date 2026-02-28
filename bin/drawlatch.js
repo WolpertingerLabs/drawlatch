@@ -57,6 +57,7 @@ try {
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
       foreground: { type: "boolean", short: "f", default: false },
+      tunnel: { type: "boolean", short: "t", default: false },
       port: { type: "string" },
       host: { type: "string" },
       lines: { type: "string", short: "n", default: "50" },
@@ -182,6 +183,7 @@ async function cmdStart() {
       NODE_ENV: "production",
       ...(values.port ? { DRAWLATCH_PORT: String(port) } : {}),
       ...(values.host ? { DRAWLATCH_HOST: host } : {}),
+      ...(values.tunnel ? { DRAWLATCH_TUNNEL: "1" } : {}),
     },
     cwd: PKG_ROOT,
   });
@@ -195,6 +197,12 @@ async function cmdStart() {
   if (healthy) {
     console.log(`\nRemote server is running (PID ${child.pid}).`);
     console.log(`  Listening: ${host}:${port}`);
+    if (values.tunnel) {
+      const hdata = await healthCheckFull(host, port);
+      if (hdata?.tunnelUrl) {
+        console.log(`  Tunnel:    ${hdata.tunnelUrl}`);
+      }
+    }
     console.log(`  Logs:      drawlatch logs`);
   } else {
     console.log(
@@ -209,6 +217,7 @@ async function cmdStartForeground() {
   process.env.NODE_ENV = process.env.NODE_ENV || "production";
   if (values.port) process.env.DRAWLATCH_PORT = values.port;
   if (values.host) process.env.DRAWLATCH_HOST = values.host;
+  if (values.tunnel) process.env.DRAWLATCH_TUNNEL = "1";
 
   ensureConfigDir();
 
@@ -285,6 +294,9 @@ async function cmdStatus() {
   );
   if (healthData) {
     console.log(`  Active sessions: ${healthData.activeSessions}`);
+    if (healthData.tunnelUrl) {
+      console.log(`  Tunnel:          ${healthData.tunnelUrl}`);
+    }
   }
 }
 
@@ -537,6 +549,7 @@ Examples:
   drawlatch                            Show status or help
   drawlatch start                      Start remote server in background
   drawlatch start -f                   Start remote server in foreground
+  drawlatch start -f --tunnel          Start with a public tunnel for webhooks
   drawlatch start --port 8080          Start on a custom port
   drawlatch status                     Check if server is running
   drawlatch logs -n 100                View last 100 log lines
@@ -555,6 +568,7 @@ Usage: drawlatch start [options]
 
 Options:
   -f, --foreground   Run in foreground (default when no command given)
+  -t, --tunnel       Start a Cloudflare tunnel for webhook ingestion (requires cloudflared)
   --port <number>    Override the configured port
   --host <address>   Override the configured host
   -h, --help         Show this help message
