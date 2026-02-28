@@ -379,6 +379,7 @@ const toolHandlers: Record<string, ToolHandler> = {
     const routeList = routes.map((route, index) => {
       const info: Record<string, unknown> = { index };
 
+      if (route.alias) info.alias = route.alias;
       if (route.name) info.name = route.name;
       if (route.description) info.description = route.description;
       if (route.docsUrl) info.docsUrl = route.docsUrl;
@@ -387,6 +388,18 @@ const toolHandlers: Record<string, ToolHandler> = {
       info.allowedEndpoints = route.allowedEndpoints;
       info.secretNames = Object.keys(route.secrets);
       info.autoHeaders = Object.keys(route.headers);
+
+      // Ingestor & testing metadata
+      info.hasTestConnection = route.testConnection !== undefined;
+      info.hasIngestor = route.ingestorConfig !== undefined;
+      if (route.ingestorConfig) {
+        info.ingestorType = route.ingestorConfig.type;
+        info.hasTestIngestor = route.testIngestor !== undefined && route.testIngestor !== null;
+        info.hasListenerConfig = route.listenerConfig !== undefined;
+        if (route.listenerConfig) {
+          info.listenerParamKeys = route.listenerConfig.fields.map((f) => f.key);
+        }
+      }
 
       return info;
     });
@@ -418,6 +431,296 @@ const toolHandlers: Record<string, ToolHandler> = {
    */
   ingestor_status(_input, _routes, context) {
     return Promise.resolve(context.ingestorManager.getStatuses(context.callerAlias));
+  },
+
+  /**
+   * Test a connection's API credentials by executing a pre-configured,
+   * non-destructive read-only request. Returns success/failure with status details.
+   */
+  async test_connection(input, routes, _context) {
+    const { connection } = input as { connection: string };
+
+    // Find the route matching this connection alias
+    const route = routes.find((r) => r.alias === connection);
+    if (!route) {
+      return { success: false, connection, error: `Unknown connection: ${connection}` };
+    }
+
+    if (!route.testConnection) {
+      return {
+        success: false,
+        connection,
+        supported: false,
+        error: 'This connection does not have a test configuration.',
+      };
+    }
+
+    const testConfig = route.testConnection;
+    const method = testConfig.method ?? 'GET';
+    const expectedStatus = testConfig.expectedStatus ?? [200];
+
+    try {
+      const result = await executeProxyRequest(
+        {
+          method,
+          url: testConfig.url,
+          headers: testConfig.headers,
+          body: testConfig.body,
+        },
+        routes,
+      );
+
+      const isSuccess = expectedStatus.includes(result.status);
+      return {
+        success: isSuccess,
+        connection,
+        status: result.status,
+        statusText: result.statusText,
+        description: testConfig.description,
+        ...(isSuccess ? {} : { error: `Unexpected status ${result.status} (expected ${expectedStatus.join(' or ')})` }),
+      };
+    } catch (err) {
+      return {
+        success: false,
+        connection,
+        description: testConfig.description,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+
+  /**
+   * Test an event listener / ingestor's configuration by running a lightweight
+   * verification appropriate to its type (auth check, secret check, poll check).
+   */
+  async test_ingestor(input, routes, _context) {
+    const { connection } = input as { connection: string };
+
+    const route = routes.find((r) => r.alias === connection);
+    if (!route) {
+      return { success: false, connection, error: `Unknown connection: ${connection}` };
+    }
+
+    if (!route.ingestorConfig) {
+      return {
+        success: false,
+        connection,
+        supported: false,
+        error: 'This connection does not have an event listener.',
+      };
+    }
+
+    // testIngestor is explicitly null = not testable
+    if (route.testIngestor === null) {
+      return {
+        success: false,
+        connection,
+        supported: false,
+        error: 'This event listener does not support testing.',
+      };
+    }
+
+    if (!route.testIngestor) {
+      return {
+        success: false,
+        connection,
+        supported: false,
+        error: 'This event listener does not have a test configuration.',
+      };
+    }
+
+    const testConfig = route.testIngestor;
+
+    try {
+      switch (testConfig.strategy) {
+        case 'webhook_verify': {
+          // Verify that all required secrets are present and non-empty
+          const missing: string[] = [];
+          for (const secretName of testConfig.requireSecrets ?? []) {
+            if (!route.secrets[secretName]) {
+              missing.push(secretName);
+            }
+          }
+          if (missing.length > 0) {
+            return {
+              success: false,
+              connection,
+              strategy: testConfig.strategy,
+              description: testConfig.description,
+              error: `Missing required secrets: ${missing.join(', ')}`,
+            };
+          }
+          return {
+            success: true,
+            connection,
+            strategy: testConfig.strategy,
+            description: testConfig.description,
+            message: 'All required webhook secrets are configured.',
+          };
+        }
+
+        case 'websocket_auth':
+        case 'http_request':
+        case 'poll_once': {
+          // Execute the test HTTP request
+          if (!testConfig.request) {
+            return {
+              success: false,
+              connection,
+              strategy: testConfig.strategy,
+              description: testConfig.description,
+              error: 'Test configuration missing request details.',
+            };
+          }
+
+          const method = testConfig.request.method ?? 'GET';
+          const expectedStatus = testConfig.request.expectedStatus ?? [200];
+
+          const result = await executeProxyRequest(
+            {
+              method,
+              url: testConfig.request.url,
+              headers: testConfig.request.headers,
+              body: testConfig.request.body,
+            },
+            routes,
+          );
+
+          const isSuccess = expectedStatus.includes(result.status);
+          return {
+            success: isSuccess,
+            connection,
+            strategy: testConfig.strategy,
+            status: result.status,
+            statusText: result.statusText,
+            description: testConfig.description,
+            ...(isSuccess ? { message: 'Listener test passed.' } : { error: `Unexpected status ${result.status}` }),
+          };
+        }
+
+        default:
+          return {
+            success: false,
+            connection,
+            error: `Unknown test strategy: ${String(testConfig.strategy)}`,
+          };
+      }
+    } catch (err) {
+      return {
+        success: false,
+        connection,
+        strategy: testConfig.strategy,
+        description: testConfig.description,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+
+  /**
+   * List listener configuration schemas for all connections that have configurable
+   * event listeners. Returns the schema fields, current values, and metadata.
+   */
+  list_listener_configs(_input, routes, _context) {
+    const configs = routes
+      .filter((r) => r.listenerConfig)
+      .map((r) => ({
+        connection: r.alias,
+        name: r.listenerConfig!.name,
+        description: r.listenerConfig!.description,
+        fields: r.listenerConfig!.fields,
+        ingestorType: r.ingestorConfig?.type,
+      }));
+    return Promise.resolve(configs);
+  },
+
+  /**
+   * Resolve dynamic options for a listener configuration field.
+   * Fetches options from the external API (e.g., list of Trello boards).
+   */
+  async resolve_listener_options(input, routes, _context) {
+    const { connection, paramKey } = input as { connection: string; paramKey: string };
+
+    const route = routes.find((r) => r.alias === connection);
+    if (!route?.listenerConfig) {
+      return { success: false, error: `No listener config for connection: ${connection}` };
+    }
+
+    const field = route.listenerConfig.fields.find((f) => f.key === paramKey);
+    if (!field?.dynamicOptions) {
+      return { success: false, error: `No dynamic options for field: ${paramKey}` };
+    }
+
+    const { url, method = 'GET', body, responsePath, labelField, valueField } = field.dynamicOptions;
+
+    try {
+      const result = await executeProxyRequest(
+        { method, url, headers: {}, body },
+        routes,
+      );
+
+      // Navigate to the response path to find the items array
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- navigating unknown response shape
+      let items: any = result.body;
+      if (responsePath) {
+        for (const segment of responsePath.split('.')) {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+          items = items?.[segment as keyof typeof items];
+        }
+      }
+
+      if (!Array.isArray(items)) {
+        return { success: false, error: 'Response did not contain an array at the expected path.' };
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const options = items.map((item) => ({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+        value: item[valueField],
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+        label: item[labelField],
+      }));
+
+      return { success: true, connection, paramKey, options };
+    } catch (err) {
+      return {
+        success: false,
+        connection,
+        paramKey,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+
+  /**
+   * Start, stop, or restart an event listener for a specific connection.
+   */
+  async control_listener(input, _routes, context) {
+    const { connection, action } = input as {
+      connection: string;
+      action: 'start' | 'stop' | 'restart';
+    };
+
+    const mgr = context.ingestorManager;
+
+    try {
+      switch (action) {
+        case 'start':
+          return await mgr.startOne(context.callerAlias, connection);
+        case 'stop':
+          return await mgr.stopOne(context.callerAlias, connection);
+        case 'restart':
+          return await mgr.restartOne(context.callerAlias, connection);
+        default:
+          return { success: false, error: `Unknown action: ${String(action)}` };
+      }
+    } catch (err) {
+      return {
+        success: false,
+        connection,
+        action,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   },
 };
 

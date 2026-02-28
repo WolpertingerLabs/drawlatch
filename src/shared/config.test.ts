@@ -386,6 +386,183 @@ describe('resolveRoutes', () => {
     // Route B should NOT resolve TOKEN_A (it only has TOKEN_B)
     expect(routes[1].headers).toEqual({ Authorization: 'Bearer ${TOKEN_A}' });
   });
+
+  // ── New field carry-through tests ──────────────────────────────────────
+
+  it('should carry through alias when present', () => {
+    const routes = resolveRoutes([
+      {
+        alias: 'github',
+        secrets: { TOKEN: 'tok' },
+        allowedEndpoints: ['https://api.github.com/**'],
+      },
+    ]);
+    expect(routes[0].alias).toBe('github');
+  });
+
+  it('should not set alias when not present', () => {
+    const routes = resolveRoutes([
+      {
+        secrets: { TOKEN: 'tok' },
+        allowedEndpoints: ['https://api.example.com/**'],
+      },
+    ]);
+    expect(routes[0].alias).toBeUndefined();
+  });
+
+  it('should carry through testConnection when present', () => {
+    const testConnection = {
+      url: 'https://api.github.com/user',
+      description: 'Test GitHub credentials',
+    };
+    const routes = resolveRoutes([
+      {
+        secrets: { TOKEN: 'tok' },
+        allowedEndpoints: ['https://api.github.com/**'],
+        testConnection,
+      },
+    ]);
+    expect(routes[0].testConnection).toEqual(testConnection);
+  });
+
+  it('should not set testConnection when not present', () => {
+    const routes = resolveRoutes([
+      {
+        secrets: { TOKEN: 'tok' },
+        allowedEndpoints: ['https://api.example.com/**'],
+      },
+    ]);
+    expect(routes[0].testConnection).toBeUndefined();
+  });
+
+  it('should carry through testIngestor when present', () => {
+    const testIngestor = {
+      description: 'Test webhook config',
+      strategy: 'webhook_verify' as const,
+      requireSecrets: ['WEBHOOK_SECRET'],
+    };
+    const routes = resolveRoutes([
+      {
+        secrets: { TOKEN: 'tok' },
+        allowedEndpoints: ['https://api.example.com/**'],
+        testIngestor,
+      },
+    ]);
+    expect(routes[0].testIngestor).toEqual(testIngestor);
+  });
+
+  it('should carry through testIngestor when explicitly null', () => {
+    const routes = resolveRoutes([
+      {
+        secrets: { TOKEN: 'tok' },
+        allowedEndpoints: ['https://api.example.com/**'],
+        testIngestor: null,
+      },
+    ]);
+    expect(routes[0].testIngestor).toBeNull();
+  });
+
+  it('should not set testIngestor when not present', () => {
+    const routes = resolveRoutes([
+      {
+        secrets: { TOKEN: 'tok' },
+        allowedEndpoints: ['https://api.example.com/**'],
+      },
+    ]);
+    expect(routes[0].testIngestor).toBeUndefined();
+  });
+
+  it('should carry through listenerConfig when present', () => {
+    const listenerConfig = {
+      name: 'Discord Gateway Listener',
+      description: 'Listens to Discord events',
+      fields: [
+        {
+          key: 'guildIds',
+          label: 'Guild IDs',
+          type: 'text[]' as const,
+          default: [],
+        },
+      ],
+    };
+    const routes = resolveRoutes([
+      {
+        secrets: { TOKEN: 'tok' },
+        allowedEndpoints: ['https://discord.com/api/**'],
+        listenerConfig,
+      },
+    ]);
+    expect(routes[0].listenerConfig).toEqual(listenerConfig);
+  });
+
+  it('should not set listenerConfig when not present', () => {
+    const routes = resolveRoutes([
+      {
+        secrets: { TOKEN: 'tok' },
+        allowedEndpoints: ['https://api.example.com/**'],
+      },
+    ]);
+    expect(routes[0].listenerConfig).toBeUndefined();
+  });
+
+  it('should carry through ingestorConfig (from ingestor) when present', () => {
+    const ingestor = {
+      type: 'webhook' as const,
+      webhook: { path: 'github', signatureHeader: 'X-Hub-Signature-256', signatureSecret: 'GITHUB_WEBHOOK_SECRET' },
+    };
+    const routes = resolveRoutes([
+      {
+        secrets: { TOKEN: 'tok' },
+        allowedEndpoints: ['https://api.github.com/**'],
+        ingestor,
+      },
+    ]);
+    expect(routes[0].ingestorConfig).toEqual(ingestor);
+  });
+
+  it('should not set ingestorConfig when not present', () => {
+    const routes = resolveRoutes([
+      {
+        secrets: { TOKEN: 'tok' },
+        allowedEndpoints: ['https://api.example.com/**'],
+      },
+    ]);
+    expect(routes[0].ingestorConfig).toBeUndefined();
+  });
+
+  it('should carry through all new fields together', () => {
+    const testConnection = { url: 'https://api.github.com/user', description: 'Test' };
+    const testIngestor = { description: 'Verify webhook', strategy: 'webhook_verify' as const, requireSecrets: ['SECRET'] };
+    const listenerConfig = { name: 'Listener', fields: [{ key: 'eventFilter', label: 'Events', type: 'multiselect' as const }] };
+    const ingestor = { type: 'webhook' as const, webhook: { path: 'github' } };
+
+    const routes = resolveRoutes([
+      {
+        alias: 'github',
+        name: 'GitHub API',
+        description: 'GitHub',
+        docsUrl: 'https://docs.github.com',
+        openApiUrl: 'https://raw.github.com/openapi.json',
+        secrets: { TOKEN: 'tok' },
+        allowedEndpoints: ['https://api.github.com/**'],
+        testConnection,
+        testIngestor,
+        listenerConfig,
+        ingestor,
+      },
+    ]);
+
+    const resolved = routes[0];
+    expect(resolved.alias).toBe('github');
+    expect(resolved.name).toBe('GitHub API');
+    expect(resolved.description).toBe('GitHub');
+    expect(resolved.docsUrl).toBe('https://docs.github.com');
+    expect(resolved.openApiUrl).toBe('https://raw.github.com/openapi.json');
+    expect(resolved.testConnection).toEqual(testConnection);
+    expect(resolved.testIngestor).toEqual(testIngestor);
+    expect(resolved.listenerConfig).toEqual(listenerConfig);
+    expect(resolved.ingestorConfig).toEqual(ingestor);
+  });
 });
 
 describe('config exports', () => {
@@ -816,6 +993,116 @@ describe('resolveCallerRoutes', () => {
     expect(routes).toHaveLength(1);
     expect(routes[0].name).toBe('Custom GitHub Override');
     expect(routes[0].allowedEndpoints).toEqual(['https://custom-github.example.com/**']);
+  });
+
+  it('should inject alias into routes from built-in templates', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      return String(p).endsWith('test-conn.json');
+    });
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
+      if (String(p).endsWith('test-conn.json')) {
+        return JSON.stringify({
+          name: 'Test Connection',
+          allowedEndpoints: ['https://api.test.com/**'],
+          // Note: no alias property in the template
+        });
+      }
+      throw new Error(`Unexpected read: ${String(p)}`);
+    });
+
+    const config = {
+      host: '127.0.0.1',
+      port: 9999,
+      localKeysDir: '',
+      callers: {
+        laptop: { peerKeyDir: '/keys/laptop', connections: ['test-conn'] },
+      },
+      rateLimitPerMinute: 60,
+    };
+
+    const routes = resolveCallerRoutes(config, 'laptop');
+
+    expect(routes).toHaveLength(1);
+    // The alias should be injected from the connection name
+    expect(routes[0].alias).toBe('test-conn');
+
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
+  it('should preserve existing alias when it matches connection name', () => {
+    const config = {
+      host: '127.0.0.1',
+      port: 9999,
+      localKeysDir: '',
+      connectors: [
+        {
+          alias: 'custom-api',
+          name: 'Custom API',
+          allowedEndpoints: ['https://api.custom.com/**'],
+        },
+      ],
+      callers: {
+        laptop: { peerKeyDir: '/keys/laptop', connections: ['custom-api'] },
+      },
+      rateLimitPerMinute: 60,
+    };
+
+    const routes = resolveCallerRoutes(config, 'laptop');
+
+    expect(routes).toHaveLength(1);
+    expect(routes[0].alias).toBe('custom-api');
+  });
+
+  it('should carry testConnection through resolveCallerRoutes', () => {
+    const testConnection = { url: 'https://api.example.com/me', description: 'Check creds' };
+    const config = {
+      host: '127.0.0.1',
+      port: 9999,
+      localKeysDir: '',
+      connectors: [
+        {
+          alias: 'my-api',
+          allowedEndpoints: ['https://api.example.com/**'],
+          testConnection,
+        },
+      ],
+      callers: {
+        laptop: { peerKeyDir: '/keys/laptop', connections: ['my-api'] },
+      },
+      rateLimitPerMinute: 60,
+    };
+
+    const routes = resolveCallerRoutes(config, 'laptop');
+    expect(routes[0].testConnection).toEqual(testConnection);
+  });
+
+  it('should carry testIngestor and listenerConfig through resolveCallerRoutes', () => {
+    const testIngestor = { description: 'Verify webhook', strategy: 'webhook_verify' as const };
+    const listenerConfig = { name: 'Listener', fields: [{ key: 'eventFilter', label: 'Events', type: 'multiselect' as const }] };
+    const config = {
+      host: '127.0.0.1',
+      port: 9999,
+      localKeysDir: '',
+      connectors: [
+        {
+          alias: 'my-api',
+          allowedEndpoints: ['https://api.example.com/**'],
+          ingestor: { type: 'webhook' as const, webhook: { path: 'myapi' } },
+          testIngestor,
+          listenerConfig,
+        },
+      ],
+      callers: {
+        laptop: { peerKeyDir: '/keys/laptop', connections: ['my-api'] },
+      },
+      rateLimitPerMinute: 60,
+    };
+
+    const routes = resolveCallerRoutes(config, 'laptop');
+    expect(routes[0].testIngestor).toEqual(testIngestor);
+    expect(routes[0].listenerConfig).toEqual(listenerConfig);
+    expect(routes[0].ingestor).toBeDefined();
   });
 
   it('should handle config with no connectors array', () => {

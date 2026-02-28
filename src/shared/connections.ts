@@ -37,6 +37,12 @@ export interface ConnectionTemplateInfo {
   hasIngestor: boolean;
   /** Ingestor type, when present. */
   ingestorType?: 'websocket' | 'webhook' | 'poll';
+  /** Whether this connection has a pre-configured test request. */
+  hasTestConnection: boolean;
+  /** Whether this connection's ingestor has a pre-configured test. */
+  hasTestIngestor: boolean;
+  /** Whether this connection has a listener configuration schema. */
+  hasListenerConfig: boolean;
   /** Allowlisted URL patterns (glob). */
   allowedEndpoints: string[];
 }
@@ -143,6 +149,9 @@ export function listConnectionTemplates(): ConnectionTemplateInfo[] {
       optionalSecrets,
       hasIngestor: route.ingestor !== undefined,
       ...(route.ingestor !== undefined && { ingestorType: route.ingestor.type }),
+      hasTestConnection: route.testConnection !== undefined,
+      hasTestIngestor: route.testIngestor !== undefined && route.testIngestor !== null,
+      hasListenerConfig: route.listenerConfig !== undefined,
       allowedEndpoints: route.allowedEndpoints,
     };
   });

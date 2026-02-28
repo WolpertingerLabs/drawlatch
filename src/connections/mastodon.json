@@ -21,5 +21,43 @@
       "deduplicateBy": "id",
       "eventType": "status"
     }
+  },
+  "testIngestor": {
+    "description": "Verifies Mastodon credentials by checking account",
+    "strategy": "poll_once",
+    "request": {
+      "url": "https://mastodon.social/api/v1/accounts/verify_credentials",
+      "expectedStatus": [200]
+    }
+  },
+  "listenerConfig": {
+    "name": "Mastodon Poll Listener",
+    "description": "Polls the Mastodon home timeline at a configurable interval.",
+    "fields": [
+      {
+        "key": "intervalMs",
+        "label": "Poll Interval (ms)",
+        "description": "How often to check for new statuses, in milliseconds.",
+        "type": "number",
+        "default": 60000,
+        "min": 10000,
+        "max": 3600000,
+        "group": "Connection"
+      },
+      {
+        "key": "bufferSize",
+        "label": "Buffer Size",
+        "description": "Maximum number of events to keep in memory.",
+        "type": "number",
+        "default": 200,
+        "min": 10,
+        "max": 1000,
+        "group": "Advanced"
+      }
+    ]
+  },
+  "testConnection": {
+    "url": "https://mastodon.social/api/v1/accounts/verify_credentials",
+    "description": "Verifies Mastodon account credentials"
   }
 }

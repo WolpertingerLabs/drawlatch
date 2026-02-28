@@ -191,6 +191,143 @@ export class IngestorManager {
     return matches;
   }
 
+  // ── Runtime lifecycle control ──────────────────────────────────────────
+
+  /**
+   * Start a single ingestor for a specific caller+connection pair.
+   * Creates the ingestor if it doesn't exist, or restarts it if stopped.
+   */
+  async startOne(
+    callerAlias: string,
+    connectionAlias: string,
+  ): Promise<{ success: boolean; connection: string; state?: string; error?: string }> {
+    const key = `${callerAlias}:${connectionAlias}`;
+
+    // If already running, return current status
+    const existing = this.ingestors.get(key);
+    if (existing) {
+      const status = existing.getStatus();
+      if (status.state === 'connected' || status.state === 'starting' || status.state === 'reconnecting') {
+        return { success: true, connection: connectionAlias, state: status.state };
+      }
+    }
+
+    // Resolve the route and ingestor config
+    const callerConfig = this.config.callers[callerAlias];
+    if (!callerConfig) {
+      return { success: false, connection: connectionAlias, error: `Unknown caller: ${callerAlias}` };
+    }
+
+    const connectionIndex = callerConfig.connections.indexOf(connectionAlias);
+    if (connectionIndex === -1) {
+      return { success: false, connection: connectionAlias, error: `Caller does not have connection: ${connectionAlias}` };
+    }
+
+    const rawRoutes = resolveCallerRoutes(this.config, callerAlias);
+    const callerEnvResolved = resolveSecrets(callerConfig.env ?? {});
+    const resolvedRoutes = resolveRoutes(rawRoutes, callerEnvResolved);
+
+    const rawRoute = rawRoutes[connectionIndex];
+    const resolvedRoute = resolvedRoutes[connectionIndex];
+
+    if (!rawRoute.ingestor) {
+      return { success: false, connection: connectionAlias, error: 'This connection does not have an ingestor.' };
+    }
+
+    // Remove existing stopped ingestor (if any) before creating a new one
+    if (existing) {
+      this.ingestors.delete(key);
+    }
+
+    const overrides = callerConfig.ingestorOverrides?.[connectionAlias];
+    const effectiveConfig = IngestorManager.mergeIngestorConfig(rawRoute.ingestor, overrides);
+
+    if (effectiveConfig.type === 'poll') {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+      (effectiveConfig as any)._resolvedRouteHeaders = resolvedRoute.headers;
+    }
+
+    const ingestor = createIngestor(
+      connectionAlias,
+      effectiveConfig,
+      resolvedRoute.secrets,
+      overrides?.bufferSize,
+    );
+
+    if (!ingestor) {
+      return { success: false, connection: connectionAlias, error: 'Failed to create ingestor.' };
+    }
+
+    this.ingestors.set(key, ingestor);
+    log.info(`Starting ${effectiveConfig.type} ingestor for ${key}`);
+
+    try {
+      await ingestor.start();
+      return { success: true, connection: connectionAlias, state: ingestor.getStatus().state };
+    } catch (err) {
+      log.error(`Failed to start ${key}:`, err);
+      return {
+        success: false,
+        connection: connectionAlias,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /**
+   * Stop a single ingestor for a specific caller+connection pair.
+   */
+  async stopOne(
+    callerAlias: string,
+    connectionAlias: string,
+  ): Promise<{ success: boolean; connection: string; state?: string; error?: string }> {
+    const key = `${callerAlias}:${connectionAlias}`;
+    const ingestor = this.ingestors.get(key);
+
+    if (!ingestor) {
+      return { success: false, connection: connectionAlias, error: 'No ingestor running for this connection.' };
+    }
+
+    log.info(`Stopping ${key}`);
+    try {
+      await ingestor.stop();
+      this.ingestors.delete(key);
+      return { success: true, connection: connectionAlias, state: 'stopped' };
+    } catch (err) {
+      log.error(`Error stopping ${key}:`, err);
+      return {
+        success: false,
+        connection: connectionAlias,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /**
+   * Restart a single ingestor (stop + start). Useful after configuration changes.
+   */
+  async restartOne(
+    callerAlias: string,
+    connectionAlias: string,
+  ): Promise<{ success: boolean; connection: string; state?: string; error?: string }> {
+    const key = `${callerAlias}:${connectionAlias}`;
+
+    // Stop if running
+    if (this.ingestors.has(key)) {
+      await this.stopOne(callerAlias, connectionAlias);
+    }
+
+    // Start fresh
+    return this.startOne(callerAlias, connectionAlias);
+  }
+
+  /**
+   * Check if an ingestor exists (running or otherwise) for a caller+connection pair.
+   */
+  has(callerAlias: string, connectionAlias: string): boolean {
+    return this.ingestors.has(`${callerAlias}:${connectionAlias}`);
+  }
+
   /**
    * Merge caller-level ingestor overrides into a copy of the template config.
    * Override fields replace template values; omitted fields inherit the template defaults.

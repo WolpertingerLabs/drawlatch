@@ -2227,3 +2227,941 @@ describe('Webhook ingestor', () => {
     expect(cursorEvents.every((e) => e.id > lastButOneId)).toBe(true);
   });
 });
+
+// ── New tool handler tests ──────────────────────────────────────────────
+
+describe('test_connection tool', () => {
+  let testServer: Server;
+  let testServerUrl: string;
+
+  let echoServer: Server;
+  let echoUrl: string;
+
+  let tcClientKeys: KeyBundle;
+  let tcServerKeys: KeyBundle;
+
+  beforeAll(async () => {
+    tcClientKeys = generateKeyBundle();
+    tcServerKeys = generateKeyBundle();
+    const tcClientPub = extractPublicKeys(tcClientKeys);
+    const tcServerPub = extractPublicKeys(tcServerKeys);
+
+    // Create a simple echo server that returns 200 for GET requests
+    const echoApp = http.createServer((req, res) => {
+      if (req.url === '/me') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ user: 'test-user', id: 123 }));
+      } else if (req.url === '/auth.test' && req.method === 'POST') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, user: 'bot-user' }));
+      } else if (req.url === '/fail') {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+      } else {
+        res.writeHead(404);
+        res.end('not found');
+      }
+    });
+
+    await new Promise<void>((resolve) => {
+      echoServer = echoApp.listen(0, '127.0.0.1', () => {
+        const addr = echoServer.address() as AddressInfo;
+        echoUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      localKeysDir: '',
+      connectors: [
+        {
+          alias: 'test-api',
+          name: 'Test API',
+          secrets: { TOKEN: 'test-token' },
+          headers: { Authorization: 'Bearer ${TOKEN}' },
+          allowedEndpoints: [`${echoUrl}/**`],
+          testConnection: {
+            url: `${echoUrl}/me`,
+            description: 'Fetches the authenticated user',
+          },
+        },
+        {
+          alias: 'test-api-post',
+          name: 'Test API Post',
+          secrets: { TOKEN: 'test-token' },
+          headers: { Authorization: 'Bearer ${TOKEN}' },
+          allowedEndpoints: [`${echoUrl}/**`],
+          testConnection: {
+            method: 'POST',
+            url: `${echoUrl}/auth.test`,
+            description: 'Tests auth via POST',
+          },
+        },
+        {
+          alias: 'test-api-fail',
+          name: 'Test API Fail',
+          secrets: { TOKEN: 'bad-token' },
+          headers: { Authorization: 'Bearer ${TOKEN}' },
+          allowedEndpoints: [`${echoUrl}/**`],
+          testConnection: {
+            url: `${echoUrl}/fail`,
+            description: 'Expected to fail',
+            expectedStatus: [200],
+          },
+        },
+        {
+          alias: 'no-test',
+          name: 'No Test API',
+          secrets: { TOKEN: 'tok' },
+          allowedEndpoints: [`${echoUrl}/**`],
+          // No testConnection
+        },
+      ],
+      callers: {
+        'tc-client': {
+          peerKeyDir: '',
+          connections: ['test-api', 'test-api-post', 'test-api-fail', 'no-test'],
+        },
+      },
+      rateLimitPerMinute: 60,
+    };
+
+    const app = createApp({
+      config,
+      ownKeys: tcServerKeys,
+      authorizedPeers: [{ alias: 'tc-client', keys: tcClientPub }],
+    });
+
+    await new Promise<void>((resolve) => {
+      testServer = app.listen(0, '127.0.0.1', () => {
+        const addr = testServer.address() as AddressInfo;
+        testServerUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await Promise.all([
+      new Promise<void>((r, j) => testServer.close((e) => (e ? j(e) : r()))),
+      new Promise<void>((r, j) => echoServer.close((e) => (e ? j(e) : r()))),
+    ]);
+  });
+
+  async function tcHandshake(): Promise<EncryptedChannel> {
+    const initiator = new HandshakeInitiator(
+      tcClientKeys,
+      extractPublicKeys(tcServerKeys),
+    );
+    const initMsg = initiator.createInit();
+    const initResp = await fetch(`${testServerUrl}/handshake/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(initMsg),
+    });
+    expect(initResp.ok).toBe(true);
+    const reply = (await initResp.json()) as HandshakeReply;
+    const sessionKeys = initiator.processReply(reply);
+    const channel = new EncryptedChannel(sessionKeys);
+
+    const finishMsg = initiator.createFinish(sessionKeys);
+    const finishResp = await fetch(`${testServerUrl}/handshake/finish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Id': sessionKeys.sessionId,
+      },
+      body: JSON.stringify(finishMsg),
+    });
+    expect(finishResp.ok).toBe(true);
+    return channel;
+  }
+
+  async function tcSendRequest(
+    channel: EncryptedChannel,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+  ): Promise<ProxyResponse> {
+    const request: ProxyRequest = {
+      type: 'proxy_request',
+      id: crypto.randomUUID(),
+      toolName,
+      toolInput,
+      timestamp: Date.now(),
+    };
+    const encrypted = channel.encryptJSON(request);
+    const resp = await fetch(`${testServerUrl}/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Session-Id': channel.sessionId,
+      },
+      body: new Uint8Array(encrypted),
+    });
+    expect(resp.ok).toBe(true);
+    return channel.decryptJSON<ProxyResponse>(Buffer.from(await resp.arrayBuffer()));
+  }
+
+  it('should successfully test a connection with GET', async () => {
+    const channel = await tcHandshake();
+    const response = await tcSendRequest(channel, 'test_connection', { connection: 'test-api' });
+    expect(response.success).toBe(true);
+
+    const result = response.result as Record<string, unknown>;
+    expect(result.success).toBe(true);
+    expect(result.connection).toBe('test-api');
+    expect(result.status).toBe(200);
+    expect(result.description).toBe('Fetches the authenticated user');
+  });
+
+  it('should successfully test a connection with POST', async () => {
+    const channel = await tcHandshake();
+    const response = await tcSendRequest(channel, 'test_connection', { connection: 'test-api-post' });
+    expect(response.success).toBe(true);
+
+    const result = response.result as Record<string, unknown>;
+    expect(result.success).toBe(true);
+    expect(result.status).toBe(200);
+  });
+
+  it('should report failure when test connection returns unexpected status', async () => {
+    const channel = await tcHandshake();
+    const response = await tcSendRequest(channel, 'test_connection', { connection: 'test-api-fail' });
+    expect(response.success).toBe(true);
+
+    const result = response.result as Record<string, unknown>;
+    expect(result.success).toBe(false);
+    expect(result.status).toBe(401);
+    expect(result.error).toContain('Unexpected status');
+  });
+
+  it('should return error for connection without testConnection config', async () => {
+    const channel = await tcHandshake();
+    const response = await tcSendRequest(channel, 'test_connection', { connection: 'no-test' });
+    expect(response.success).toBe(true);
+
+    const result = response.result as Record<string, unknown>;
+    expect(result.success).toBe(false);
+    expect(result.supported).toBe(false);
+    expect(result.error).toContain('does not have a test configuration');
+  });
+
+  it('should return error for unknown connection', async () => {
+    const channel = await tcHandshake();
+    const response = await tcSendRequest(channel, 'test_connection', { connection: 'nonexistent' });
+    expect(response.success).toBe(true);
+
+    const result = response.result as Record<string, unknown>;
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Unknown connection');
+  });
+});
+
+describe('test_ingestor tool', () => {
+  let tiServer: Server;
+  let tiServerUrl: string;
+
+  let echoServer: Server;
+  let echoUrl: string;
+
+  let tiClientKeys: KeyBundle;
+  let tiServerKeys: KeyBundle;
+
+  beforeAll(async () => {
+    tiClientKeys = generateKeyBundle();
+    tiServerKeys = generateKeyBundle();
+    const tiClientPub = extractPublicKeys(tiClientKeys);
+
+    // Create an echo server for HTTP-based ingestor tests
+    const echoApp = http.createServer((req, res) => {
+      if (req.url?.includes('webhooks') || req.url === '/connections.open') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } else {
+        res.writeHead(404);
+        res.end('not found');
+      }
+    });
+
+    await new Promise<void>((resolve) => {
+      echoServer = echoApp.listen(0, '127.0.0.1', () => {
+        const addr = echoServer.address() as AddressInfo;
+        echoUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      localKeysDir: '',
+      connectors: [
+        {
+          alias: 'webhook-conn',
+          name: 'Webhook Connection',
+          secrets: { TOKEN: 'tok', WEBHOOK_SECRET: 'wh-secret' },
+          allowedEndpoints: [`${echoUrl}/**`],
+          ingestor: { type: 'webhook', webhook: { path: 'test' } },
+          testIngestor: {
+            description: 'Verify webhook secrets',
+            strategy: 'webhook_verify',
+            requireSecrets: ['WEBHOOK_SECRET'],
+          },
+        },
+        {
+          alias: 'http-conn',
+          name: 'HTTP Ingestor Connection',
+          secrets: { TOKEN: 'tok' },
+          allowedEndpoints: [`${echoUrl}/**`],
+          ingestor: { type: 'webhook', webhook: { path: 'test2' } },
+          testIngestor: {
+            description: 'Test via HTTP request',
+            strategy: 'http_request',
+            request: {
+              url: `${echoUrl}/webhooks`,
+              expectedStatus: [200],
+            },
+          },
+        },
+        {
+          alias: 'null-test-conn',
+          name: 'Null Test Connection',
+          secrets: { TOKEN: 'tok' },
+          allowedEndpoints: [`${echoUrl}/**`],
+          ingestor: { type: 'webhook', webhook: { path: 'test3' } },
+          testIngestor: null,
+        },
+        {
+          alias: 'no-ingestor-conn',
+          name: 'No Ingestor Connection',
+          secrets: { TOKEN: 'tok' },
+          allowedEndpoints: [`${echoUrl}/**`],
+          // No ingestor at all
+        },
+        {
+          alias: 'no-test-ingestor',
+          name: 'No Test Ingestor',
+          secrets: { TOKEN: 'tok' },
+          allowedEndpoints: [`${echoUrl}/**`],
+          ingestor: { type: 'webhook', webhook: { path: 'test4' } },
+          // No testIngestor
+        },
+        {
+          alias: 'missing-secret-conn',
+          name: 'Missing Secret Connection',
+          secrets: { TOKEN: 'tok' },
+          allowedEndpoints: [`${echoUrl}/**`],
+          ingestor: { type: 'webhook', webhook: { path: 'test5' } },
+          testIngestor: {
+            description: 'Verify secrets that are missing',
+            strategy: 'webhook_verify',
+            requireSecrets: ['NONEXISTENT_SECRET'],
+          },
+        },
+      ],
+      callers: {
+        'ti-client': {
+          peerKeyDir: '',
+          connections: [
+            'webhook-conn',
+            'http-conn',
+            'null-test-conn',
+            'no-ingestor-conn',
+            'no-test-ingestor',
+            'missing-secret-conn',
+          ],
+        },
+      },
+      rateLimitPerMinute: 60,
+    };
+
+    const app = createApp({
+      config,
+      ownKeys: tiServerKeys,
+      authorizedPeers: [{ alias: 'ti-client', keys: tiClientPub }],
+    });
+
+    await new Promise<void>((resolve) => {
+      tiServer = app.listen(0, '127.0.0.1', () => {
+        const addr = tiServer.address() as AddressInfo;
+        tiServerUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await Promise.all([
+      new Promise<void>((r, j) => tiServer.close((e) => (e ? j(e) : r()))),
+      new Promise<void>((r, j) => echoServer.close((e) => (e ? j(e) : r()))),
+    ]);
+  });
+
+  async function tiHandshake(): Promise<EncryptedChannel> {
+    const initiator = new HandshakeInitiator(
+      tiClientKeys,
+      extractPublicKeys(tiServerKeys),
+    );
+    const initMsg = initiator.createInit();
+    const initResp = await fetch(`${tiServerUrl}/handshake/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(initMsg),
+    });
+    expect(initResp.ok).toBe(true);
+    const reply = (await initResp.json()) as HandshakeReply;
+    const sessionKeys = initiator.processReply(reply);
+    const channel = new EncryptedChannel(sessionKeys);
+    const finishMsg = initiator.createFinish(sessionKeys);
+    await fetch(`${tiServerUrl}/handshake/finish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Id': sessionKeys.sessionId,
+      },
+      body: JSON.stringify(finishMsg),
+    });
+    return channel;
+  }
+
+  async function tiSendRequest(
+    channel: EncryptedChannel,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+  ): Promise<ProxyResponse> {
+    const request: ProxyRequest = {
+      type: 'proxy_request',
+      id: crypto.randomUUID(),
+      toolName,
+      toolInput,
+      timestamp: Date.now(),
+    };
+    const encrypted = channel.encryptJSON(request);
+    const resp = await fetch(`${tiServerUrl}/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Session-Id': channel.sessionId,
+      },
+      body: new Uint8Array(encrypted),
+    });
+    expect(resp.ok).toBe(true);
+    return channel.decryptJSON<ProxyResponse>(Buffer.from(await resp.arrayBuffer()));
+  }
+
+  it('should pass webhook_verify strategy when all secrets present', async () => {
+    const channel = await tiHandshake();
+    const response = await tiSendRequest(channel, 'test_ingestor', { connection: 'webhook-conn' });
+    expect(response.success).toBe(true);
+
+    const result = response.result as Record<string, unknown>;
+    expect(result.success).toBe(true);
+    expect(result.strategy).toBe('webhook_verify');
+    expect(result.message).toContain('secrets are configured');
+  });
+
+  it('should fail webhook_verify strategy when secrets are missing', async () => {
+    const channel = await tiHandshake();
+    const response = await tiSendRequest(channel, 'test_ingestor', { connection: 'missing-secret-conn' });
+    expect(response.success).toBe(true);
+
+    const result = response.result as Record<string, unknown>;
+    expect(result.success).toBe(false);
+    expect(result.strategy).toBe('webhook_verify');
+    expect(result.error).toContain('Missing required secrets');
+    expect(result.error).toContain('NONEXISTENT_SECRET');
+  });
+
+  it('should pass http_request strategy with valid endpoint', async () => {
+    const channel = await tiHandshake();
+    const response = await tiSendRequest(channel, 'test_ingestor', { connection: 'http-conn' });
+    expect(response.success).toBe(true);
+
+    const result = response.result as Record<string, unknown>;
+    expect(result.success).toBe(true);
+    expect(result.strategy).toBe('http_request');
+    expect(result.status).toBe(200);
+    expect(result.message).toContain('Listener test passed');
+  });
+
+  it('should return not-testable for null testIngestor', async () => {
+    const channel = await tiHandshake();
+    const response = await tiSendRequest(channel, 'test_ingestor', { connection: 'null-test-conn' });
+    expect(response.success).toBe(true);
+
+    const result = response.result as Record<string, unknown>;
+    expect(result.success).toBe(false);
+    expect(result.supported).toBe(false);
+    expect(result.error).toContain('does not support testing');
+  });
+
+  it('should return error for connection without ingestor', async () => {
+    const channel = await tiHandshake();
+    const response = await tiSendRequest(channel, 'test_ingestor', { connection: 'no-ingestor-conn' });
+    expect(response.success).toBe(true);
+
+    const result = response.result as Record<string, unknown>;
+    expect(result.success).toBe(false);
+    expect(result.supported).toBe(false);
+    expect(result.error).toContain('does not have an event listener');
+  });
+
+  it('should return error for connection with ingestor but no testIngestor', async () => {
+    const channel = await tiHandshake();
+    const response = await tiSendRequest(channel, 'test_ingestor', { connection: 'no-test-ingestor' });
+    expect(response.success).toBe(true);
+
+    const result = response.result as Record<string, unknown>;
+    expect(result.success).toBe(false);
+    expect(result.supported).toBe(false);
+    expect(result.error).toContain('does not have a test configuration');
+  });
+
+  it('should return error for unknown connection', async () => {
+    const channel = await tiHandshake();
+    const response = await tiSendRequest(channel, 'test_ingestor', { connection: 'nonexistent' });
+    expect(response.success).toBe(true);
+
+    const result = response.result as Record<string, unknown>;
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Unknown connection');
+  });
+});
+
+describe('list_listener_configs, resolve_listener_options, control_listener, and enhanced list_routes', () => {
+  let lcServer: Server;
+  let lcServerUrl: string;
+
+  let echoServer: Server;
+  let echoUrl: string;
+
+  let lcClientKeys: KeyBundle;
+  let lcServerKeys: KeyBundle;
+
+  beforeAll(async () => {
+    lcClientKeys = generateKeyBundle();
+    lcServerKeys = generateKeyBundle();
+    const lcClientPub = extractPublicKeys(lcClientKeys);
+
+    // Create a server that returns dynamic options for resolve_listener_options
+    const echoApp = http.createServer((req, res) => {
+      if (req.url?.includes('boards')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify([
+            { id: 'board-1', name: 'Board One' },
+            { id: 'board-2', name: 'Board Two' },
+          ]),
+        );
+      } else if (req.url?.includes('nested')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            data: {
+              items: [
+                { code: 'A', title: 'Alpha' },
+                { code: 'B', title: 'Beta' },
+              ],
+            },
+          }),
+        );
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+
+    await new Promise<void>((resolve) => {
+      echoServer = echoApp.listen(0, '127.0.0.1', () => {
+        const addr = echoServer.address() as AddressInfo;
+        echoUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      localKeysDir: '',
+      connectors: [
+        {
+          alias: 'with-listener',
+          name: 'Listener API',
+          description: 'An API with a full listener config',
+          secrets: { TOKEN: 'tok', WEBHOOK_SECRET: 'ws' },
+          headers: { Authorization: 'Bearer ${TOKEN}' },
+          allowedEndpoints: [`${echoUrl}/**`],
+          ingestor: {
+            type: 'webhook',
+            webhook: {
+              path: 'listener-test',
+              signatureHeader: 'X-Sig',
+              signatureSecret: 'WEBHOOK_SECRET',
+            },
+          },
+          testConnection: {
+            url: `${echoUrl}/me`,
+            description: 'Test connection',
+          },
+          testIngestor: {
+            description: 'Verify webhook',
+            strategy: 'webhook_verify',
+            requireSecrets: ['WEBHOOK_SECRET'],
+          },
+          listenerConfig: {
+            name: 'Test Listener',
+            description: 'Configurable webhook listener',
+            fields: [
+              {
+                key: 'boardId',
+                label: 'Board ID',
+                description: 'Board to watch',
+                type: 'text',
+                required: true,
+                dynamicOptions: {
+                  url: `${echoUrl}/boards`,
+                  labelField: 'name',
+                  valueField: 'id',
+                },
+                group: 'Connection',
+              },
+              {
+                key: 'nestedField',
+                label: 'Nested Options',
+                type: 'select',
+                dynamicOptions: {
+                  url: `${echoUrl}/nested`,
+                  responsePath: 'data.items',
+                  labelField: 'title',
+                  valueField: 'code',
+                },
+                group: 'Connection',
+              },
+              {
+                key: 'eventFilter',
+                label: 'Event Types',
+                type: 'multiselect',
+                default: [],
+                options: [
+                  { value: 'create', label: 'Created' },
+                  { value: 'update', label: 'Updated' },
+                ],
+                group: 'Filtering',
+              },
+              {
+                key: 'bufferSize',
+                label: 'Buffer Size',
+                type: 'number',
+                default: 200,
+                min: 10,
+                max: 1000,
+                group: 'Advanced',
+              },
+            ],
+          },
+        },
+        {
+          alias: 'no-listener',
+          name: 'No Listener API',
+          secrets: { TOKEN: 'tok' },
+          allowedEndpoints: [`${echoUrl}/**`],
+          testConnection: {
+            url: `${echoUrl}/me`,
+            description: 'Test connection only',
+          },
+        },
+      ],
+      callers: {
+        'lc-client': {
+          peerKeyDir: '',
+          connections: ['with-listener', 'no-listener'],
+        },
+      },
+      rateLimitPerMinute: 60,
+    };
+
+    const app = createApp({
+      config,
+      ownKeys: lcServerKeys,
+      authorizedPeers: [{ alias: 'lc-client', keys: lcClientPub }],
+    });
+
+    // Start ingestors (for control_listener tests)
+    const mgr = app.locals.ingestorManager as import('./ingestors/index.js').IngestorManager;
+    await mgr.startAll();
+
+    await new Promise<void>((resolve) => {
+      lcServer = app.listen(0, '127.0.0.1', () => {
+        const addr = lcServer.address() as AddressInfo;
+        lcServerUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await Promise.all([
+      new Promise<void>((r, j) => lcServer.close((e) => (e ? j(e) : r()))),
+      new Promise<void>((r, j) => echoServer.close((e) => (e ? j(e) : r()))),
+    ]);
+  });
+
+  async function lcHandshake(): Promise<EncryptedChannel> {
+    const initiator = new HandshakeInitiator(
+      lcClientKeys,
+      extractPublicKeys(lcServerKeys),
+    );
+    const initMsg = initiator.createInit();
+    const initResp = await fetch(`${lcServerUrl}/handshake/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(initMsg),
+    });
+    expect(initResp.ok).toBe(true);
+    const reply = (await initResp.json()) as HandshakeReply;
+    const sessionKeys = initiator.processReply(reply);
+    const channel = new EncryptedChannel(sessionKeys);
+    const finishMsg = initiator.createFinish(sessionKeys);
+    await fetch(`${lcServerUrl}/handshake/finish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Id': sessionKeys.sessionId,
+      },
+      body: JSON.stringify(finishMsg),
+    });
+    return channel;
+  }
+
+  async function lcSendRequest(
+    channel: EncryptedChannel,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+  ): Promise<ProxyResponse> {
+    const request: ProxyRequest = {
+      type: 'proxy_request',
+      id: crypto.randomUUID(),
+      toolName,
+      toolInput,
+      timestamp: Date.now(),
+    };
+    const encrypted = channel.encryptJSON(request);
+    const resp = await fetch(`${lcServerUrl}/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Session-Id': channel.sessionId,
+      },
+      body: new Uint8Array(encrypted),
+    });
+    expect(resp.ok).toBe(true);
+    return channel.decryptJSON<ProxyResponse>(Buffer.from(await resp.arrayBuffer()));
+  }
+
+  // ── list_listener_configs ───────────────────────────────────────────────
+
+  it('should return listener configs for connections with listenerConfig', async () => {
+    const channel = await lcHandshake();
+    const response = await lcSendRequest(channel, 'list_listener_configs', {});
+    expect(response.success).toBe(true);
+
+    const configs = response.result as {
+      connection: string;
+      name: string;
+      description?: string;
+      fields: { key: string; label: string; type: string }[];
+      ingestorType?: string;
+    }[];
+
+    // Only connections with listenerConfig should appear
+    expect(configs).toHaveLength(1);
+    expect(configs[0].connection).toBe('with-listener');
+    expect(configs[0].name).toBe('Test Listener');
+    expect(configs[0].description).toBe('Configurable webhook listener');
+    expect(configs[0].ingestorType).toBe('webhook');
+    expect(configs[0].fields).toHaveLength(4);
+    expect(configs[0].fields.map((f) => f.key)).toEqual([
+      'boardId',
+      'nestedField',
+      'eventFilter',
+      'bufferSize',
+    ]);
+  });
+
+  // ── resolve_listener_options ────────────────────────────────────────────
+
+  it('should resolve dynamic options for a field with top-level array response', async () => {
+    const channel = await lcHandshake();
+    const response = await lcSendRequest(channel, 'resolve_listener_options', {
+      connection: 'with-listener',
+      paramKey: 'boardId',
+    });
+    expect(response.success).toBe(true);
+
+    const result = response.result as {
+      success: boolean;
+      connection: string;
+      paramKey: string;
+      options: { value: string; label: string }[];
+    };
+
+    expect(result.success).toBe(true);
+    expect(result.options).toHaveLength(2);
+    expect(result.options[0]).toEqual({ value: 'board-1', label: 'Board One' });
+    expect(result.options[1]).toEqual({ value: 'board-2', label: 'Board Two' });
+  });
+
+  it('should resolve dynamic options with nested response path', async () => {
+    const channel = await lcHandshake();
+    const response = await lcSendRequest(channel, 'resolve_listener_options', {
+      connection: 'with-listener',
+      paramKey: 'nestedField',
+    });
+    expect(response.success).toBe(true);
+
+    const result = response.result as {
+      success: boolean;
+      options: { value: string; label: string }[];
+    };
+
+    expect(result.success).toBe(true);
+    expect(result.options).toHaveLength(2);
+    expect(result.options[0]).toEqual({ value: 'A', label: 'Alpha' });
+    expect(result.options[1]).toEqual({ value: 'B', label: 'Beta' });
+  });
+
+  it('should return error for field without dynamic options', async () => {
+    const channel = await lcHandshake();
+    const response = await lcSendRequest(channel, 'resolve_listener_options', {
+      connection: 'with-listener',
+      paramKey: 'eventFilter', // This field has static options, not dynamic
+    });
+    expect(response.success).toBe(true);
+
+    const result = response.result as { success: boolean; error: string };
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No dynamic options');
+  });
+
+  it('should return error for unknown connection in resolve_listener_options', async () => {
+    const channel = await lcHandshake();
+    const response = await lcSendRequest(channel, 'resolve_listener_options', {
+      connection: 'nonexistent',
+      paramKey: 'boardId',
+    });
+    expect(response.success).toBe(true);
+
+    const result = response.result as { success: boolean; error: string };
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No listener config');
+  });
+
+  it('should return error for connection without listenerConfig', async () => {
+    const channel = await lcHandshake();
+    const response = await lcSendRequest(channel, 'resolve_listener_options', {
+      connection: 'no-listener',
+      paramKey: 'boardId',
+    });
+    expect(response.success).toBe(true);
+
+    const result = response.result as { success: boolean; error: string };
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No listener config');
+  });
+
+  // ── control_listener ───────────────────────────────────────────────────
+
+  it('should stop a running listener', async () => {
+    const channel = await lcHandshake();
+    const response = await lcSendRequest(channel, 'control_listener', {
+      connection: 'with-listener',
+      action: 'stop',
+    });
+    expect(response.success).toBe(true);
+
+    const result = response.result as { success: boolean; connection: string; state?: string };
+    expect(result.success).toBe(true);
+    expect(result.state).toBe('stopped');
+  });
+
+  it('should start a stopped listener', async () => {
+    const channel = await lcHandshake();
+    const response = await lcSendRequest(channel, 'control_listener', {
+      connection: 'with-listener',
+      action: 'start',
+    });
+    expect(response.success).toBe(true);
+
+    const result = response.result as { success: boolean; connection: string; state?: string };
+    expect(result.success).toBe(true);
+    expect(result.state).toBe('connected');
+  });
+
+  it('should restart a listener', async () => {
+    const channel = await lcHandshake();
+    const response = await lcSendRequest(channel, 'control_listener', {
+      connection: 'with-listener',
+      action: 'restart',
+    });
+    expect(response.success).toBe(true);
+
+    const result = response.result as { success: boolean; connection: string; state?: string };
+    expect(result.success).toBe(true);
+    expect(result.connection).toBe('with-listener');
+  });
+
+  it('should return error for stop on non-ingestor connection', async () => {
+    const channel = await lcHandshake();
+    const response = await lcSendRequest(channel, 'control_listener', {
+      connection: 'no-listener',
+      action: 'stop',
+    });
+    expect(response.success).toBe(true);
+
+    const result = response.result as { success: boolean; error: string };
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No ingestor running');
+  });
+
+  // ── Enhanced list_routes ───────────────────────────────────────────────
+
+  it('should include new metadata fields in list_routes', async () => {
+    const channel = await lcHandshake();
+    const response = await lcSendRequest(channel, 'list_routes', {});
+    expect(response.success).toBe(true);
+
+    const routes = response.result as Record<string, unknown>[];
+    expect(routes).toHaveLength(2);
+
+    // Connection with full config
+    const withListener = routes.find((r) => r.alias === 'with-listener')!;
+    expect(withListener).toBeDefined();
+    expect(withListener.hasTestConnection).toBe(true);
+    expect(withListener.hasIngestor).toBe(true);
+    expect(withListener.ingestorType).toBe('webhook');
+    expect(withListener.hasTestIngestor).toBe(true);
+    expect(withListener.hasListenerConfig).toBe(true);
+    expect(withListener.listenerParamKeys).toEqual(['boardId', 'nestedField', 'eventFilter', 'bufferSize']);
+
+    // Connection without listener
+    const noListener = routes.find((r) => r.alias === 'no-listener')!;
+    expect(noListener).toBeDefined();
+    expect(noListener.hasTestConnection).toBe(true);
+    expect(noListener.hasIngestor).toBe(false);
+    // hasTestIngestor and hasListenerConfig should not be set for non-ingestor connections
+    expect(noListener.hasTestIngestor).toBeUndefined();
+    expect(noListener.hasListenerConfig).toBeUndefined();
+  });
+
+  it('should include alias in list_routes', async () => {
+    const channel = await lcHandshake();
+    const response = await lcSendRequest(channel, 'list_routes', {});
+    expect(response.success).toBe(true);
+
+    const routes = response.result as Record<string, unknown>[];
+    expect(routes[0].alias).toBeTruthy();
+    expect(routes[1].alias).toBeTruthy();
+  });
+});

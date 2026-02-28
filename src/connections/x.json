@@ -23,5 +23,43 @@
       "deduplicateBy": "id",
       "eventType": "tweet"
     }
+  },
+  "testIngestor": {
+    "description": "Fetches the authenticated user to verify X API access",
+    "strategy": "poll_once",
+    "request": {
+      "url": "https://api.x.com/2/users/me",
+      "expectedStatus": [200]
+    }
+  },
+  "listenerConfig": {
+    "name": "X (Twitter) Poll Listener",
+    "description": "Polls X for recent tweets matching a search query at a configurable interval.",
+    "fields": [
+      {
+        "key": "intervalMs",
+        "label": "Poll Interval (ms)",
+        "description": "How often to check for new tweets, in milliseconds.",
+        "type": "number",
+        "default": 60000,
+        "min": 10000,
+        "max": 3600000,
+        "group": "Connection"
+      },
+      {
+        "key": "bufferSize",
+        "label": "Buffer Size",
+        "description": "Maximum number of events to keep in memory.",
+        "type": "number",
+        "default": 200,
+        "min": 10,
+        "max": 1000,
+        "group": "Advanced"
+      }
+    ]
+  },
+  "testConnection": {
+    "url": "https://api.x.com/2/users/me",
+    "description": "Fetches the authenticated X/Twitter user"
   }
 }

@@ -12,5 +12,9 @@
   },
   "allowedEndpoints": [
     "https://discord.com/api/v10/**"
-  ]
+  ],
+  "testConnection": {
+    "url": "https://discord.com/api/v10/users/@me",
+    "description": "Fetches the authenticated OAuth2 user"
+  }
 }

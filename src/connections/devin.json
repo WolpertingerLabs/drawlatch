@@ -11,5 +11,9 @@
   },
   "allowedEndpoints": [
     "https://api.devin.ai/**"
-  ]
+  ],
+  "testConnection": {
+    "url": "https://api.devin.ai/v1/sessions",
+    "description": "Lists Devin sessions to verify API key"
+  }
 }

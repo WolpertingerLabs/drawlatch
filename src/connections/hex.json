@@ -10,5 +10,9 @@
   },
   "allowedEndpoints": [
     "https://app.hex.tech/api/**"
-  ]
+  ],
+  "testConnection": {
+    "url": "https://app.hex.tech/api/v1/user/me",
+    "description": "Fetches the authenticated Hex user"
+  }
 }

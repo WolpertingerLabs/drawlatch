@@ -482,3 +482,347 @@ describe('listConnectionTemplates (integration)', () => {
     expect(allSecrets).toEqual(Object.keys(loadConnection('trello').secrets ?? {}).sort());
   });
 });
+
+// ── listConnectionTemplates — new boolean fields ────────────────────────
+
+describe('listConnectionTemplates — new boolean fields (unit)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should report hasTestConnection=true when testConnection is present', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'API',
+        allowedEndpoints: ['https://api.example.com/**'],
+        testConnection: { url: 'https://api.example.com/me', description: 'Test' },
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].hasTestConnection).toBe(true);
+  });
+
+  it('should report hasTestConnection=false when testConnection is absent', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'API',
+        allowedEndpoints: ['https://api.example.com/**'],
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].hasTestConnection).toBe(false);
+  });
+
+  it('should report hasTestIngestor=true when testIngestor is present', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'API',
+        allowedEndpoints: ['https://api.example.com/**'],
+        ingestor: { type: 'webhook', webhook: { path: 'api' } },
+        testIngestor: {
+          description: 'Verify webhook',
+          strategy: 'webhook_verify',
+          requireSecrets: ['SECRET'],
+        },
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].hasTestIngestor).toBe(true);
+  });
+
+  it('should report hasTestIngestor=false when testIngestor is null', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'API',
+        allowedEndpoints: ['https://api.example.com/**'],
+        ingestor: { type: 'webhook', webhook: { path: 'api' } },
+        testIngestor: null,
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].hasTestIngestor).toBe(false);
+  });
+
+  it('should report hasTestIngestor=false when testIngestor is absent', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'API',
+        allowedEndpoints: ['https://api.example.com/**'],
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].hasTestIngestor).toBe(false);
+  });
+
+  it('should report hasListenerConfig=true when listenerConfig is present', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'API',
+        allowedEndpoints: ['https://api.example.com/**'],
+        ingestor: { type: 'webhook', webhook: { path: 'api' } },
+        listenerConfig: {
+          name: 'API Listener',
+          fields: [{ key: 'eventFilter', label: 'Events', type: 'multiselect' }],
+        },
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].hasListenerConfig).toBe(true);
+  });
+
+  it('should report hasListenerConfig=false when listenerConfig is absent', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'API',
+        allowedEndpoints: ['https://api.example.com/**'],
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].hasListenerConfig).toBe(false);
+  });
+
+  it('should correctly report all three boolean fields together', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['full.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'Full API',
+        allowedEndpoints: ['https://api.example.com/**'],
+        ingestor: { type: 'webhook', webhook: { path: 'api' } },
+        testConnection: { url: 'https://api.example.com/me' },
+        testIngestor: { description: 'Test', strategy: 'webhook_verify' },
+        listenerConfig: { name: 'Listener', fields: [] },
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    const t = templates[0];
+    expect(t.hasTestConnection).toBe(true);
+    expect(t.hasTestIngestor).toBe(true);
+    expect(t.hasListenerConfig).toBe(true);
+  });
+});
+
+describe('listConnectionTemplates — new boolean fields (integration)', () => {
+  it('should report hasTestConnection=true for all bundled templates', () => {
+    // All 22 templates now have testConnection
+    const templates = listConnectionTemplates();
+    for (const t of templates) {
+      expect(t.hasTestConnection).toBe(true);
+    }
+  });
+
+  it('should report hasTestIngestor=true for templates with ingestors', () => {
+    const templates = listConnectionTemplates();
+    const withIngestors = templates.filter((t) => t.hasIngestor);
+    expect(withIngestors.length).toBeGreaterThan(0);
+
+    for (const t of withIngestors) {
+      expect(t.hasTestIngestor).toBe(true);
+    }
+  });
+
+  it('should report hasListenerConfig=true for templates with ingestors', () => {
+    const templates = listConnectionTemplates();
+    const withIngestors = templates.filter((t) => t.hasIngestor);
+    expect(withIngestors.length).toBeGreaterThan(0);
+
+    for (const t of withIngestors) {
+      expect(t.hasListenerConfig).toBe(true);
+    }
+  });
+
+  it('should report hasTestIngestor=false for templates without ingestors', () => {
+    const templates = listConnectionTemplates();
+    const withoutIngestors = templates.filter((t) => !t.hasIngestor);
+    expect(withoutIngestors.length).toBeGreaterThan(0);
+
+    for (const t of withoutIngestors) {
+      expect(t.hasTestIngestor).toBe(false);
+    }
+  });
+
+  it('should report hasListenerConfig=false for templates without ingestors', () => {
+    const templates = listConnectionTemplates();
+    const withoutIngestors = templates.filter((t) => !t.hasIngestor);
+    expect(withoutIngestors.length).toBeGreaterThan(0);
+
+    for (const t of withoutIngestors) {
+      expect(t.hasListenerConfig).toBe(false);
+    }
+  });
+});
+
+// ── Connection template JSON structure validation ──────────────────────
+
+describe('connection template JSON structure validation', () => {
+  const templates = listConnectionTemplates();
+  const withIngestors = templates.filter((t) => t.hasIngestor);
+  const withoutIngestors = templates.filter((t) => !t.hasIngestor);
+
+  it('should have templates in both categories', () => {
+    expect(withIngestors.length).toBeGreaterThan(0);
+    expect(withoutIngestors.length).toBeGreaterThan(0);
+  });
+
+  it('should have valid testConnection URL for all templates', () => {
+    for (const t of templates) {
+      const route = loadConnection(t.alias);
+      expect(route.testConnection).toBeDefined();
+      expect(route.testConnection!.url).toBeTruthy();
+      expect(typeof route.testConnection!.url).toBe('string');
+    }
+  });
+
+  it('should have testConnection descriptions for all templates', () => {
+    for (const t of templates) {
+      const route = loadConnection(t.alias);
+      if (route.testConnection?.description) {
+        expect(typeof route.testConnection.description).toBe('string');
+        expect(route.testConnection.description.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('should have valid testIngestor config for templates with ingestors', () => {
+    for (const t of withIngestors) {
+      const route = loadConnection(t.alias);
+      expect(route.testIngestor).toBeDefined();
+
+      const ti = route.testIngestor!;
+      expect(ti.description).toBeTruthy();
+      expect(['websocket_auth', 'webhook_verify', 'poll_once', 'http_request']).toContain(ti.strategy);
+
+      // http_request and websocket_auth strategies must have a request
+      if (ti.strategy === 'http_request' || ti.strategy === 'websocket_auth' || ti.strategy === 'poll_once') {
+        expect(ti.request).toBeDefined();
+        expect(ti.request!.url).toBeTruthy();
+      }
+
+      // webhook_verify strategy should have requireSecrets
+      if (ti.strategy === 'webhook_verify') {
+        expect(ti.requireSecrets).toBeDefined();
+        expect(Array.isArray(ti.requireSecrets)).toBe(true);
+        expect(ti.requireSecrets!.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('should have valid listenerConfig for templates with ingestors', () => {
+    for (const t of withIngestors) {
+      const route = loadConnection(t.alias);
+      expect(route.listenerConfig).toBeDefined();
+
+      const lc = route.listenerConfig!;
+      expect(lc.name).toBeTruthy();
+      expect(Array.isArray(lc.fields)).toBe(true);
+      expect(lc.fields.length).toBeGreaterThan(0);
+
+      // Validate each field has required properties
+      for (const field of lc.fields) {
+        expect(field.key).toBeTruthy();
+        expect(field.label).toBeTruthy();
+        expect(['text', 'number', 'boolean', 'select', 'multiselect', 'secret', 'text[]']).toContain(field.type);
+
+        // Select/multiselect fields should have options
+        if (field.type === 'select' || field.type === 'multiselect') {
+          if (field.options) {
+            for (const opt of field.options) {
+              expect(opt.value).toBeDefined();
+              expect(opt.label).toBeTruthy();
+            }
+          }
+        }
+
+        // Number fields should have valid min/max
+        if (field.type === 'number') {
+          if (field.min !== undefined && field.max !== undefined) {
+            expect(field.min).toBeLessThanOrEqual(field.max);
+          }
+        }
+
+        // Dynamic options should have required fields
+        if (field.dynamicOptions) {
+          expect(field.dynamicOptions.url).toBeTruthy();
+          expect(field.dynamicOptions.labelField).toBeTruthy();
+          expect(field.dynamicOptions.valueField).toBeTruthy();
+        }
+      }
+    }
+  });
+
+  it('should not have testIngestor or listenerConfig for templates without ingestors', () => {
+    for (const t of withoutIngestors) {
+      const route = loadConnection(t.alias);
+      expect(route.testIngestor).toBeUndefined();
+      expect(route.listenerConfig).toBeUndefined();
+    }
+  });
+
+  it('should have github template with correct testConnection config', () => {
+    const route = loadConnection('github');
+    expect(route.testConnection).toEqual({
+      url: expect.stringContaining('api.github.com'),
+      description: expect.any(String),
+    });
+  });
+
+  it('should have slack template with correct testConnection config', () => {
+    const route = loadConnection('slack');
+    expect(route.testConnection).toBeDefined();
+    expect(route.testConnection!.url).toContain('slack.com');
+    expect(route.testConnection!.method).toBe('POST');
+  });
+
+  it('should have trello template with correct testConnection config', () => {
+    const route = loadConnection('trello');
+    expect(route.testConnection).toBeDefined();
+    expect(route.testConnection!.url).toContain('api.trello.com');
+    // Trello uses query-string auth, so no special headers needed
+  });
+
+  it('should have discord-bot template with all new fields', () => {
+    const route = loadConnection('discord-bot');
+    expect(route.testConnection).toBeDefined();
+    expect(route.testIngestor).toBeDefined();
+    expect(route.listenerConfig).toBeDefined();
+
+    // listenerConfig should have expected fields
+    const fieldKeys = route.listenerConfig!.fields.map((f) => f.key);
+    expect(fieldKeys).toContain('eventFilter');
+    expect(fieldKeys).toContain('bufferSize');
+  });
+
+  it('should have all listenerConfig fields with groups', () => {
+    for (const t of withIngestors) {
+      const route = loadConnection(t.alias);
+      if (route.listenerConfig) {
+        for (const field of route.listenerConfig.fields) {
+          // All fields should have a group for UI organization
+          expect(field.group).toBeTruthy();
+        }
+      }
+    }
+  });
+});

@@ -22,5 +22,43 @@
       "deduplicateBy": "update_id",
       "eventType": "update"
     }
+  },
+  "testIngestor": {
+    "description": "Calls getMe to verify the Telegram bot token",
+    "strategy": "poll_once",
+    "request": {
+      "url": "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe",
+      "expectedStatus": [200]
+    }
+  },
+  "listenerConfig": {
+    "name": "Telegram Poll Listener",
+    "description": "Polls Telegram for new updates at a configurable interval.",
+    "fields": [
+      {
+        "key": "intervalMs",
+        "label": "Poll Interval (ms)",
+        "description": "How often to check for new updates, in milliseconds.",
+        "type": "number",
+        "default": 30000,
+        "min": 5000,
+        "max": 3600000,
+        "group": "Connection"
+      },
+      {
+        "key": "bufferSize",
+        "label": "Buffer Size",
+        "description": "Maximum number of events to keep in memory.",
+        "type": "number",
+        "default": 200,
+        "min": 10,
+        "max": 1000,
+        "group": "Advanced"
+      }
+    ]
+  },
+  "testConnection": {
+    "url": "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe",
+    "description": "Fetches the bot's own user info"
   }
 }
