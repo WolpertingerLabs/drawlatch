@@ -2159,6 +2159,22 @@ describe('Webhook ingestor', () => {
     expect(resp.status).toBe(404);
   });
 
+  it('should respond 200 to HEAD request for a registered webhook path (Trello verification)', async () => {
+    const resp = await fetch(`${webhookBaseUrl}/webhooks/github`, {
+      method: 'HEAD',
+    });
+
+    expect(resp.status).toBe(200);
+  });
+
+  it('should respond 404 to HEAD request for an unregistered webhook path', async () => {
+    const resp = await fetch(`${webhookBaseUrl}/webhooks/nonexistent`, {
+      method: 'HEAD',
+    });
+
+    expect(resp.status).toBe(404);
+  });
+
   it('should report webhook ingestor in ingestor_status', async () => {
     const { channel } = await webhookHandshake();
     const response = await sendWebhookToolRequest(channel, 'ingestor_status', {});

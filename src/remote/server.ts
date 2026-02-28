@@ -663,6 +663,21 @@ export function createApp(options: CreateAppOptions = {}) {
 
   // ── Webhook receiver ─────────────────────────────────────────────────
 
+  // Trello (and potentially other services) send a HEAD request to the
+  // callback URL to verify it is reachable before activating the webhook.
+  // Respond with 200 if at least one ingestor is registered for the path.
+  app.head('/webhooks/:path', (req, res) => {
+    const webhookPath = req.params.path;
+    const mgr = app.locals.ingestorManager as IngestorManager;
+    const ingestors = mgr.getWebhookIngestors(webhookPath);
+
+    if (ingestors.length === 0) {
+      res.status(404).end();
+    } else {
+      res.status(200).end();
+    }
+  });
+
   app.post('/webhooks/:path', (req, res) => {
     const webhookPath = req.params.path;
     const mgr = app.locals.ingestorManager as IngestorManager;
