@@ -19,6 +19,7 @@ import fs from 'node:fs';
 
 import {
   loadRemoteConfig,
+  saveRemoteConfig,
   resolveRoutes,
   resolveCallerRoutes,
   resolveSecrets,
@@ -726,6 +727,228 @@ const toolHandlers: Record<string, ToolHandler> = {
         error: err instanceof Error ? err.message : String(err),
       };
     }
+  },
+
+  /**
+   * Read current listener parameter overrides for a connection.
+   * Returns current param values and schema defaults for form population.
+   */
+  get_listener_params(input, routes, context) {
+    const { connection, instance_id } = input as {
+      connection: string;
+      instance_id?: string;
+    };
+
+    // Find the route for this connection
+    const route = routes.find((r) => r.alias === connection);
+    if (!route) {
+      return Promise.resolve({ success: false, connection, error: `Unknown connection: ${connection}` });
+    }
+
+    if (!route.listenerConfig) {
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: 'This connection does not have a listener configuration.',
+      });
+    }
+
+    // Build defaults from schema fields
+    const defaults: Record<string, unknown> = {};
+    for (const field of route.listenerConfig.fields) {
+      if (field.default !== undefined) {
+        defaults[field.key] = field.default;
+      }
+    }
+
+    // Load config to read current overrides
+    const config = loadRemoteConfig();
+    const callerConfig = config.callers[context.callerAlias];
+    if (!callerConfig) {
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: `Caller not found: ${context.callerAlias}`,
+      });
+    }
+
+    let params: Record<string, unknown> = {};
+
+    if (instance_id) {
+      // Multi-instance: read from listenerInstances
+      const instanceOverrides = callerConfig.listenerInstances?.[connection]?.[instance_id];
+      if (!instanceOverrides) {
+        return Promise.resolve({
+          success: false,
+          connection,
+          instance_id,
+          error: `Instance not found: ${instance_id}`,
+        });
+      }
+      params = instanceOverrides.params ?? {};
+    } else {
+      // Single-instance: read from ingestorOverrides
+      const overrides = callerConfig.ingestorOverrides?.[connection];
+      params = overrides?.params ?? {};
+    }
+
+    return Promise.resolve({
+      success: true,
+      connection,
+      ...(instance_id && { instance_id }),
+      params,
+      defaults,
+    });
+  },
+
+  /**
+   * Add or edit listener parameter overrides for a connection.
+   * Merges params into existing config. For multi-instance, set create_instance
+   * to true to create a new instance if it doesn't exist.
+   */
+  set_listener_params(input, routes, context) {
+    const { connection, instance_id, params, create_instance } = input as {
+      connection: string;
+      instance_id?: string;
+      params: Record<string, unknown>;
+      create_instance?: boolean;
+    };
+
+    // Find the route for this connection
+    const route = routes.find((r) => r.alias === connection);
+    if (!route) {
+      return Promise.resolve({ success: false, connection, error: `Unknown connection: ${connection}` });
+    }
+
+    if (!route.listenerConfig) {
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: 'This connection does not have a listener configuration.',
+      });
+    }
+
+    // Validate param keys against schema
+    const validKeys = new Set(route.listenerConfig.fields.map((f) => f.key));
+    const unknownKeys = Object.keys(params).filter((k) => !validKeys.has(k));
+    if (unknownKeys.length > 0) {
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: `Unknown parameter keys: ${unknownKeys.join(', ')}. Valid keys: ${Array.from(validKeys).join(', ')}`,
+      });
+    }
+
+    // Load config, modify, save
+    const config = loadRemoteConfig();
+    const callerConfig = config.callers[context.callerAlias];
+    if (!callerConfig) {
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: `Caller not found: ${context.callerAlias}`,
+      });
+    }
+
+    let mergedParams: Record<string, unknown>;
+
+    if (instance_id) {
+      // Multi-instance: write to listenerInstances
+      callerConfig.listenerInstances ??= {};
+      callerConfig.listenerInstances[connection] ??= {};
+
+      const existing = callerConfig.listenerInstances[connection][instance_id];
+
+      if (!existing && !create_instance) {
+        return Promise.resolve({
+          success: false,
+          connection,
+          instance_id,
+          error: `Instance "${instance_id}" does not exist. Set create_instance to true to create it.`,
+        });
+      }
+
+      if (existing) {
+        existing.params = { ...(existing.params ?? {}), ...params };
+        mergedParams = existing.params;
+      } else {
+        callerConfig.listenerInstances[connection][instance_id] = { params };
+        mergedParams = params;
+      }
+    } else {
+      // Single-instance: write to ingestorOverrides
+      callerConfig.ingestorOverrides ??= {};
+      callerConfig.ingestorOverrides[connection] ??= {};
+      const overrides = callerConfig.ingestorOverrides[connection];
+      overrides.params = { ...(overrides.params ?? {}), ...params };
+      mergedParams = overrides.params;
+    }
+
+    saveRemoteConfig(config);
+
+    return Promise.resolve({
+      success: true,
+      connection,
+      ...(instance_id && { instance_id }),
+      params: mergedParams,
+    });
+  },
+
+  /**
+   * Delete a multi-instance listener instance.
+   * Removes from config and stops the running ingestor if active.
+   */
+  async delete_listener_instance(input, _routes, context) {
+    const { connection, instance_id } = input as {
+      connection: string;
+      instance_id: string;
+    };
+
+    // Load config
+    const config = loadRemoteConfig();
+    const callerConfig = config.callers[context.callerAlias];
+    if (!callerConfig) {
+      return { success: false, connection, instance_id, error: `Caller not found: ${context.callerAlias}` };
+    }
+
+    const instances = callerConfig.listenerInstances?.[connection];
+    if (!instances || !(instance_id in instances)) {
+      return {
+        success: false,
+        connection,
+        instance_id,
+        error: `Instance "${instance_id}" not found for connection "${connection}".`,
+      };
+    }
+
+    // Stop the running ingestor if active
+    const mgr = context.ingestorManager;
+    if (mgr.has(context.callerAlias, connection, instance_id)) {
+      try {
+        await mgr.stopOne(context.callerAlias, connection, instance_id);
+      } catch (err) {
+        // Log but don't fail the delete
+        console.error(
+          `[remote] Warning: failed to stop ingestor ${context.callerAlias}:${connection}:${instance_id}:`,
+          err,
+        );
+      }
+    }
+
+    // Remove from config
+    delete instances[instance_id];
+
+    // Clean up empty maps
+    if (Object.keys(instances).length === 0) {
+      delete callerConfig.listenerInstances![connection];
+      if (Object.keys(callerConfig.listenerInstances!).length === 0) {
+        delete callerConfig.listenerInstances;
+      }
+    }
+
+    saveRemoteConfig(config);
+
+    return { success: true, connection, instance_id };
   },
 };
 

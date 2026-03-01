@@ -469,6 +469,128 @@ server.tool(
   },
 );
 
+/**
+ * Read current listener parameter overrides for a connection.
+ * Returns current values and schema defaults for populating config forms.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'get_listener_params',
+  'Read current listener parameter overrides for a connection. Returns current values and schema defaults. Use instance_id for multi-instance listeners.',
+  {
+    connection: z.string().describe('Connection alias (e.g., "trello", "discord-bot")'),
+    instance_id: z
+      .string()
+      .optional()
+      .describe('Instance ID for multi-instance listeners. Omit for single-instance.'),
+  },
+  async ({ connection, instance_id }) => {
+    try {
+      const result = await sendEncryptedRequest('get_listener_params', { connection, instance_id });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
+ * Add or edit listener parameter overrides for a connection.
+ * Merges params into existing config. Supports creating new multi-instance listeners.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'set_listener_params',
+  "Add or edit listener parameter overrides for a connection. Merges params into existing config. Set create_instance to true to create a new multi-instance listener.",
+  {
+    connection: z.string().describe('Connection alias (e.g., "trello")'),
+    instance_id: z
+      .string()
+      .optional()
+      .describe('Instance ID for multi-instance listeners. Omit for single-instance.'),
+    params: z
+      .record(z.string(), z.unknown())
+      .describe('Key-value pairs to set. Keys must match listener config field keys.'),
+    create_instance: z
+      .boolean()
+      .optional()
+      .describe("Set to true to create a new instance if it doesn't exist."),
+  },
+  async ({ connection, instance_id, params, create_instance }) => {
+    try {
+      const result = await sendEncryptedRequest('set_listener_params', {
+        connection,
+        instance_id,
+        params,
+        create_instance,
+      });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
+ * Delete a multi-instance listener instance.
+ * Stops the running ingestor if active and removes the instance from config.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'delete_listener_instance',
+  'Remove a multi-instance listener instance. Stops the running ingestor if active and removes the instance from config.',
+  {
+    connection: z.string().describe('Connection alias (e.g., "trello")'),
+    instance_id: z
+      .string()
+      .describe('Instance ID to delete (required — only for multi-instance listeners).'),
+  },
+  async ({ connection, instance_id }) => {
+    try {
+      const result = await sendEncryptedRequest('delete_listener_instance', {
+        connection,
+        instance_id,
+      });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
 // ── Start ──────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
