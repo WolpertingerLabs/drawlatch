@@ -42,8 +42,9 @@ export abstract class WebhookIngestor extends BaseIngestor {
     secrets: Record<string, string>,
     webhookConfig: WebhookIngestorConfig,
     bufferSize?: number,
+    instanceId?: string,
   ) {
-    super(connectionAlias, 'webhook', secrets, bufferSize);
+    super(connectionAlias, 'webhook', secrets, bufferSize, instanceId);
     this.webhookPath = webhookConfig.path;
     this.signatureHeader = webhookConfig.signatureHeader;
     this.signatureSecretName = webhookConfig.signatureSecret;
@@ -125,6 +126,19 @@ export abstract class WebhookIngestor extends BaseIngestor {
   ): unknown;
 
   /**
+   * Instance-level content filter for multi-instance webhook discrimination.
+   *
+   * Called after signature verification and body parsing. Override in subclasses
+   * to filter webhooks by resource (e.g., Trello board ID, GitHub repo name).
+   * Return false to silently skip the webhook for this instance.
+   *
+   * Default: accept all webhooks.
+   */
+  protected shouldAcceptPayload(_body: unknown): boolean {
+    return true;
+  }
+
+  /**
    * Extract a service-specific idempotency key from the webhook request.
    *
    * Subclasses override this to return a unique key for deduplication
@@ -177,6 +191,11 @@ export abstract class WebhookIngestor extends BaseIngestor {
       body = JSON.parse(rawBody.toString('utf-8'));
     } catch {
       return { accepted: false, reason: 'Invalid JSON body' };
+    }
+
+    // 2.5. Instance-level content filter (for multi-instance discrimination)
+    if (!this.shouldAcceptPayload(body)) {
+      return { accepted: true, reason: 'Not for this instance' };
     }
 
     // 3. Determine event type (delegated to subclass)

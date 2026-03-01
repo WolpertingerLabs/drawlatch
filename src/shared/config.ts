@@ -197,6 +197,22 @@ export interface CallerConfig {
    *  Allows callers to customize intents, event filters, guild/channel/user ID filters,
    *  buffer size, or disable an ingestor without modifying the connection template. */
   ingestorOverrides?: Record<string, IngestorOverrides>;
+  /** Multi-instance listener definitions keyed by connection alias.
+   *  Value is a map of instanceId → IngestorOverrides.
+   *  When present for a connection, spawns one ingestor per instanceId instead of
+   *  a single default instance. Takes precedence over ingestorOverrides for that connection.
+   *  Instance IDs must match /^[a-zA-Z0-9_-]+$/.
+   *
+   *  Example:
+   *  ```json
+   *  {
+   *    "trello": {
+   *      "project-board": { "params": { "boardId": "abc123" } },
+   *      "sprint-board":  { "params": { "boardId": "def456" } }
+   *    }
+   *  }
+   *  ``` */
+  listenerInstances?: Record<string, Record<string, IngestorOverrides>>;
 }
 
 /** Remote server configuration */

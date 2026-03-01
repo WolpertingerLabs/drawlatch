@@ -674,6 +674,96 @@ describe('listConnectionTemplates — new boolean fields (integration)', () => {
   });
 });
 
+// ── Multi-instance support fields ────────────────────────────────────────
+
+describe('listConnectionTemplates — supportsMultiInstance field (unit)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should report supportsMultiInstance=true when listenerConfig has supportsMultiInstance', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'API',
+        allowedEndpoints: ['https://api.example.com/**'],
+        ingestor: { type: 'webhook', webhook: { path: 'api' } },
+        listenerConfig: {
+          name: 'API Listener',
+          supportsMultiInstance: true,
+          fields: [
+            { key: 'boardId', label: 'Board', type: 'text', instanceKey: true },
+            { key: 'bufferSize', label: 'Buffer', type: 'number' },
+          ],
+        },
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].supportsMultiInstance).toBe(true);
+  });
+
+  it('should report supportsMultiInstance=false when listenerConfig omits it', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'API',
+        allowedEndpoints: ['https://api.example.com/**'],
+        ingestor: { type: 'webhook', webhook: { path: 'api' } },
+        listenerConfig: {
+          name: 'API Listener',
+          fields: [{ key: 'eventFilter', label: 'Events', type: 'multiselect' }],
+        },
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].supportsMultiInstance).toBe(false);
+  });
+
+  it('should report supportsMultiInstance=false when no listenerConfig exists', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'API',
+        allowedEndpoints: ['https://api.example.com/**'],
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].supportsMultiInstance).toBe(false);
+  });
+});
+
+describe('listConnectionTemplates — supportsMultiInstance (integration)', () => {
+  it('should report supportsMultiInstance=true for trello, reddit, and github', () => {
+    const templates = listConnectionTemplates();
+
+    const trello = templates.find((t) => t.alias === 'trello')!;
+    expect(trello.supportsMultiInstance).toBe(true);
+
+    const reddit = templates.find((t) => t.alias === 'reddit')!;
+    expect(reddit.supportsMultiInstance).toBe(true);
+
+    const github = templates.find((t) => t.alias === 'github')!;
+    expect(github.supportsMultiInstance).toBe(true);
+  });
+
+  it('should report supportsMultiInstance=false for connections without multi-instance support', () => {
+    const templates = listConnectionTemplates();
+
+    // Connections without ingestors should not support multi-instance
+    const anthropic = templates.find((t) => t.alias === 'anthropic')!;
+    expect(anthropic.supportsMultiInstance).toBe(false);
+
+    const openai = templates.find((t) => t.alias === 'openai')!;
+    expect(openai.supportsMultiInstance).toBe(false);
+  });
+});
+
 // ── Connection template JSON structure validation ──────────────────────
 
 describe('connection template JSON structure validation', () => {
@@ -768,6 +858,38 @@ describe('connection template JSON structure validation', () => {
           expect(field.dynamicOptions.labelField).toBeTruthy();
           expect(field.dynamicOptions.valueField).toBeTruthy();
         }
+      }
+    }
+  });
+
+  it('should have at most one instanceKey field per listenerConfig', () => {
+    for (const t of withIngestors) {
+      const route = loadConnection(t.alias);
+      if (route.listenerConfig) {
+        const instanceKeyFields = route.listenerConfig.fields.filter((f) => f.instanceKey);
+        expect(instanceKeyFields.length).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it('should have instanceKey fields only on multi-instance connections', () => {
+    for (const t of templates) {
+      const route = loadConnection(t.alias);
+      if (route.listenerConfig) {
+        const hasInstanceKeyField = route.listenerConfig.fields.some((f) => f.instanceKey);
+        if (hasInstanceKeyField) {
+          expect(route.listenerConfig.supportsMultiInstance).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('should have multi-instance connections declare an instanceKey field', () => {
+    for (const t of templates) {
+      const route = loadConnection(t.alias);
+      if (route.listenerConfig?.supportsMultiInstance) {
+        const hasInstanceKeyField = route.listenerConfig.fields.some((f) => f.instanceKey);
+        expect(hasInstanceKeyField).toBe(true);
       }
     }
   });

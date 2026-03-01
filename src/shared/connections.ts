@@ -43,6 +43,9 @@ export interface ConnectionTemplateInfo {
   hasTestIngestor: boolean;
   /** Whether this connection has a listener configuration schema. */
   hasListenerConfig: boolean;
+  /** Whether this connection's listener supports multiple concurrent instances
+   *  (e.g., watching multiple Trello boards or Reddit subreddits simultaneously). */
+  supportsMultiInstance: boolean;
   /** Allowlisted URL patterns (glob). */
   allowedEndpoints: string[];
 }
@@ -152,6 +155,7 @@ export function listConnectionTemplates(): ConnectionTemplateInfo[] {
       hasTestConnection: route.testConnection !== undefined,
       hasTestIngestor: route.testIngestor !== undefined && route.testIngestor !== null,
       hasListenerConfig: route.listenerConfig !== undefined,
+      supportsMultiInstance: route.listenerConfig?.supportsMultiInstance ?? false,
       allowedEndpoints: route.allowedEndpoints,
     };
   });

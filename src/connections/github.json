@@ -29,8 +29,18 @@
   },
   "listenerConfig": {
     "name": "GitHub Webhook Listener",
-    "description": "Receives real-time events from GitHub via webhooks.",
+    "description": "Receives real-time events from GitHub via webhooks. Supports multiple concurrent instances to filter events from different repositories.",
+    "supportsMultiInstance": true,
     "fields": [
+      {
+        "key": "repoFilter",
+        "label": "Repository Filter",
+        "description": "Only capture webhook events from these repositories (owner/repo format). Leave empty for all.",
+        "type": "text[]",
+        "instanceKey": true,
+        "placeholder": "e.g., octocat/Hello-World",
+        "group": "Filtering"
+      },
       {
         "key": "eventFilter",
         "label": "Event Types",

@@ -137,6 +137,14 @@ export interface ListenerConfigField {
    */
   overrideKey?: string;
 
+  /**
+   * Marks this field as the instance-identifying key for multi-instance support.
+   * When true, each unique value of this field creates a separate listener instance
+   * (e.g., boardId for Trello, subreddit for Reddit).
+   * At most one field per listenerConfig should have instanceKey: true.
+   */
+  instanceKey?: boolean;
+
   /** Group label for organizing fields in UIs (e.g., "Filtering", "Connection", "Advanced"). */
   group?: string;
 }
@@ -162,4 +170,12 @@ export interface ListenerConfigSchema {
   description?: string;
   /** The configurable fields. */
   fields: ListenerConfigField[];
+  /**
+   * Whether this listener supports multiple concurrent instances.
+   * When true, callers can define `listenerInstances` in their config to spawn
+   * N ingestors per connection with different parameter values (e.g., watching
+   * multiple Trello boards or multiple Reddit subreddits simultaneously).
+   * Default: false
+   */
+  supportsMultiInstance?: boolean;
 }

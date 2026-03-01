@@ -63,8 +63,9 @@ export class PollIngestor extends BaseIngestor {
     /** Pre-resolved headers from the connection's route. */
     routeHeaders: Record<string, string>,
     bufferSize?: number,
+    instanceId?: string,
   ) {
-    super(connectionAlias, 'poll', secrets, bufferSize);
+    super(connectionAlias, 'poll', secrets, bufferSize, instanceId);
 
     // Resolve ${VAR} placeholders in URL
     this.url = PollIngestor.resolvePlaceholders(pollConfig.url, secrets);
@@ -337,7 +338,7 @@ export class PollIngestor extends BaseIngestor {
 
 // ── Self-registration ──────────────────────────────────────────────────
 
-registerIngestorFactory('poll', (connectionAlias, config, secrets, bufferSize) => {
+registerIngestorFactory('poll', (connectionAlias, config, secrets, bufferSize, instanceId) => {
   if (!config.poll) {
     log.error(`Missing poll config for ${connectionAlias}`);
     return null;
@@ -350,5 +351,6 @@ registerIngestorFactory('poll', (connectionAlias, config, secrets, bufferSize) =
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unnecessary-condition -- route headers injected by manager via private property; may be absent
     ((config as any)._resolvedRouteHeaders as Record<string, string>) ?? {},
     bufferSize,
+    instanceId,
   );
 });

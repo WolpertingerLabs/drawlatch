@@ -398,6 +398,7 @@ const toolHandlers: Record<string, ToolHandler> = {
         info.hasListenerConfig = route.listenerConfig !== undefined;
         if (route.listenerConfig) {
           info.listenerParamKeys = route.listenerConfig.fields.map((f) => f.key);
+          info.supportsMultiInstance = route.listenerConfig.supportsMultiInstance ?? false;
         }
       }
 
@@ -412,15 +413,16 @@ const toolHandlers: Record<string, ToolHandler> = {
    * Returns events since a cursor, optionally filtered by connection.
    */
   poll_events(input, _routes, context) {
-    const { connection, after_id } = input as {
+    const { connection, after_id, instance_id } = input as {
       connection?: string;
       after_id?: number;
+      instance_id?: string;
     };
     const afterId = after_id ?? -1;
 
     if (connection) {
       return Promise.resolve(
-        context.ingestorManager.getEvents(context.callerAlias, connection, afterId),
+        context.ingestorManager.getEvents(context.callerAlias, connection, afterId, instance_id),
       );
     }
     return Promise.resolve(context.ingestorManager.getAllEvents(context.callerAlias, afterId));
@@ -629,6 +631,8 @@ const toolHandlers: Record<string, ToolHandler> = {
         description: r.listenerConfig!.description,
         fields: r.listenerConfig!.fields,
         ingestorType: r.ingestorConfig?.type,
+        supportsMultiInstance: r.listenerConfig!.supportsMultiInstance ?? false,
+        instanceKeyField: r.listenerConfig!.fields.find(f => f.instanceKey)?.key,
       }));
     return Promise.resolve(configs);
   },
@@ -695,9 +699,10 @@ const toolHandlers: Record<string, ToolHandler> = {
    * Start, stop, or restart an event listener for a specific connection.
    */
   async control_listener(input, _routes, context) {
-    const { connection, action } = input as {
+    const { connection, action, instance_id } = input as {
       connection: string;
       action: 'start' | 'stop' | 'restart';
+      instance_id?: string;
     };
 
     const mgr = context.ingestorManager;
@@ -705,11 +710,11 @@ const toolHandlers: Record<string, ToolHandler> = {
     try {
       switch (action) {
         case 'start':
-          return await mgr.startOne(context.callerAlias, connection);
+          return await mgr.startOne(context.callerAlias, connection, instance_id);
         case 'stop':
-          return await mgr.stopOne(context.callerAlias, connection);
+          return await mgr.stopOne(context.callerAlias, connection, instance_id);
         case 'restart':
-          return await mgr.restartOne(context.callerAlias, connection);
+          return await mgr.restartOne(context.callerAlias, connection, instance_id);
         default:
           return { success: false, error: `Unknown action: ${String(action)}` };
       }

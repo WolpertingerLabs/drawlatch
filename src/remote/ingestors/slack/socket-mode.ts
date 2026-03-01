@@ -50,8 +50,9 @@ export class SlackSocketModeIngestor extends BaseIngestor {
     secrets: Record<string, string>,
     private readonly wsConfig: WebSocketIngestorConfig,
     bufferSize?: number,
+    instanceId?: string,
   ) {
-    super(connectionAlias, 'websocket', secrets, bufferSize);
+    super(connectionAlias, 'websocket', secrets, bufferSize, instanceId);
     this.connectUrl = wsConfig.gatewayUrl;
     this.eventFilter = wsConfig.eventFilter ?? [];
     this.channelIds = new Set(wsConfig.channelIds ?? []);
@@ -323,10 +324,10 @@ export class SlackSocketModeIngestor extends BaseIngestor {
 
 // ── Self-registration ────────────────────────────────────────────────────
 
-registerIngestorFactory('websocket:slack', (connectionAlias, config, secrets, bufferSize) => {
+registerIngestorFactory('websocket:slack', (connectionAlias, config, secrets, bufferSize, instanceId) => {
   if (!config.websocket) {
     log.error(`Missing websocket config for ${connectionAlias}`);
     return null;
   }
-  return new SlackSocketModeIngestor(connectionAlias, secrets, config.websocket, bufferSize);
+  return new SlackSocketModeIngestor(connectionAlias, secrets, config.websocket, bufferSize, instanceId);
 });

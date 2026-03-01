@@ -35,8 +35,20 @@
   },
   "listenerConfig": {
     "name": "Reddit Poll Listener",
-    "description": "Polls a subreddit for new posts at a configurable interval.",
+    "description": "Polls a subreddit for new posts at a configurable interval. Supports multiple concurrent instances to watch different subreddits simultaneously.",
+    "supportsMultiInstance": true,
     "fields": [
+      {
+        "key": "subreddit",
+        "label": "Subreddit",
+        "description": "The subreddit to watch for new posts (without the r/ prefix).",
+        "type": "text",
+        "required": true,
+        "instanceKey": true,
+        "overrideKey": "REDDIT_SUBREDDIT",
+        "placeholder": "e.g., rust",
+        "group": "Connection"
+      },
       {
         "key": "intervalMs",
         "label": "Poll Interval (ms)",

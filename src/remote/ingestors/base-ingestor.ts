@@ -54,6 +54,10 @@ export abstract class BaseIngestor extends EventEmitter {
     protected readonly secrets: Record<string, string>,
     /** Buffer capacity (defaults to DEFAULT_BUFFER_SIZE). */
     bufferSize: number = DEFAULT_BUFFER_SIZE,
+    /** Optional instance identifier for multi-instance support.
+     *  When set, this ingestor is one of N instances for the same connection
+     *  (e.g., watching different Trello boards or Reddit subreddits). */
+    protected readonly instanceId?: string,
   ) {
     super();
     this.buffer = new RingBuffer<IngestedEvent>(bufferSize);
@@ -92,6 +96,7 @@ export abstract class BaseIngestor extends EventEmitter {
       receivedAt: now.toISOString(),
       receivedAtMs: now.getTime(),
       source: this.connectionAlias,
+      ...(this.instanceId !== undefined && { instanceId: this.instanceId }),
       eventType,
       data,
     };
@@ -136,6 +141,7 @@ export abstract class BaseIngestor extends EventEmitter {
   getStatus(): IngestorStatus {
     return {
       connection: this.connectionAlias,
+      ...(this.instanceId !== undefined && { instanceId: this.instanceId }),
       type: this.ingestorType,
       state: this.state,
       bufferedEvents: this.buffer.size,

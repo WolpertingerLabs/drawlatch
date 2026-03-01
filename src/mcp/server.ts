@@ -245,12 +245,17 @@ server.tool(
       .number()
       .optional()
       .describe('Return events with id > after_id. Omit or -1 for all buffered events.'),
+    instance_id: z
+      .string()
+      .optional()
+      .describe('Instance ID for multi-instance listeners (e.g., "project-board"). Omit for all instances.'),
   },
-  async ({ connection, after_id }) => {
+  async ({ connection, after_id, instance_id }) => {
     try {
       const result = await sendEncryptedRequest('poll_events', {
         connection,
         after_id,
+        instance_id,
       });
       return {
         content: [
@@ -438,10 +443,14 @@ server.tool(
   {
     connection: z.string().describe('Connection alias (e.g., "discord-bot")'),
     action: z.enum(['start', 'stop', 'restart']).describe('Lifecycle action to perform'),
+    instance_id: z
+      .string()
+      .optional()
+      .describe('Instance ID for multi-instance listeners. Omit to control all instances.'),
   },
-  async ({ connection, action }) => {
+  async ({ connection, action, instance_id }) => {
     try {
-      const result = await sendEncryptedRequest('control_listener', { connection, action });
+      const result = await sendEncryptedRequest('control_listener', { connection, action, instance_id });
       return {
         content: [
           {

@@ -19,6 +19,7 @@ export type IngestorFactory = (
   config: IngestorConfig,
   secrets: Record<string, string>,
   bufferSize?: number,
+  instanceId?: string,
 ) => BaseIngestor | null;
 
 /** Registered factories keyed by type string (e.g., 'websocket:discord'). */
@@ -50,6 +51,7 @@ export function createIngestor(
   config: IngestorConfig,
   secrets: Record<string, string>,
   bufferSize?: number,
+  instanceId?: string,
 ): BaseIngestor | null {
   const key =
     config.type === 'websocket'
@@ -64,5 +66,5 @@ export function createIngestor(
     return null;
   }
 
-  return factory(connectionAlias, config, secrets, bufferSize);
+  return factory(connectionAlias, config, secrets, bufferSize, instanceId);
 }
