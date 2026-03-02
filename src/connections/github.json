@@ -21,5 +21,62 @@
       "signatureHeader": "X-Hub-Signature-256",
       "signatureSecret": "GITHUB_WEBHOOK_SECRET"
     }
+  },
+  "testIngestor": {
+    "description": "Verifies that the GitHub webhook secret is configured",
+    "strategy": "webhook_verify",
+    "requireSecrets": ["GITHUB_WEBHOOK_SECRET"]
+  },
+  "listenerConfig": {
+    "name": "GitHub Webhook Listener",
+    "description": "Receives real-time events from GitHub via webhooks. Supports multiple concurrent instances to filter events from different repositories.",
+    "supportsMultiInstance": true,
+    "fields": [
+      {
+        "key": "repoFilter",
+        "label": "Repository Filter",
+        "description": "Only capture webhook events from these repositories (owner/repo format). Leave empty for all.",
+        "type": "text[]",
+        "instanceKey": true,
+        "placeholder": "e.g., octocat/Hello-World",
+        "group": "Filtering"
+      },
+      {
+        "key": "eventFilter",
+        "label": "Event Types",
+        "description": "Which GitHub event types to capture. Leave empty for all.",
+        "type": "multiselect",
+        "default": [],
+        "options": [
+          {"value": "push", "label": "Push"},
+          {"value": "pull_request", "label": "Pull Request"},
+          {"value": "issues", "label": "Issues"},
+          {"value": "issue_comment", "label": "Issue Comment"},
+          {"value": "create", "label": "Branch/Tag Created"},
+          {"value": "delete", "label": "Branch/Tag Deleted"},
+          {"value": "release", "label": "Release"},
+          {"value": "workflow_run", "label": "Workflow Run"},
+          {"value": "check_run", "label": "Check Run"},
+          {"value": "star", "label": "Star"},
+          {"value": "fork", "label": "Fork"},
+          {"value": "deployment", "label": "Deployment"}
+        ],
+        "group": "Filtering"
+      },
+      {
+        "key": "bufferSize",
+        "label": "Buffer Size",
+        "description": "Maximum number of events to keep in memory.",
+        "type": "number",
+        "default": 200,
+        "min": 10,
+        "max": 1000,
+        "group": "Advanced"
+      }
+    ]
+  },
+  "testConnection": {
+    "url": "https://api.github.com/user",
+    "description": "Fetches the authenticated user profile"
   }
 }

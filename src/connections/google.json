@@ -24,5 +24,9 @@
     "https://youtube.googleapis.com/**",
     "https://youtubeanalytics.googleapis.com/**",
     "https://cloudresourcemanager.googleapis.com/**"
-  ]
+  ],
+  "testConnection": {
+    "url": "https://www.googleapis.com/oauth2/v1/userinfo",
+    "description": "Fetches the authenticated user info"
+  }
 }

@@ -12,5 +12,9 @@
   },
   "allowedEndpoints": [
     "https://openrouter.ai/api/**"
-  ]
+  ],
+  "testConnection": {
+    "url": "https://openrouter.ai/api/v1/models",
+    "description": "Lists available models"
+  }
 }
