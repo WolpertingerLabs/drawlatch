@@ -875,3 +875,130 @@ describe('IngestorManager — backward compatibility', () => {
     await manager.stopAll();
   });
 });
+
+// ── Webhook lifecycle: permanent stop and instanceKey secrets ────────────
+
+describe('IngestorManager — webhook lifecycle permanent stop', () => {
+  const makeWebhookConfig = (): RemoteServerConfig => ({
+    host: '127.0.0.1',
+    port: 9999,
+    localKeysDir: '',
+    connectors: [
+      {
+        alias: 'github',
+        secrets: { GITHUB_TOKEN: 'ghp_test', GITHUB_WEBHOOK_SECRET: 'secret123' },
+        allowedEndpoints: ['https://api.github.com/**'],
+        ingestor: {
+          type: 'webhook',
+          webhook: {
+            path: 'github',
+            signatureHeader: 'X-Hub-Signature-256',
+            signatureSecret: 'GITHUB_WEBHOOK_SECRET',
+          },
+        },
+      },
+    ],
+    callers: {
+      'test-caller': { peerKeyDir: '', connections: ['github'] },
+    },
+    rateLimitPerMinute: 60,
+  });
+
+  it('should pass permanent flag through stopOne to ingestor.stop()', async () => {
+    const config = makeWebhookConfig();
+    const manager = new IngestorManager(config);
+    await manager.startOne('test-caller', 'github');
+
+    // Verify the ingestor is running
+    expect(manager.has('test-caller', 'github')).toBe(true);
+
+    // Stop with permanent option
+    const result = await manager.stopOne('test-caller', 'github', undefined, { permanent: true });
+    const singleResult = result as { success: boolean; state?: string };
+    expect(singleResult.success).toBe(true);
+    expect(singleResult.state).toBe('stopped');
+    expect(manager.has('test-caller', 'github')).toBe(false);
+  });
+
+  it('should stop successfully without permanent flag', async () => {
+    const config = makeWebhookConfig();
+    const manager = new IngestorManager(config);
+    await manager.startOne('test-caller', 'github');
+
+    const result = await manager.stopOne('test-caller', 'github');
+    const singleResult = result as { success: boolean; state?: string };
+    expect(singleResult.success).toBe(true);
+    expect(singleResult.state).toBe('stopped');
+  });
+
+  it('should pass permanent flag through stopOne with instanceId', async () => {
+    const config = makeWebhookConfig();
+    const manager = new IngestorManager(config);
+    await manager.startOne('test-caller', 'github');
+
+    // Stop a specific instance with permanent flag
+    const result = await manager.stopOne('test-caller', 'github', undefined, { permanent: true });
+    const singleResult = result as { success: boolean; state?: string };
+    expect(singleResult.success).toBe(true);
+    expect(manager.has('test-caller', 'github')).toBe(false);
+  });
+
+  it('should call stop(true) on stopAll (permanent shutdown)', async () => {
+    const config = makeWebhookConfig();
+    const manager = new IngestorManager(config);
+    await manager.startOne('test-caller', 'github');
+
+    expect(manager.has('test-caller', 'github')).toBe(true);
+
+    // stopAll internally calls stop(true) for permanent shutdown
+    await manager.stopAll();
+
+    expect(manager.has('test-caller', 'github')).toBe(false);
+  });
+});
+
+describe('IngestorManager.applyInstanceParams — instanceKey secrets injection', () => {
+  it('should inject instanceKey params into secrets for lifecycle template resolution', () => {
+    const config: IngestorConfig = {
+      type: 'webhook',
+      webhook: { path: 'trello' },
+    };
+    const secrets: Record<string, string> = { TRELLO_TOKEN: 'tok_test' };
+    const params = { boardId: 'board-abc-123' };
+    const fields: ListenerConfigField[] = [
+      { key: 'boardId', label: 'Board ID', type: 'text', instanceKey: true },
+    ];
+
+    IngestorManager.applyInstanceParams(config, secrets, params, fields);
+
+    // Should be attached to webhook config for payload discrimination
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
+    expect((config.webhook as any)._boardId).toBe('board-abc-123');
+
+    // Should ALSO be injected into secrets for ${boardId} lifecycle template resolution
+    expect(secrets.boardId).toBe('board-abc-123');
+
+    // Original secrets should be preserved
+    expect(secrets.TRELLO_TOKEN).toBe('tok_test');
+  });
+
+  it('should not inject non-string instanceKey params into secrets', () => {
+    const config: IngestorConfig = {
+      type: 'webhook',
+      webhook: { path: 'test' },
+    };
+    const secrets: Record<string, string> = {};
+    const params = { priority: 42 };
+    const fields: ListenerConfigField[] = [
+      { key: 'priority', label: 'Priority', type: 'number', instanceKey: true },
+    ];
+
+    IngestorManager.applyInstanceParams(config, secrets, params, fields);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
+    expect((config.webhook as any)._priority).toBe(42);
+
+    // Non-string values should NOT be injected into secrets
+    expect(secrets.priority).toBeUndefined();
+  });
+});
