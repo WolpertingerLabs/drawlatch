@@ -27,6 +27,8 @@ export interface ConnectionTemplateInfo {
   docsUrl?: string;
   /** URL to an OpenAPI / Swagger spec. */
   openApiUrl?: string;
+  /** Stability level: "stable", "beta", or "dev". */
+  stability: 'stable' | 'beta' | 'dev';
   /** Secret names referenced in route headers — these are auto-injected
    *  into every request, so they must always be configured. */
   requiredSecrets: string[];
@@ -148,6 +150,7 @@ export function listConnectionTemplates(): ConnectionTemplateInfo[] {
       ...(route.description !== undefined && { description: route.description }),
       ...(route.docsUrl !== undefined && { docsUrl: route.docsUrl }),
       ...(route.openApiUrl !== undefined && { openApiUrl: route.openApiUrl }),
+      stability: route.stability ?? 'dev',
       requiredSecrets,
       optionalSecrets,
       hasIngestor: route.ingestor !== undefined,

@@ -1,5 +1,6 @@
 {
   "name": "Hex API",
+  "stability": "dev",
   "description": "Hex API — projects, runs, users, groups, collections, and data connections. Auth is handled automatically via the HEX_TOKEN environment variable.",
   "docsUrl": "https://learn.hex.tech/docs/api/api-overview",
   "headers": {

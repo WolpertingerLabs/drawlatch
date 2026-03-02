@@ -96,6 +96,10 @@ export interface Route {
   /** URL to an OpenAPI / Swagger spec (JSON or YAML) for this route's API.
    *  Optional — provides more structured, agent-friendly documentation. */
   openApiUrl?: string;
+  /** Stability level of this connection: "stable", "beta", or "dev".
+   *  Defaults to "dev" if omitted. Helps agents and UIs communicate
+   *  whether a connection is production-ready, in testing, or experimental. */
+  stability?: 'stable' | 'beta' | 'dev';
   /** Headers to inject automatically into outgoing requests for this route.
    *  These MUST NOT conflict with client-provided headers (request is rejected on conflict).
    *  Values may contain ${VAR} placeholders resolved against this route's secrets. */
@@ -139,6 +143,8 @@ export interface ResolvedRoute {
   docsUrl?: string;
   /** URL to an OpenAPI / Swagger spec for this route's API (carried from config) */
   openApiUrl?: string;
+  /** Stability level (carried from config) */
+  stability?: 'stable' | 'beta' | 'dev';
   headers: Record<string, string>;
   secrets: Record<string, string>;
   allowedEndpoints: string[];
@@ -477,6 +483,7 @@ export function resolveRoutes(
       ...(route.description !== undefined && { description: route.description }),
       ...(route.docsUrl !== undefined && { docsUrl: route.docsUrl }),
       ...(route.openApiUrl !== undefined && { openApiUrl: route.openApiUrl }),
+      ...(route.stability !== undefined && { stability: route.stability }),
       headers: resolvedHeaders,
       secrets: resolvedSecrets,
       allowedEndpoints: route.allowedEndpoints,
