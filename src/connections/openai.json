@@ -1,5 +1,6 @@
 {
   "name": "OpenAI API",
+  "stability": "beta",
   "description": "OpenAI API — chat completions, embeddings, images, audio, files, fine-tuning, and more. Auth is handled automatically via the OPENAI_API_KEY environment variable.",
   "docsUrl": "https://platform.openai.com/docs/api-reference",
   "openApiUrl": "https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml",

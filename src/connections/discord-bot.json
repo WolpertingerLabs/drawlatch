@@ -1,5 +1,6 @@
 {
   "name": "Discord Bot API",
+  "stability": "stable",
   "description": "Discord Bot API (v10) — guilds, channels, messages, users, roles, and more. Auth is handled automatically via the DISCORD_BOT_TOKEN environment variable. Uses the 'Bot' authorization prefix. For OAuth2 user-scoped access, use the 'discord-oauth' connection instead. Includes a Gateway ingestor for real-time events (messages, reactions, etc.) — use poll_events to retrieve them.",
   "docsUrl": "https://discord.com/developers/docs/intro",
   "openApiUrl": "https://raw.githubusercontent.com/discord/discord-api-spec/main/specs/openapi.json",

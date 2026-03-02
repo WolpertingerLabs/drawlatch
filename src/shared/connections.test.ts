@@ -948,3 +948,99 @@ describe('connection template JSON structure validation', () => {
     }
   });
 });
+
+// ── Stability field ─────────────────────────────────────────────────────
+
+describe('listConnectionTemplates — stability field (unit)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should return stability when present in template', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'API',
+        stability: 'stable',
+        allowedEndpoints: ['https://api.example.com/**'],
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].stability).toBe('stable');
+  });
+
+  it('should default stability to "dev" when omitted from template', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'API',
+        allowedEndpoints: ['https://api.example.com/**'],
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].stability).toBe('dev');
+  });
+
+  it('should accept all three stability values', () => {
+    for (const level of ['stable', 'beta', 'dev'] as const) {
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(
+        JSON.stringify({
+          name: 'API',
+          stability: level,
+          allowedEndpoints: ['https://api.example.com/**'],
+        }),
+      );
+
+      const templates = listConnectionTemplates();
+      expect(templates[0].stability).toBe(level);
+      vi.restoreAllMocks();
+    }
+  });
+});
+
+describe('listConnectionTemplates — stability field (integration)', () => {
+  it('should have a valid stability value for all bundled templates', () => {
+    const templates = listConnectionTemplates();
+    const validValues = ['stable', 'beta', 'dev'];
+
+    for (const t of templates) {
+      expect(validValues).toContain(t.stability);
+    }
+  });
+
+  it('should report stability="stable" for discord-bot, slack, trello, google-ai, openrouter, lichess', () => {
+    const templates = listConnectionTemplates();
+    const stableAliases = ['discord-bot', 'slack', 'trello', 'google-ai', 'openrouter', 'lichess'];
+
+    for (const alias of stableAliases) {
+      const t = templates.find((t) => t.alias === alias)!;
+      expect(t.stability).toBe('stable');
+    }
+  });
+
+  it('should report stability="beta" for github, stripe, and other beta connections', () => {
+    const templates = listConnectionTemplates();
+    const betaAliases = ['github', 'stripe', 'anthropic', 'openai'];
+
+    for (const alias of betaAliases) {
+      const t = templates.find((t) => t.alias === alias)!;
+      expect(t.stability).toBe('beta');
+    }
+  });
+
+  it('should report stability="dev" for devin, hex, discord-oauth, google', () => {
+    const templates = listConnectionTemplates();
+    const devAliases = ['devin', 'hex', 'discord-oauth', 'google'];
+
+    for (const alias of devAliases) {
+      const t = templates.find((t) => t.alias === alias)!;
+      expect(t.stability).toBe('dev');
+    }
+  });
+});

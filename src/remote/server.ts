@@ -387,6 +387,7 @@ const toolHandlers: Record<string, ToolHandler> = {
       if (route.description) info.description = route.description;
       if (route.docsUrl) info.docsUrl = route.docsUrl;
       if (route.openApiUrl) info.openApiUrl = route.openApiUrl;
+      if (route.stability) info.stability = route.stability;
 
       info.allowedEndpoints = route.allowedEndpoints;
       info.secretNames = Object.keys(route.secrets);
