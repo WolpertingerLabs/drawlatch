@@ -136,13 +136,6 @@ function auditLog(sessionId: string, action: string, details: Record<string, unk
     ...details,
   };
 
-  if (
-    'toolName' in details &&
-    (details.toolName === 'poll_events' || details.toolName === 'ingestor_status')
-  ) {
-    return;
-  }
-
   console.log(`[audit] ${JSON.stringify(entry)}`);
 }
 
