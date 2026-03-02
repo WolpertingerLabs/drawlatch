@@ -1,6 +1,7 @@
 {
   "name": "Anthropic API",
   "stability": "beta",
+  "category": "ai",
   "description": "Anthropic Claude API — messages, models, and more. Auth is handled automatically via the ANTHROPIC_API_KEY environment variable. Uses x-api-key header (not Bearer token). The anthropic-version header is set to 2023-06-01.",
   "docsUrl": "https://docs.anthropic.com/en/api",
   "headers": {

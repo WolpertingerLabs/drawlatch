@@ -1,6 +1,7 @@
 {
   "name": "Linear API",
   "stability": "beta",
+  "category": "developer-tools",
   "description": "Linear GraphQL API — issues, projects, teams, cycles, and more. Auth is handled automatically via the LINEAR_API_KEY environment variable. All requests are GraphQL queries sent as POST to https://api.linear.app/graphql. Includes a poll ingestor that periodically fetches recently updated issues — use poll_events to retrieve them.",
   "docsUrl": "https://developers.linear.app/docs/graphql/working-with-the-graphql-api",
   "headers": {

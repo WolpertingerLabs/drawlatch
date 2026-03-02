@@ -1,6 +1,7 @@
 {
   "name": "Notion API",
   "stability": "beta",
+  "category": "productivity",
   "description": "Notion API — pages, databases, blocks, users, search, and more. Auth is handled automatically via the NOTION_API_KEY environment variable (internal integration token). The Notion-Version header is set to 2022-06-28. Includes a poll ingestor that periodically searches for recently edited pages — use poll_events to retrieve them.",
   "docsUrl": "https://developers.notion.com/reference",
   "headers": {

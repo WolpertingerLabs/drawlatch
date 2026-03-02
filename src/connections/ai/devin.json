@@ -1,6 +1,7 @@
 {
   "name": "Devin API",
   "stability": "dev",
+  "category": "ai",
   "description": "Devin AI API — sessions, knowledge, and machine management. Auth is handled automatically via the DEVIN_API_KEY environment variable.",
   "docsUrl": "https://docs.devin.ai/api-reference/overview",
   "headers": {

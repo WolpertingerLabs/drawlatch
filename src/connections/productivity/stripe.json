@@ -1,6 +1,7 @@
 {
   "name": "Stripe API",
   "stability": "beta",
+  "category": "productivity",
   "description": "Stripe payments API — customers, charges, payment intents, subscriptions, invoices, and more. Auth is handled automatically via the STRIPE_SECRET_KEY environment variable. Includes a webhook ingestor for real-time events (payment_intent.succeeded, invoice.paid, etc.) — set STRIPE_WEBHOOK_SECRET and use poll_events to retrieve them. Note: Stripe uses application/x-www-form-urlencoded for request bodies, not JSON.",
   "docsUrl": "https://docs.stripe.com/api",
   "openApiUrl": "https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json",
