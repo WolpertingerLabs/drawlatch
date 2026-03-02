@@ -88,7 +88,7 @@ export class WebhookLifecycleManager {
 
     try {
       // Try to discover existing webhooks
-      let existingWebhooks: Array<Record<string, unknown>> | null = null;
+      let existingWebhooks: Record<string, unknown>[] | null = null;
 
       if (this.config.list) {
         try {
@@ -104,12 +104,14 @@ export class WebhookLifecycleManager {
 
         // Find a webhook matching our callback URL (and model ID if applicable)
         const matching = existingWebhooks.find(wh => {
-          const whCallbackUrl = String(wh[listConfig.callbackUrlField] ?? '');
+          const rawUrl = wh[listConfig.callbackUrlField];
+          const whCallbackUrl = typeof rawUrl === 'string' ? rawUrl : '';
           const urlMatch = whCallbackUrl === callbackUrl;
 
           if (!urlMatch) return false;
           if (modelId && listConfig.modelIdField) {
-            return String(wh[listConfig.modelIdField] ?? '') === modelId;
+            const rawModelId = wh[listConfig.modelIdField];
+            return (typeof rawModelId === 'string' ? rawModelId : '') === modelId;
           }
           return true;
         });
@@ -123,8 +125,10 @@ export class WebhookLifecycleManager {
         // Clean up stale webhooks (matching model but wrong callback URL)
         if (modelId && listConfig.modelIdField && this.config.unregister) {
           const stale = existingWebhooks.filter(wh => {
-            const whModelId = String(wh[listConfig.modelIdField!] ?? '');
-            const whCallbackUrl = String(wh[listConfig.callbackUrlField] ?? '');
+            const rawModelId = wh[listConfig.modelIdField!];
+            const whModelId = typeof rawModelId === 'string' ? rawModelId : '';
+            const rawUrl = wh[listConfig.callbackUrlField];
+            const whCallbackUrl = typeof rawUrl === 'string' ? rawUrl : '';
             return whModelId === modelId && whCallbackUrl !== callbackUrl;
           });
 
@@ -189,7 +193,7 @@ export class WebhookLifecycleManager {
   // ── Private helpers ────────────────────────────────────────────────────
 
   /** Fetch the list of existing webhooks from the external service. */
-  private async listWebhooks(): Promise<Array<Record<string, unknown>>> {
+  private async listWebhooks(): Promise<Record<string, unknown>[]> {
     const listConfig = this.config.list!;
     const url = resolvePlaceholders(listConfig.url, this.secrets);
     const headers = this.resolveHeaders(listConfig.headers);
@@ -220,7 +224,7 @@ export class WebhookLifecycleManager {
       );
     }
 
-    return webhooks as Array<Record<string, unknown>>;
+    return webhooks as Record<string, unknown>[];
   }
 
   /** Register a new webhook with the external service. */
@@ -233,8 +237,8 @@ export class WebhookLifecycleManager {
 
     // Merge callbackUrl and modelId into resolution context
     const mergedSecrets: Record<string, string> = { ...this.secrets };
-    if (callbackUrl) mergedSecrets['CALLBACK_URL'] = callbackUrl;
-    if (modelId) mergedSecrets['MODEL_ID'] = modelId;
+    if (callbackUrl) mergedSecrets.CALLBACK_URL = callbackUrl;
+    if (modelId) mergedSecrets.MODEL_ID = modelId;
 
     const url = resolvePlaceholders(registerConfig.url, mergedSecrets);
     const headers = this.resolveHeaders(registerConfig.headers, mergedSecrets);
@@ -265,9 +269,13 @@ export class WebhookLifecycleManager {
     }
 
     const json = await resp.json();
-    const webhookId = String(
-      (json as Record<string, unknown>)[registerConfig.idField] ?? '',
-    );
+    const rawWebhookId = (json as Record<string, unknown>)[registerConfig.idField];
+    const webhookId =
+      typeof rawWebhookId === 'string'
+        ? rawWebhookId
+        : typeof rawWebhookId === 'number'
+          ? String(rawWebhookId)
+          : '';
 
     if (!webhookId) {
       return {

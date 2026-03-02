@@ -27,6 +27,7 @@ import {
   getEnvFilePath,
   type RemoteServerConfig,
   type CallerConfig,
+  type IngestorOverrides,
   type ResolvedRoute,
 } from '../shared/config.js';
 import {
@@ -778,7 +779,7 @@ const toolHandlers: Record<string, ToolHandler> = {
 
     // Load config to read current overrides
     const config = loadRemoteConfig();
-    const callerConfig = config.callers[context.callerAlias];
+    const callerConfig = config.callers[context.callerAlias] as CallerConfig | undefined;
     if (!callerConfig) {
       return Promise.resolve({
         success: false,
@@ -811,7 +812,7 @@ const toolHandlers: Record<string, ToolHandler> = {
     // the list of configured instance IDs so callers can discover them
     // without needing a separate list_listener_instances call.
     let instances: string[] | undefined;
-    if (!instance_id && route.listenerConfig?.supportsMultiInstance) {
+    if (!instance_id && route.listenerConfig.supportsMultiInstance) {
       const instanceMap = callerConfig.listenerInstances?.[connection] ?? {};
       instances = Object.keys(instanceMap);
     }
@@ -867,7 +868,7 @@ const toolHandlers: Record<string, ToolHandler> = {
 
     // Load config, modify, save
     const config = loadRemoteConfig();
-    const callerConfig = config.callers[context.callerAlias];
+    const callerConfig = config.callers[context.callerAlias] as CallerConfig | undefined;
     if (!callerConfig) {
       return {
         success: false,
@@ -883,7 +884,9 @@ const toolHandlers: Record<string, ToolHandler> = {
       callerConfig.listenerInstances ??= {};
       callerConfig.listenerInstances[connection] ??= {};
 
-      const existing = callerConfig.listenerInstances[connection][instance_id];
+      const existing = callerConfig.listenerInstances[connection][instance_id] as
+        | IngestorOverrides
+        | undefined;
 
       if (!existing && !create_instance) {
         return {
@@ -971,7 +974,7 @@ const toolHandlers: Record<string, ToolHandler> = {
 
     // Read from config
     const config = loadRemoteConfig();
-    const callerConfig = config.callers[context.callerAlias];
+    const callerConfig = config.callers[context.callerAlias] as CallerConfig | undefined;
     if (!callerConfig) {
       return Promise.resolve({
         success: false,
@@ -983,8 +986,8 @@ const toolHandlers: Record<string, ToolHandler> = {
     const instanceMap = callerConfig.listenerInstances?.[connection] ?? {};
     const instances = Object.entries(instanceMap).map(([instanceId, overrides]) => ({
       instanceId,
-      disabled: overrides?.disabled ?? false,
-      params: overrides?.params ?? {},
+      disabled: overrides.disabled ?? false,
+      params: overrides.params ?? {},
     }));
 
     return Promise.resolve({
@@ -1006,7 +1009,7 @@ const toolHandlers: Record<string, ToolHandler> = {
 
     // Load config
     const config = loadRemoteConfig();
-    const callerConfig = config.callers[context.callerAlias];
+    const callerConfig = config.callers[context.callerAlias] as CallerConfig | undefined;
     if (!callerConfig) {
       return {
         success: false,
@@ -1041,14 +1044,20 @@ const toolHandlers: Record<string, ToolHandler> = {
     }
 
     // Remove from config
-    delete instances[instance_id];
+    const { [instance_id]: _removed, ...remainingInstances } = instances;
 
     // Clean up empty maps
-    if (Object.keys(instances).length === 0) {
-      delete callerConfig.listenerInstances![connection];
-      if (Object.keys(callerConfig.listenerInstances!).length === 0) {
-        delete callerConfig.listenerInstances;
+    if (Object.keys(remainingInstances).length === 0) {
+      if (callerConfig.listenerInstances) {
+        const { [connection]: _removedConn, ...remainingConns } = callerConfig.listenerInstances;
+        if (Object.keys(remainingConns).length === 0) {
+          delete callerConfig.listenerInstances;
+        } else {
+          callerConfig.listenerInstances = remainingConns;
+        }
       }
+    } else {
+      callerConfig.listenerInstances![connection] = remainingInstances;
     }
 
     saveRemoteConfig(config);

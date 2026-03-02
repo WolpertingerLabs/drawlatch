@@ -26,16 +26,6 @@ import type { WebhookLifecycleConfig } from './lifecycle-types.js';
 class TestWebhookIngestor extends WebhookIngestor {
   public testModelId: string | undefined;
 
-  constructor(
-    connectionAlias: string,
-    secrets: Record<string, string>,
-    webhookConfig: WebhookIngestorConfig,
-    bufferSize?: number,
-    instanceId?: string,
-  ) {
-    super(connectionAlias, secrets, webhookConfig, bufferSize, instanceId);
-  }
-
   protected getModelId(): string | undefined {
     return this.testModelId;
   }

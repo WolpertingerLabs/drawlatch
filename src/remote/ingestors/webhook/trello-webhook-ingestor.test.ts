@@ -650,7 +650,6 @@ describe('TrelloWebhookIngestor — getModelId and board filtering', () => {
     });
 
     // Compute valid signature using the resolved URL
-    const crypto = require('node:crypto');
     const content = body + resolvedUrl;
     const sig = crypto.createHmac('sha1', 'secret').update(content).digest('base64');
 

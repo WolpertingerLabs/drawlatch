@@ -2244,7 +2244,7 @@ describe('test_connection tool', () => {
     tcClientKeys = generateKeyBundle();
     tcServerKeys = generateKeyBundle();
     const tcClientPub = extractPublicKeys(tcClientKeys);
-    const tcServerPub = extractPublicKeys(tcServerKeys);
+    const _tcServerPub = extractPublicKeys(tcServerKeys);
 
     // Create a simple echo server that returns 200 for GET requests
     const echoApp = http.createServer((req, res) => {

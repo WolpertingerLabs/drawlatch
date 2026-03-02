@@ -744,7 +744,7 @@ describe('IngestorManager — multi-instance webhook lifecycle', () => {
     const result = await manager.startOne('test-caller', 'github');
     // When listenerInstances are defined and no instanceId, returns array
     expect(Array.isArray(result)).toBe(true);
-    const results = result as Array<{ success: boolean }>;
+    const results = result as { success: boolean }[];
     expect(results).toHaveLength(2);
     expect(results.every((r) => r.success)).toBe(true);
 
@@ -775,7 +775,7 @@ describe('IngestorManager — multi-instance webhook lifecycle', () => {
     const result = await manager.stopOne('test-caller', 'github');
     // Two instances → returns array
     expect(Array.isArray(result)).toBe(true);
-    const results = result as Array<{ success: boolean }>;
+    const results = result as { success: boolean }[];
     expect(results).toHaveLength(2);
     expect(results.every((r) => r.success)).toBe(true);
 

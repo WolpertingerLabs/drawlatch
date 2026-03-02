@@ -51,7 +51,7 @@ export class GitHubWebhookIngestor extends WebhookIngestor {
   protected shouldAcceptPayload(body: unknown): boolean {
     if (this.repoFilter.length === 0) return true;
     const payload = body as { repository?: { full_name?: string } };
-    const repo = payload?.repository?.full_name;
+    const repo = payload.repository?.full_name;
     // Events without a repository (e.g., org-level events) pass through when no filter
     return repo ? this.repoFilter.includes(repo) : true;
   }

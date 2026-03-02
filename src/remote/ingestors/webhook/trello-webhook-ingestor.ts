@@ -68,7 +68,7 @@ export class TrelloWebhookIngestor extends WebhookIngestor {
   protected shouldAcceptPayload(body: unknown): boolean {
     if (!this.boardId) return true;
     const payload = body as { model?: { id?: string } };
-    return payload?.model?.id === this.boardId;
+    return payload.model?.id === this.boardId;
   }
 
   /**
