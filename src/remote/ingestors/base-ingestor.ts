@@ -110,7 +110,10 @@ export abstract class BaseIngestor extends EventEmitter {
     }
 
     log.info(`${this.connectionAlias} event #${event.id}: ${eventType}`);
-    log.debug(`${this.connectionAlias} event #${event.id} payload:`, JSON.stringify(data, null, 2));
+    log.debug(
+      `${this.connectionAlias} event #${event.id} payload size:`,
+      JSON.stringify(data).length,
+    );
     this.emit('event', event);
   }
 

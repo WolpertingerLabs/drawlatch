@@ -135,6 +135,11 @@ function auditLog(sessionId: string, action: string, details: Record<string, unk
     action,
     ...details,
   };
+
+  if ('toolName' in details && details.toolName === 'poll_events') {
+    return;
+  }
+
   console.log(`[audit] ${JSON.stringify(entry)}`);
 }
 
@@ -480,7 +485,11 @@ const toolHandlers: Record<string, ToolHandler> = {
         status: result.status,
         statusText: result.statusText,
         description: testConfig.description,
-        ...(isSuccess ? {} : { error: `Unexpected status ${result.status} (expected ${expectedStatus.join(' or ')})` }),
+        ...(isSuccess
+          ? {}
+          : {
+              error: `Unexpected status ${result.status} (expected ${expectedStatus.join(' or ')})`,
+            }),
       };
     } catch (err) {
       return {
@@ -597,7 +606,9 @@ const toolHandlers: Record<string, ToolHandler> = {
             status: result.status,
             statusText: result.statusText,
             description: testConfig.description,
-            ...(isSuccess ? { message: 'Listener test passed.' } : { error: `Unexpected status ${result.status}` }),
+            ...(isSuccess
+              ? { message: 'Listener test passed.' }
+              : { error: `Unexpected status ${result.status}` }),
           };
         }
 
@@ -633,7 +644,7 @@ const toolHandlers: Record<string, ToolHandler> = {
         fields: r.listenerConfig!.fields,
         ingestorType: r.ingestorConfig?.type,
         supportsMultiInstance: r.listenerConfig!.supportsMultiInstance ?? false,
-        instanceKeyField: r.listenerConfig!.fields.find(f => f.instanceKey)?.key,
+        instanceKeyField: r.listenerConfig!.fields.find((f) => f.instanceKey)?.key,
       }));
     return Promise.resolve(configs);
   },
@@ -655,13 +666,17 @@ const toolHandlers: Record<string, ToolHandler> = {
       return { success: false, error: `No dynamic options for field: ${paramKey}` };
     }
 
-    const { url, method = 'GET', body, responsePath, labelField, valueField } = field.dynamicOptions;
+    const {
+      url,
+      method = 'GET',
+      body,
+      responsePath,
+      labelField,
+      valueField,
+    } = field.dynamicOptions;
 
     try {
-      const result = await executeProxyRequest(
-        { method, url, headers: {}, body },
-        routes,
-      );
+      const result = await executeProxyRequest({ method, url, headers: {}, body }, routes);
 
       // Navigate to the response path to find the items array
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- navigating unknown response shape
@@ -742,7 +757,11 @@ const toolHandlers: Record<string, ToolHandler> = {
     // Find the route for this connection
     const route = routes.find((r) => r.alias === connection);
     if (!route) {
-      return Promise.resolve({ success: false, connection, error: `Unknown connection: ${connection}` });
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: `Unknown connection: ${connection}`,
+      });
     }
 
     if (!route.listenerConfig) {
@@ -914,7 +933,8 @@ const toolHandlers: Record<string, ToolHandler> = {
           connection,
           ...(instance_id && { instance_id }),
           params: mergedParams,
-          warning: 'Params saved but ingestor restart failed. Use control_listener to restart manually.',
+          warning:
+            'Params saved but ingestor restart failed. Use control_listener to restart manually.',
         };
       }
     }
@@ -938,7 +958,11 @@ const toolHandlers: Record<string, ToolHandler> = {
     // Find the route for this connection
     const route = routes.find((r) => r.alias === connection);
     if (!route) {
-      return Promise.resolve({ success: false, connection, error: `Unknown connection: ${connection}` });
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: `Unknown connection: ${connection}`,
+      });
     }
 
     if (!route.listenerConfig?.supportsMultiInstance) {
@@ -988,7 +1012,12 @@ const toolHandlers: Record<string, ToolHandler> = {
     const config = loadRemoteConfig();
     const callerConfig = config.callers[context.callerAlias];
     if (!callerConfig) {
-      return { success: false, connection, instance_id, error: `Caller not found: ${context.callerAlias}` };
+      return {
+        success: false,
+        connection,
+        instance_id,
+        error: `Caller not found: ${context.callerAlias}`,
+      };
     }
 
     const instances = callerConfig.listenerInstances?.[connection];
@@ -1231,6 +1260,7 @@ export function createApp(options: CreateAppOptions = {}) {
 
       auditLog(sessionId, 'response', {
         caller: session.callerAlias,
+        toolName: request.toolName,
         requestId: request.id,
         success: true,
       });

@@ -187,10 +187,19 @@ export class TrelloWebhookIngestor extends WebhookIngestor {
 
 // ── Self-registration ───────────────────────────────────────────────────
 
-registerIngestorFactory('webhook:trello', (connectionAlias, config, secrets, bufferSize, instanceId) => {
-  if (!config.webhook) {
-    log.error(`Missing webhook config for ${connectionAlias}`);
-    return null;
-  }
-  return new TrelloWebhookIngestor(connectionAlias, secrets, config.webhook, bufferSize, instanceId);
-});
+registerIngestorFactory(
+  'webhook:trello',
+  (connectionAlias, config, secrets, bufferSize, instanceId) => {
+    if (!config.webhook) {
+      log.error(`Missing webhook config for ${connectionAlias}`);
+      return null;
+    }
+    return new TrelloWebhookIngestor(
+      connectionAlias,
+      secrets,
+      config.webhook,
+      bufferSize,
+      instanceId,
+    );
+  },
+);
