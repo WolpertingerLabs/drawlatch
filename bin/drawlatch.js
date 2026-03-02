@@ -61,7 +61,7 @@ try {
       port: { type: "string" },
       host: { type: "string" },
       lines: { type: "string", short: "n", default: "50" },
-      follow: { type: "boolean", default: true },
+      follow: { type: "boolean", default: false },
       path: { type: "boolean", default: false },
     },
     strict: false,
@@ -664,7 +664,7 @@ Usage: drawlatch logs [options]
 
 Options:
   -n, --lines <number>  Number of lines to show (default: 50)
-  --no-follow            Print lines and exit (default: follow/tail)
+  --follow               Follow/tail the log output (default: print and exit)
   -h, --help             Show this help message
 
 Log file: ~/.drawlatch/logs/drawlatch.log
