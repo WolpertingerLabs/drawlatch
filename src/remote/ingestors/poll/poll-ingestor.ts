@@ -107,7 +107,7 @@ export class PollIngestor extends BaseIngestor {
     // If it failed, state is 'reconnecting' — the timer will retry.
   }
 
-  stop(): Promise<void> {
+  stop(_permanent?: boolean): Promise<void> {
     this.state = 'stopped';
     if (this.pollTimer) {
       clearInterval(this.pollTimer);

@@ -19,7 +19,31 @@
       "protocol": "trello",
       "signatureHeader": "X-Trello-Webhook",
       "signatureSecret": "TRELLO_API_SECRET",
-      "callbackUrl": "${TRELLO_CALLBACK_URL}"
+      "callbackUrl": "${TRELLO_CALLBACK_URL}",
+      "lifecycle": {
+        "list": {
+          "method": "GET",
+          "url": "https://api.trello.com/1/tokens/${TRELLO_TOKEN}/webhooks?key=${TRELLO_API_KEY}",
+          "callbackUrlField": "callbackURL",
+          "idField": "id",
+          "modelIdField": "idModel"
+        },
+        "register": {
+          "method": "POST",
+          "url": "https://api.trello.com/1/tokens/${TRELLO_TOKEN}/webhooks?key=${TRELLO_API_KEY}",
+          "headers": { "Content-Type": "application/json" },
+          "body": {
+            "callbackURL": "${TRELLO_CALLBACK_URL}",
+            "idModel": "${boardId}",
+            "description": "Drawlatch webhook"
+          },
+          "idField": "id"
+        },
+        "unregister": {
+          "method": "DELETE",
+          "url": "https://api.trello.com/1/tokens/${TRELLO_TOKEN}/webhooks/${_webhookId}?key=${TRELLO_API_KEY}"
+        }
+      }
     }
   },
   "testIngestor": {
