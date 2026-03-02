@@ -554,6 +554,38 @@ server.tool(
 );
 
 /**
+ * List all configured listener instances for a multi-instance connection.
+ * Returns every instance from config, including stopped/disabled ones.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'list_listener_instances',
+  'List all configured instances for a multi-instance listener connection. Returns every instance from config (including stopped/disabled ones), unlike ingestor_status which only shows running instances.',
+  {
+    connection: z.string().describe('Connection alias (e.g., "trello")'),
+  },
+  async ({ connection }) => {
+    try {
+      const result = await sendEncryptedRequest('list_listener_instances', { connection });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
  * Delete a multi-instance listener instance.
  * Stops the running ingestor if active and removes the instance from config.
  */

@@ -792,12 +792,22 @@ const toolHandlers: Record<string, ToolHandler> = {
       params = overrides?.params ?? {};
     }
 
+    // When no instance_id is given on a multi-instance connection, include
+    // the list of configured instance IDs so callers can discover them
+    // without needing a separate list_listener_instances call.
+    let instances: string[] | undefined;
+    if (!instance_id && route.listenerConfig?.supportsMultiInstance) {
+      const instanceMap = callerConfig.listenerInstances?.[connection] ?? {};
+      instances = Object.keys(instanceMap);
+    }
+
     return Promise.resolve({
       success: true,
       connection,
       ...(instance_id && { instance_id }),
       params,
       defaults,
+      ...(instances !== undefined && { instances }),
     });
   },
 
@@ -805,8 +815,9 @@ const toolHandlers: Record<string, ToolHandler> = {
    * Add or edit listener parameter overrides for a connection.
    * Merges params into existing config. For multi-instance, set create_instance
    * to true to create a new instance if it doesn't exist.
+   * After saving, restarts the affected ingestor so new params take effect immediately.
    */
-  set_listener_params(input, routes, context) {
+  async set_listener_params(input, routes, context) {
     const { connection, instance_id, params, create_instance } = input as {
       connection: string;
       instance_id?: string;
@@ -817,37 +828,37 @@ const toolHandlers: Record<string, ToolHandler> = {
     // Find the route for this connection
     const route = routes.find((r) => r.alias === connection);
     if (!route) {
-      return Promise.resolve({ success: false, connection, error: `Unknown connection: ${connection}` });
+      return { success: false, connection, error: `Unknown connection: ${connection}` };
     }
 
     if (!route.listenerConfig) {
-      return Promise.resolve({
+      return {
         success: false,
         connection,
         error: 'This connection does not have a listener configuration.',
-      });
+      };
     }
 
     // Validate param keys against schema
     const validKeys = new Set(route.listenerConfig.fields.map((f) => f.key));
     const unknownKeys = Object.keys(params).filter((k) => !validKeys.has(k));
     if (unknownKeys.length > 0) {
-      return Promise.resolve({
+      return {
         success: false,
         connection,
         error: `Unknown parameter keys: ${unknownKeys.join(', ')}. Valid keys: ${Array.from(validKeys).join(', ')}`,
-      });
+      };
     }
 
     // Load config, modify, save
     const config = loadRemoteConfig();
     const callerConfig = config.callers[context.callerAlias];
     if (!callerConfig) {
-      return Promise.resolve({
+      return {
         success: false,
         connection,
         error: `Caller not found: ${context.callerAlias}`,
-      });
+      };
     }
 
     let mergedParams: Record<string, unknown>;
@@ -860,12 +871,12 @@ const toolHandlers: Record<string, ToolHandler> = {
       const existing = callerConfig.listenerInstances[connection][instance_id];
 
       if (!existing && !create_instance) {
-        return Promise.resolve({
+        return {
           success: false,
           connection,
           instance_id,
           error: `Instance "${instance_id}" does not exist. Set create_instance to true to create it.`,
-        });
+        };
       }
 
       if (existing) {
@@ -886,11 +897,80 @@ const toolHandlers: Record<string, ToolHandler> = {
 
     saveRemoteConfig(config);
 
-    return Promise.resolve({
+    // Restart the affected ingestor so new params take effect immediately.
+    // This matches callboard's local-proxy behavior (which calls reinitialize()).
+    const mgr = context.ingestorManager;
+    if (mgr.has(context.callerAlias, connection, instance_id)) {
+      try {
+        await mgr.restartOne(context.callerAlias, connection, instance_id);
+      } catch (err) {
+        // Config was saved successfully — log the restart failure but don't fail the operation
+        console.error(
+          `[remote] Warning: params saved but failed to restart ingestor ${context.callerAlias}:${connection}${instance_id ? `:${instance_id}` : ''}:`,
+          err,
+        );
+        return {
+          success: true,
+          connection,
+          ...(instance_id && { instance_id }),
+          params: mergedParams,
+          warning: 'Params saved but ingestor restart failed. Use control_listener to restart manually.',
+        };
+      }
+    }
+
+    return {
       success: true,
       connection,
       ...(instance_id && { instance_id }),
       params: mergedParams,
+    };
+  },
+
+  /**
+   * List all configured listener instances for a multi-instance connection.
+   * Returns every instance from config (including stopped/disabled ones),
+   * unlike ingestor_status which only shows running instances.
+   */
+  list_listener_instances(input, routes, context) {
+    const { connection } = input as { connection: string };
+
+    // Find the route for this connection
+    const route = routes.find((r) => r.alias === connection);
+    if (!route) {
+      return Promise.resolve({ success: false, connection, error: `Unknown connection: ${connection}` });
+    }
+
+    if (!route.listenerConfig?.supportsMultiInstance) {
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: 'This connection does not support multi-instance listeners.',
+      });
+    }
+
+    // Read from config
+    const config = loadRemoteConfig();
+    const callerConfig = config.callers[context.callerAlias];
+    if (!callerConfig) {
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: `Caller not found: ${context.callerAlias}`,
+      });
+    }
+
+    const instanceMap = callerConfig.listenerInstances?.[connection] ?? {};
+    const instances = Object.entries(instanceMap).map(([instanceId, overrides]) => ({
+      instanceId,
+      disabled: overrides?.disabled ?? false,
+      params: overrides?.params ?? {},
+    }));
+
+    return Promise.resolve({
+      success: true,
+      connection,
+      instances,
     });
   },
 
