@@ -12,6 +12,7 @@
  */
 
 import { registerIngestorFactory } from '../registry.js';
+import type { WebhookIngestorConfig } from '../types.js';
 import { WebhookIngestor } from './base-webhook-ingestor.js';
 import { verifyGitHubSignature, extractGitHubHeaders } from './github-types.js';
 import { createLogger } from '../../../shared/logger.js';
@@ -21,6 +22,40 @@ const log = createLogger('webhook');
 // ── GitHub Webhook Ingestor ──────────────────────────────────────────────
 
 export class GitHubWebhookIngestor extends WebhookIngestor {
+  /**
+   * Repository filter for multi-instance support.
+   * When set, only webhooks from these repositories (owner/repo format) are accepted.
+   * Set via `_repoFilter` on the webhook config (injected by IngestorManager).
+   */
+  private readonly repoFilter: string[];
+
+  constructor(
+    connectionAlias: string,
+    secrets: Record<string, string>,
+    webhookConfig: WebhookIngestorConfig,
+    bufferSize?: number,
+    instanceId?: string,
+  ) {
+    super(connectionAlias, secrets, webhookConfig, bufferSize, instanceId);
+
+    // Repo filter for multi-instance discrimination
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- injected by IngestorManager for multi-instance support
+    this.repoFilter = ((webhookConfig as any)._repoFilter as string[] | undefined) ?? [];
+  }
+
+  /**
+   * Filter webhooks by repository for multi-instance support.
+   * When repoFilter is set, only events from those repos are accepted.
+   * The repo is found in `body.repository.full_name` of GitHub webhook payloads.
+   */
+  protected shouldAcceptPayload(body: unknown): boolean {
+    if (this.repoFilter.length === 0) return true;
+    const payload = body as { repository?: { full_name?: string } };
+    const repo = payload?.repository?.full_name;
+    // Events without a repository (e.g., org-level events) pass through when no filter
+    return repo ? this.repoFilter.includes(repo) : true;
+  }
+
   /**
    * Verify the GitHub webhook signature (HMAC-SHA256).
    *
@@ -105,10 +140,10 @@ export class GitHubWebhookIngestor extends WebhookIngestor {
 
 // ── Self-registration ────────────────────────────────────────────────────
 
-registerIngestorFactory('webhook:generic', (connectionAlias, config, secrets, bufferSize) => {
+registerIngestorFactory('webhook:generic', (connectionAlias, config, secrets, bufferSize, instanceId) => {
   if (!config.webhook) {
     log.error(`Missing webhook config for ${connectionAlias}`);
     return null;
   }
-  return new GitHubWebhookIngestor(connectionAlias, secrets, config.webhook, bufferSize);
+  return new GitHubWebhookIngestor(connectionAlias, secrets, config.webhook, bufferSize, instanceId);
 });

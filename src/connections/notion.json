@@ -29,5 +29,45 @@
       "deduplicateBy": "id",
       "eventType": "page_updated"
     }
+  },
+  "testIngestor": {
+    "description": "Executes a single search poll to verify Notion API access",
+    "strategy": "poll_once",
+    "request": {
+      "method": "POST",
+      "url": "https://api.notion.com/v1/search",
+      "body": {"page_size": 1},
+      "expectedStatus": [200]
+    }
+  },
+  "listenerConfig": {
+    "name": "Notion Poll Listener",
+    "description": "Polls Notion for recently edited pages at a configurable interval.",
+    "fields": [
+      {
+        "key": "intervalMs",
+        "label": "Poll Interval (ms)",
+        "description": "How often to check for new events, in milliseconds.",
+        "type": "number",
+        "default": 60000,
+        "min": 10000,
+        "max": 3600000,
+        "group": "Connection"
+      },
+      {
+        "key": "bufferSize",
+        "label": "Buffer Size",
+        "description": "Maximum number of events to keep in memory.",
+        "type": "number",
+        "default": 200,
+        "min": 10,
+        "max": 1000,
+        "group": "Advanced"
+      }
+    ]
+  },
+  "testConnection": {
+    "url": "https://api.notion.com/v1/users/me",
+    "description": "Fetches the authenticated bot user"
   }
 }

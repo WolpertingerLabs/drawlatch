@@ -25,5 +25,49 @@
       "deduplicateBy": "id",
       "eventType": "issue_updated"
     }
+  },
+  "testIngestor": {
+    "description": "Executes a minimal GraphQL query to verify Linear API access",
+    "strategy": "poll_once",
+    "request": {
+      "method": "POST",
+      "url": "https://api.linear.app/graphql",
+      "body": {"query": "{ viewer { id } }"},
+      "expectedStatus": [200]
+    }
+  },
+  "listenerConfig": {
+    "name": "Linear Poll Listener",
+    "description": "Polls Linear for recently updated issues at a configurable interval.",
+    "fields": [
+      {
+        "key": "intervalMs",
+        "label": "Poll Interval (ms)",
+        "description": "How often to check for new events, in milliseconds.",
+        "type": "number",
+        "default": 60000,
+        "min": 10000,
+        "max": 3600000,
+        "group": "Connection"
+      },
+      {
+        "key": "bufferSize",
+        "label": "Buffer Size",
+        "description": "Maximum number of events to keep in memory.",
+        "type": "number",
+        "default": 200,
+        "min": 10,
+        "max": 1000,
+        "group": "Advanced"
+      }
+    ]
+  },
+  "testConnection": {
+    "method": "POST",
+    "url": "https://api.linear.app/graphql",
+    "body": {
+      "query": "{ viewer { id name } }"
+    },
+    "description": "Fetches the authenticated user via GraphQL"
   }
 }

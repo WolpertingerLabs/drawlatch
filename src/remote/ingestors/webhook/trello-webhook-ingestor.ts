@@ -50,18 +50,41 @@ export class TrelloWebhookIngestor extends WebhookIngestor {
    */
   private readonly callbackUrl: string | undefined;
 
+  /**
+   * Board ID filter for multi-instance support.
+   * When set, only webhooks from this specific board are accepted.
+   * Set via `_boardId` on the webhook config (injected by IngestorManager).
+   */
+  private readonly boardId: string | undefined;
+
   constructor(
     connectionAlias: string,
     secrets: Record<string, string>,
     webhookConfig: WebhookIngestorConfig,
     bufferSize?: number,
+    instanceId?: string,
   ) {
-    super(connectionAlias, secrets, webhookConfig, bufferSize);
+    super(connectionAlias, secrets, webhookConfig, bufferSize, instanceId);
 
     // Resolve callbackUrl from secrets if it contains ${VAR} placeholders
     if (webhookConfig.callbackUrl) {
       this.callbackUrl = resolvePlaceholder(webhookConfig.callbackUrl, secrets);
     }
+
+    // Board ID filter for multi-instance discrimination
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- injected by IngestorManager for multi-instance support
+    this.boardId = (webhookConfig as any)._boardId as string | undefined;
+  }
+
+  /**
+   * Filter webhooks by board ID for multi-instance support.
+   * When boardId is set, only events from that specific board are accepted.
+   * The board ID is found in `body.model.id` of Trello webhook payloads.
+   */
+  protected shouldAcceptPayload(body: unknown): boolean {
+    if (!this.boardId) return true;
+    const payload = body as { model?: { id?: string } };
+    return payload?.model?.id === this.boardId;
   }
 
   /**
@@ -164,10 +187,19 @@ export class TrelloWebhookIngestor extends WebhookIngestor {
 
 // ── Self-registration ───────────────────────────────────────────────────
 
-registerIngestorFactory('webhook:trello', (connectionAlias, config, secrets, bufferSize) => {
-  if (!config.webhook) {
-    log.error(`Missing webhook config for ${connectionAlias}`);
-    return null;
-  }
-  return new TrelloWebhookIngestor(connectionAlias, secrets, config.webhook, bufferSize);
-});
+registerIngestorFactory(
+  'webhook:trello',
+  (connectionAlias, config, secrets, bufferSize, instanceId) => {
+    if (!config.webhook) {
+      log.error(`Missing webhook config for ${connectionAlias}`);
+      return null;
+    }
+    return new TrelloWebhookIngestor(
+      connectionAlias,
+      secrets,
+      config.webhook,
+      bufferSize,
+      instanceId,
+    );
+  },
+);

@@ -17,6 +17,14 @@ import path from 'node:path';
 
 import { loadConnection } from './connections.js';
 import type { IngestorConfig } from '../remote/ingestors/types.js';
+import type { TestConnectionConfig, TestIngestorConfig, ListenerConfigSchema } from './listener-config.js';
+
+// Re-export listener config types so consumers can import from config.ts
+export type { TestConnectionConfig, TestIngestorConfig, ListenerConfigSchema } from './listener-config.js';
+export type {
+  ListenerConfigField,
+  ListenerConfigOption,
+} from './listener-config.js';
 
 /** Resolve the base config directory at call time (not import time).
  *  Defaults to ~/.drawlatch in the user's home directory.
@@ -106,10 +114,23 @@ export interface Route {
    *  When present, the remote server can start a long-lived ingestor
    *  (WebSocket, webhook listener, or poller) for this connection. */
   ingestor?: IngestorConfig;
+  /** Pre-configured test request for verifying connection credentials.
+   *  Must be a non-destructive, read-only endpoint with zero side effects. */
+  testConnection?: TestConnectionConfig;
+  /** Pre-configured test for verifying ingestor / event listener configuration.
+   *  Set to null to explicitly indicate this listener cannot be tested.
+   *  Omitted if the connection has no ingestor. */
+  testIngestor?: TestIngestorConfig | null;
+  /** Schema describing configurable fields for this connection's event listener.
+   *  Used by UIs and management tools to render configuration forms.
+   *  Only present on connections that have an ingestor. */
+  listenerConfig?: ListenerConfigSchema;
 }
 
 /** A route after secret/header resolution — used at runtime */
 export interface ResolvedRoute {
+  /** Connection alias (e.g., "github", "discord-bot"). Populated during caller route resolution. */
+  alias?: string;
   /** Human-readable name for this route (carried from config) */
   name?: string;
   /** Short description of this route's purpose (carried from config) */
@@ -123,6 +144,14 @@ export interface ResolvedRoute {
   allowedEndpoints: string[];
   /** Whether to resolve ${VAR} placeholders in request bodies (default: false) */
   resolveSecretsInBody: boolean;
+  /** Pre-configured test request for verifying connection credentials (carried from config) */
+  testConnection?: TestConnectionConfig;
+  /** Pre-configured test for verifying ingestor / event listener (carried from config) */
+  testIngestor?: TestIngestorConfig | null;
+  /** Listener configuration schema for UI rendering (carried from config) */
+  listenerConfig?: ListenerConfigSchema;
+  /** Raw ingestor configuration (carried from config, needed by tool handlers) */
+  ingestorConfig?: IngestorConfig;
 }
 
 /** Per-connection ingestor overrides (all fields optional — omitted fields inherit from template). */
@@ -143,6 +172,11 @@ export interface IngestorOverrides {
   disabled?: boolean;
   /** Override the poll interval in milliseconds (poll ingestors only). */
   intervalMs?: number;
+  /** Generic parameter bag for listener configuration.
+   *  Keys correspond to ListenerConfigField.key values from the connection's
+   *  listenerConfig schema. Values are mapped to typed ingestor config fields
+   *  during mergeIngestorConfig(). */
+  params?: Record<string, unknown>;
 }
 
 /** Per-caller access configuration */
@@ -163,6 +197,22 @@ export interface CallerConfig {
    *  Allows callers to customize intents, event filters, guild/channel/user ID filters,
    *  buffer size, or disable an ingestor without modifying the connection template. */
   ingestorOverrides?: Record<string, IngestorOverrides>;
+  /** Multi-instance listener definitions keyed by connection alias.
+   *  Value is a map of instanceId → IngestorOverrides.
+   *  When present for a connection, spawns one ingestor per instanceId instead of
+   *  a single default instance. Takes precedence over ingestorOverrides for that connection.
+   *  Instance IDs must match /^[a-zA-Z0-9_-]+$/.
+   *
+   *  Example:
+   *  ```json
+   *  {
+   *    "trello": {
+   *      "project-board": { "params": { "boardId": "abc123" } },
+   *      "sprint-board":  { "params": { "boardId": "def456" } }
+   *    }
+   *  }
+   *  ``` */
+  listenerInstances?: Record<string, Record<string, IngestorOverrides>>;
 }
 
 /** Remote server configuration */
@@ -355,8 +405,9 @@ export function resolveCallerRoutes(config: RemoteServerConfig, callerAlias: str
   return caller.connections.map((name) => {
     // Custom connectors take precedence over built-in templates
     const custom = connectorsByAlias.get(name);
-    if (custom) return custom;
-    return loadConnection(name);
+    const route = custom ?? loadConnection(name);
+    // Ensure every route carries its alias so it survives resolution
+    return route.alias === name ? route : { ...route, alias: name };
   });
 }
 
@@ -421,6 +472,7 @@ export function resolveRoutes(
       resolvedHeaders[key] = resolvePlaceholders(value, resolvedSecrets);
     }
     return {
+      ...(route.alias !== undefined && { alias: route.alias }),
       ...(route.name !== undefined && { name: route.name }),
       ...(route.description !== undefined && { description: route.description }),
       ...(route.docsUrl !== undefined && { docsUrl: route.docsUrl }),
@@ -429,6 +481,10 @@ export function resolveRoutes(
       secrets: resolvedSecrets,
       allowedEndpoints: route.allowedEndpoints,
       resolveSecretsInBody: route.resolveSecretsInBody ?? false,
+      ...(route.testConnection !== undefined && { testConnection: route.testConnection }),
+      ...(route.testIngestor !== undefined && { testIngestor: route.testIngestor }),
+      ...(route.listenerConfig !== undefined && { listenerConfig: route.listenerConfig }),
+      ...(route.ingestor !== undefined && { ingestorConfig: route.ingestor }),
     };
   });
 }

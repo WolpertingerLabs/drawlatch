@@ -19,6 +19,7 @@ import fs from 'node:fs';
 
 import {
   loadRemoteConfig,
+  saveRemoteConfig,
   resolveRoutes,
   resolveCallerRoutes,
   resolveSecrets,
@@ -134,6 +135,11 @@ function auditLog(sessionId: string, action: string, details: Record<string, unk
     action,
     ...details,
   };
+
+  if ('toolName' in details && details.toolName === 'poll_events') {
+    return;
+  }
+
   console.log(`[audit] ${JSON.stringify(entry)}`);
 }
 
@@ -379,6 +385,7 @@ const toolHandlers: Record<string, ToolHandler> = {
     const routeList = routes.map((route, index) => {
       const info: Record<string, unknown> = { index };
 
+      if (route.alias) info.alias = route.alias;
       if (route.name) info.name = route.name;
       if (route.description) info.description = route.description;
       if (route.docsUrl) info.docsUrl = route.docsUrl;
@@ -387,6 +394,19 @@ const toolHandlers: Record<string, ToolHandler> = {
       info.allowedEndpoints = route.allowedEndpoints;
       info.secretNames = Object.keys(route.secrets);
       info.autoHeaders = Object.keys(route.headers);
+
+      // Ingestor & testing metadata
+      info.hasTestConnection = route.testConnection !== undefined;
+      info.hasIngestor = route.ingestorConfig !== undefined;
+      if (route.ingestorConfig) {
+        info.ingestorType = route.ingestorConfig.type;
+        info.hasTestIngestor = route.testIngestor !== undefined && route.testIngestor !== null;
+        info.hasListenerConfig = route.listenerConfig !== undefined;
+        if (route.listenerConfig) {
+          info.listenerParamKeys = route.listenerConfig.fields.map((f) => f.key);
+          info.supportsMultiInstance = route.listenerConfig.supportsMultiInstance ?? false;
+        }
+      }
 
       return info;
     });
@@ -399,15 +419,16 @@ const toolHandlers: Record<string, ToolHandler> = {
    * Returns events since a cursor, optionally filtered by connection.
    */
   poll_events(input, _routes, context) {
-    const { connection, after_id } = input as {
+    const { connection, after_id, instance_id } = input as {
       connection?: string;
       after_id?: number;
+      instance_id?: string;
     };
     const afterId = after_id ?? -1;
 
     if (connection) {
       return Promise.resolve(
-        context.ingestorManager.getEvents(context.callerAlias, connection, afterId),
+        context.ingestorManager.getEvents(context.callerAlias, connection, afterId, instance_id),
       );
     }
     return Promise.resolve(context.ingestorManager.getAllEvents(context.callerAlias, afterId));
@@ -418,6 +439,625 @@ const toolHandlers: Record<string, ToolHandler> = {
    */
   ingestor_status(_input, _routes, context) {
     return Promise.resolve(context.ingestorManager.getStatuses(context.callerAlias));
+  },
+
+  /**
+   * Test a connection's API credentials by executing a pre-configured,
+   * non-destructive read-only request. Returns success/failure with status details.
+   */
+  async test_connection(input, routes, _context) {
+    const { connection } = input as { connection: string };
+
+    // Find the route matching this connection alias
+    const route = routes.find((r) => r.alias === connection);
+    if (!route) {
+      return { success: false, connection, error: `Unknown connection: ${connection}` };
+    }
+
+    if (!route.testConnection) {
+      return {
+        success: false,
+        connection,
+        supported: false,
+        error: 'This connection does not have a test configuration.',
+      };
+    }
+
+    const testConfig = route.testConnection;
+    const method = testConfig.method ?? 'GET';
+    const expectedStatus = testConfig.expectedStatus ?? [200];
+
+    try {
+      const result = await executeProxyRequest(
+        {
+          method,
+          url: testConfig.url,
+          headers: testConfig.headers,
+          body: testConfig.body,
+        },
+        routes,
+      );
+
+      const isSuccess = expectedStatus.includes(result.status);
+      return {
+        success: isSuccess,
+        connection,
+        status: result.status,
+        statusText: result.statusText,
+        description: testConfig.description,
+        ...(isSuccess
+          ? {}
+          : {
+              error: `Unexpected status ${result.status} (expected ${expectedStatus.join(' or ')})`,
+            }),
+      };
+    } catch (err) {
+      return {
+        success: false,
+        connection,
+        description: testConfig.description,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+
+  /**
+   * Test an event listener / ingestor's configuration by running a lightweight
+   * verification appropriate to its type (auth check, secret check, poll check).
+   */
+  async test_ingestor(input, routes, _context) {
+    const { connection } = input as { connection: string };
+
+    const route = routes.find((r) => r.alias === connection);
+    if (!route) {
+      return { success: false, connection, error: `Unknown connection: ${connection}` };
+    }
+
+    if (!route.ingestorConfig) {
+      return {
+        success: false,
+        connection,
+        supported: false,
+        error: 'This connection does not have an event listener.',
+      };
+    }
+
+    // testIngestor is explicitly null = not testable
+    if (route.testIngestor === null) {
+      return {
+        success: false,
+        connection,
+        supported: false,
+        error: 'This event listener does not support testing.',
+      };
+    }
+
+    if (!route.testIngestor) {
+      return {
+        success: false,
+        connection,
+        supported: false,
+        error: 'This event listener does not have a test configuration.',
+      };
+    }
+
+    const testConfig = route.testIngestor;
+
+    try {
+      switch (testConfig.strategy) {
+        case 'webhook_verify': {
+          // Verify that all required secrets are present and non-empty
+          const missing: string[] = [];
+          for (const secretName of testConfig.requireSecrets ?? []) {
+            if (!route.secrets[secretName]) {
+              missing.push(secretName);
+            }
+          }
+          if (missing.length > 0) {
+            return {
+              success: false,
+              connection,
+              strategy: testConfig.strategy,
+              description: testConfig.description,
+              error: `Missing required secrets: ${missing.join(', ')}`,
+            };
+          }
+          return {
+            success: true,
+            connection,
+            strategy: testConfig.strategy,
+            description: testConfig.description,
+            message: 'All required webhook secrets are configured.',
+          };
+        }
+
+        case 'websocket_auth':
+        case 'http_request':
+        case 'poll_once': {
+          // Execute the test HTTP request
+          if (!testConfig.request) {
+            return {
+              success: false,
+              connection,
+              strategy: testConfig.strategy,
+              description: testConfig.description,
+              error: 'Test configuration missing request details.',
+            };
+          }
+
+          const method = testConfig.request.method ?? 'GET';
+          const expectedStatus = testConfig.request.expectedStatus ?? [200];
+
+          const result = await executeProxyRequest(
+            {
+              method,
+              url: testConfig.request.url,
+              headers: testConfig.request.headers,
+              body: testConfig.request.body,
+            },
+            routes,
+          );
+
+          const isSuccess = expectedStatus.includes(result.status);
+          return {
+            success: isSuccess,
+            connection,
+            strategy: testConfig.strategy,
+            status: result.status,
+            statusText: result.statusText,
+            description: testConfig.description,
+            ...(isSuccess
+              ? { message: 'Listener test passed.' }
+              : { error: `Unexpected status ${result.status}` }),
+          };
+        }
+
+        default:
+          return {
+            success: false,
+            connection,
+            error: `Unknown test strategy: ${String(testConfig.strategy)}`,
+          };
+      }
+    } catch (err) {
+      return {
+        success: false,
+        connection,
+        strategy: testConfig.strategy,
+        description: testConfig.description,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+
+  /**
+   * List listener configuration schemas for all connections that have configurable
+   * event listeners. Returns the schema fields, current values, and metadata.
+   */
+  list_listener_configs(_input, routes, _context) {
+    const configs = routes
+      .filter((r) => r.listenerConfig)
+      .map((r) => ({
+        connection: r.alias,
+        name: r.listenerConfig!.name,
+        description: r.listenerConfig!.description,
+        fields: r.listenerConfig!.fields,
+        ingestorType: r.ingestorConfig?.type,
+        supportsMultiInstance: r.listenerConfig!.supportsMultiInstance ?? false,
+        instanceKeyField: r.listenerConfig!.fields.find((f) => f.instanceKey)?.key,
+      }));
+    return Promise.resolve(configs);
+  },
+
+  /**
+   * Resolve dynamic options for a listener configuration field.
+   * Fetches options from the external API (e.g., list of Trello boards).
+   */
+  async resolve_listener_options(input, routes, _context) {
+    const { connection, paramKey } = input as { connection: string; paramKey: string };
+
+    const route = routes.find((r) => r.alias === connection);
+    if (!route?.listenerConfig) {
+      return { success: false, error: `No listener config for connection: ${connection}` };
+    }
+
+    const field = route.listenerConfig.fields.find((f) => f.key === paramKey);
+    if (!field?.dynamicOptions) {
+      return { success: false, error: `No dynamic options for field: ${paramKey}` };
+    }
+
+    const {
+      url,
+      method = 'GET',
+      body,
+      responsePath,
+      labelField,
+      valueField,
+    } = field.dynamicOptions;
+
+    try {
+      const result = await executeProxyRequest({ method, url, headers: {}, body }, routes);
+
+      // Navigate to the response path to find the items array
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- navigating unknown response shape
+      let items: any = result.body;
+      if (responsePath) {
+        for (const segment of responsePath.split('.')) {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+          items = items?.[segment as keyof typeof items];
+        }
+      }
+
+      if (!Array.isArray(items)) {
+        return { success: false, error: 'Response did not contain an array at the expected path.' };
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const options = items.map((item) => ({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+        value: item[valueField],
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+        label: item[labelField],
+      }));
+
+      return { success: true, connection, paramKey, options };
+    } catch (err) {
+      return {
+        success: false,
+        connection,
+        paramKey,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+
+  /**
+   * Start, stop, or restart an event listener for a specific connection.
+   */
+  async control_listener(input, _routes, context) {
+    const { connection, action, instance_id } = input as {
+      connection: string;
+      action: 'start' | 'stop' | 'restart';
+      instance_id?: string;
+    };
+
+    const mgr = context.ingestorManager;
+
+    try {
+      switch (action) {
+        case 'start':
+          return await mgr.startOne(context.callerAlias, connection, instance_id);
+        case 'stop':
+          return await mgr.stopOne(context.callerAlias, connection, instance_id);
+        case 'restart':
+          return await mgr.restartOne(context.callerAlias, connection, instance_id);
+        default:
+          return { success: false, error: `Unknown action: ${String(action)}` };
+      }
+    } catch (err) {
+      return {
+        success: false,
+        connection,
+        action,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+
+  /**
+   * Read current listener parameter overrides for a connection.
+   * Returns current param values and schema defaults for form population.
+   */
+  get_listener_params(input, routes, context) {
+    const { connection, instance_id } = input as {
+      connection: string;
+      instance_id?: string;
+    };
+
+    // Find the route for this connection
+    const route = routes.find((r) => r.alias === connection);
+    if (!route) {
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: `Unknown connection: ${connection}`,
+      });
+    }
+
+    if (!route.listenerConfig) {
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: 'This connection does not have a listener configuration.',
+      });
+    }
+
+    // Build defaults from schema fields
+    const defaults: Record<string, unknown> = {};
+    for (const field of route.listenerConfig.fields) {
+      if (field.default !== undefined) {
+        defaults[field.key] = field.default;
+      }
+    }
+
+    // Load config to read current overrides
+    const config = loadRemoteConfig();
+    const callerConfig = config.callers[context.callerAlias];
+    if (!callerConfig) {
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: `Caller not found: ${context.callerAlias}`,
+      });
+    }
+
+    let params: Record<string, unknown> = {};
+
+    if (instance_id) {
+      // Multi-instance: read from listenerInstances
+      const instanceOverrides = callerConfig.listenerInstances?.[connection]?.[instance_id];
+      if (!instanceOverrides) {
+        return Promise.resolve({
+          success: false,
+          connection,
+          instance_id,
+          error: `Instance not found: ${instance_id}`,
+        });
+      }
+      params = instanceOverrides.params ?? {};
+    } else {
+      // Single-instance: read from ingestorOverrides
+      const overrides = callerConfig.ingestorOverrides?.[connection];
+      params = overrides?.params ?? {};
+    }
+
+    // When no instance_id is given on a multi-instance connection, include
+    // the list of configured instance IDs so callers can discover them
+    // without needing a separate list_listener_instances call.
+    let instances: string[] | undefined;
+    if (!instance_id && route.listenerConfig?.supportsMultiInstance) {
+      const instanceMap = callerConfig.listenerInstances?.[connection] ?? {};
+      instances = Object.keys(instanceMap);
+    }
+
+    return Promise.resolve({
+      success: true,
+      connection,
+      ...(instance_id && { instance_id }),
+      params,
+      defaults,
+      ...(instances !== undefined && { instances }),
+    });
+  },
+
+  /**
+   * Add or edit listener parameter overrides for a connection.
+   * Merges params into existing config. For multi-instance, set create_instance
+   * to true to create a new instance if it doesn't exist.
+   * After saving, restarts the affected ingestor so new params take effect immediately.
+   */
+  async set_listener_params(input, routes, context) {
+    const { connection, instance_id, params, create_instance } = input as {
+      connection: string;
+      instance_id?: string;
+      params: Record<string, unknown>;
+      create_instance?: boolean;
+    };
+
+    // Find the route for this connection
+    const route = routes.find((r) => r.alias === connection);
+    if (!route) {
+      return { success: false, connection, error: `Unknown connection: ${connection}` };
+    }
+
+    if (!route.listenerConfig) {
+      return {
+        success: false,
+        connection,
+        error: 'This connection does not have a listener configuration.',
+      };
+    }
+
+    // Validate param keys against schema
+    const validKeys = new Set(route.listenerConfig.fields.map((f) => f.key));
+    const unknownKeys = Object.keys(params).filter((k) => !validKeys.has(k));
+    if (unknownKeys.length > 0) {
+      return {
+        success: false,
+        connection,
+        error: `Unknown parameter keys: ${unknownKeys.join(', ')}. Valid keys: ${Array.from(validKeys).join(', ')}`,
+      };
+    }
+
+    // Load config, modify, save
+    const config = loadRemoteConfig();
+    const callerConfig = config.callers[context.callerAlias];
+    if (!callerConfig) {
+      return {
+        success: false,
+        connection,
+        error: `Caller not found: ${context.callerAlias}`,
+      };
+    }
+
+    let mergedParams: Record<string, unknown>;
+
+    if (instance_id) {
+      // Multi-instance: write to listenerInstances
+      callerConfig.listenerInstances ??= {};
+      callerConfig.listenerInstances[connection] ??= {};
+
+      const existing = callerConfig.listenerInstances[connection][instance_id];
+
+      if (!existing && !create_instance) {
+        return {
+          success: false,
+          connection,
+          instance_id,
+          error: `Instance "${instance_id}" does not exist. Set create_instance to true to create it.`,
+        };
+      }
+
+      if (existing) {
+        existing.params = { ...(existing.params ?? {}), ...params };
+        mergedParams = existing.params;
+      } else {
+        callerConfig.listenerInstances[connection][instance_id] = { params };
+        mergedParams = params;
+      }
+    } else {
+      // Single-instance: write to ingestorOverrides
+      callerConfig.ingestorOverrides ??= {};
+      callerConfig.ingestorOverrides[connection] ??= {};
+      const overrides = callerConfig.ingestorOverrides[connection];
+      overrides.params = { ...(overrides.params ?? {}), ...params };
+      mergedParams = overrides.params;
+    }
+
+    saveRemoteConfig(config);
+
+    // Restart the affected ingestor so new params take effect immediately.
+    // This matches callboard's local-proxy behavior (which calls reinitialize()).
+    const mgr = context.ingestorManager;
+    if (mgr.has(context.callerAlias, connection, instance_id)) {
+      try {
+        await mgr.restartOne(context.callerAlias, connection, instance_id);
+      } catch (err) {
+        // Config was saved successfully — log the restart failure but don't fail the operation
+        console.error(
+          `[remote] Warning: params saved but failed to restart ingestor ${context.callerAlias}:${connection}${instance_id ? `:${instance_id}` : ''}:`,
+          err,
+        );
+        return {
+          success: true,
+          connection,
+          ...(instance_id && { instance_id }),
+          params: mergedParams,
+          warning:
+            'Params saved but ingestor restart failed. Use control_listener to restart manually.',
+        };
+      }
+    }
+
+    return {
+      success: true,
+      connection,
+      ...(instance_id && { instance_id }),
+      params: mergedParams,
+    };
+  },
+
+  /**
+   * List all configured listener instances for a multi-instance connection.
+   * Returns every instance from config (including stopped/disabled ones),
+   * unlike ingestor_status which only shows running instances.
+   */
+  list_listener_instances(input, routes, context) {
+    const { connection } = input as { connection: string };
+
+    // Find the route for this connection
+    const route = routes.find((r) => r.alias === connection);
+    if (!route) {
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: `Unknown connection: ${connection}`,
+      });
+    }
+
+    if (!route.listenerConfig?.supportsMultiInstance) {
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: 'This connection does not support multi-instance listeners.',
+      });
+    }
+
+    // Read from config
+    const config = loadRemoteConfig();
+    const callerConfig = config.callers[context.callerAlias];
+    if (!callerConfig) {
+      return Promise.resolve({
+        success: false,
+        connection,
+        error: `Caller not found: ${context.callerAlias}`,
+      });
+    }
+
+    const instanceMap = callerConfig.listenerInstances?.[connection] ?? {};
+    const instances = Object.entries(instanceMap).map(([instanceId, overrides]) => ({
+      instanceId,
+      disabled: overrides?.disabled ?? false,
+      params: overrides?.params ?? {},
+    }));
+
+    return Promise.resolve({
+      success: true,
+      connection,
+      instances,
+    });
+  },
+
+  /**
+   * Delete a multi-instance listener instance.
+   * Removes from config and stops the running ingestor if active.
+   */
+  async delete_listener_instance(input, _routes, context) {
+    const { connection, instance_id } = input as {
+      connection: string;
+      instance_id: string;
+    };
+
+    // Load config
+    const config = loadRemoteConfig();
+    const callerConfig = config.callers[context.callerAlias];
+    if (!callerConfig) {
+      return {
+        success: false,
+        connection,
+        instance_id,
+        error: `Caller not found: ${context.callerAlias}`,
+      };
+    }
+
+    const instances = callerConfig.listenerInstances?.[connection];
+    if (!instances || !(instance_id in instances)) {
+      return {
+        success: false,
+        connection,
+        instance_id,
+        error: `Instance "${instance_id}" not found for connection "${connection}".`,
+      };
+    }
+
+    // Stop the running ingestor if active
+    const mgr = context.ingestorManager;
+    if (mgr.has(context.callerAlias, connection, instance_id)) {
+      try {
+        await mgr.stopOne(context.callerAlias, connection, instance_id);
+      } catch (err) {
+        // Log but don't fail the delete
+        console.error(
+          `[remote] Warning: failed to stop ingestor ${context.callerAlias}:${connection}:${instance_id}:`,
+          err,
+        );
+      }
+    }
+
+    // Remove from config
+    delete instances[instance_id];
+
+    // Clean up empty maps
+    if (Object.keys(instances).length === 0) {
+      delete callerConfig.listenerInstances![connection];
+      if (Object.keys(callerConfig.listenerInstances!).length === 0) {
+        delete callerConfig.listenerInstances;
+      }
+    }
+
+    saveRemoteConfig(config);
+
+    return { success: true, connection, instance_id };
   },
 };
 
@@ -620,6 +1260,7 @@ export function createApp(options: CreateAppOptions = {}) {
 
       auditLog(sessionId, 'response', {
         caller: session.callerAlias,
+        toolName: request.toolName,
         requestId: request.id,
         success: true,
       });

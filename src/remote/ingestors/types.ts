@@ -141,6 +141,10 @@ export interface IngestedEvent {
   /** Source connection alias (e.g., 'discord-bot', 'github'). */
   source: string;
 
+  /** Instance identifier for multi-instance listeners (e.g., "project-board").
+   *  Omitted for single-instance connections (the default). */
+  instanceId?: string;
+
   /** Event type/name (e.g., 'MESSAGE_CREATE', 'push'). */
   eventType: string;
 
@@ -157,6 +161,10 @@ export type IngestorState = 'starting' | 'connected' | 'reconnecting' | 'stopped
 export interface IngestorStatus {
   /** Connection alias this ingestor belongs to. */
   connection: string;
+
+  /** Instance identifier for multi-instance listeners.
+   *  Omitted for single-instance connections (the default). */
+  instanceId?: string;
 
   /** Ingestor type. */
   type: 'websocket' | 'webhook' | 'poll';
