@@ -2,8 +2,8 @@
  * Connection template loading.
  *
  * Connections are pre-built Route templates (JSON files) that ship with
- * the package in the connections/ directory. They provide ready-made
- * configurations for popular APIs (GitHub, Stripe, Trello, etc.).
+ * the package in the connections/ directory, organized into category
+ * subdirectories (ai/, messaging/, social-media/, etc.).
  *
  * At runtime, templates are loaded from disk relative to this module's
  * location, so they work from both src/ (dev via tsx) and dist/ (production).
@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Route } from './config.js';
+import type { Route, ConnectionCategory } from './config.js';
 
 /** Metadata about a built-in connection template — used by UIs to render
  *  connection cards, form fields, and badges without parsing raw JSON. */
@@ -29,6 +29,8 @@ export interface ConnectionTemplateInfo {
   openApiUrl?: string;
   /** Stability level: "stable", "beta", or "dev". */
   stability: 'stable' | 'beta' | 'dev';
+  /** Category grouping (e.g., "ai", "messaging", "social-media"). */
+  category: ConnectionCategory;
   /** Secret names referenced in route headers — these are auto-injected
    *  into every request, so they must always be configured. */
   requiredSecrets: string[];
@@ -59,6 +61,52 @@ const CONNECTIONS_DIR = path.join(
   'connections',
 );
 
+// ── Lazy-cached alias→filepath index ──────────────────────────────────────
+
+/** Cached alias → absolute filepath index. Built lazily on first access.
+ *  Supports both flat files (connections/foo.json) and category
+ *  subdirectories (connections/ai/anthropic.json). */
+let connectionIndex: Map<string, string> | null = null;
+
+/** Build the alias→filepath index by scanning CONNECTIONS_DIR.
+ *  Files at the top level and files in one level of subdirectories are
+ *  both indexed. The alias is always the filename without .json. */
+function getConnectionIndex(): Map<string, string> {
+  if (connectionIndex) return connectionIndex;
+
+  connectionIndex = new Map();
+  if (!fs.existsSync(CONNECTIONS_DIR)) return connectionIndex;
+
+  const entries = fs.readdirSync(CONNECTIONS_DIR, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name.endsWith('.json')) {
+      // Top-level JSON file (backward compat)
+      const alias = entry.name.replace(/\.json$/, '');
+      connectionIndex.set(alias, path.join(CONNECTIONS_DIR, entry.name));
+    } else if (entry.isDirectory()) {
+      // Category subdirectory — scan one level deep
+      const subdir = path.join(CONNECTIONS_DIR, entry.name);
+      const subEntries = fs.readdirSync(subdir, 'utf-8');
+      for (const subFile of subEntries) {
+        if (subFile.endsWith('.json')) {
+          const alias = subFile.replace(/\.json$/, '');
+          connectionIndex.set(alias, path.join(subdir, subFile));
+        }
+      }
+    }
+  }
+
+  return connectionIndex;
+}
+
+/** Invalidate the cached index. Exported for testing only. */
+export function _resetConnectionIndex(): void {
+  connectionIndex = null;
+}
+
+// ── Public API ────────────────────────────────────────────────────────────
+
 /**
  * Load a single connection template by name.
  *
@@ -68,9 +116,10 @@ const CONNECTIONS_DIR = path.join(
  * @throws If the template file does not exist or contains invalid JSON.
  */
 export function loadConnection(name: string): Route {
-  const filePath = path.join(CONNECTIONS_DIR, `${name}.json`);
+  const index = getConnectionIndex();
+  const filePath = index.get(name);
 
-  if (!fs.existsSync(filePath)) {
+  if (!filePath) {
     const available = listAvailableConnections();
     throw new Error(
       `Unknown connection "${name}". Available connections: ${available.join(', ') || '(none)'}`,
@@ -84,19 +133,13 @@ export function loadConnection(name: string): Route {
 /**
  * List all available connection template names.
  *
- * Scans the connections directory for .json files and returns their
- * basenames (without extension), sorted alphabetically.
+ * Scans the connections directory (including category subdirectories) for
+ * .json files and returns their basenames (without extension), sorted
+ * alphabetically.
  */
 export function listAvailableConnections(): string[] {
-  if (!fs.existsSync(CONNECTIONS_DIR)) {
-    return [];
-  }
-
-  return fs
-    .readdirSync(CONNECTIONS_DIR, 'utf-8')
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => f.replace(/\.json$/, ''))
-    .sort();
+  const index = getConnectionIndex();
+  return [...index.keys()].sort();
 }
 
 // ── Template introspection ────────────────────────────────────────────────
@@ -151,6 +194,7 @@ export function listConnectionTemplates(): ConnectionTemplateInfo[] {
       ...(route.docsUrl !== undefined && { docsUrl: route.docsUrl }),
       ...(route.openApiUrl !== undefined && { openApiUrl: route.openApiUrl }),
       stability: route.stability ?? 'dev',
+      category: route.category!,
       requiredSecrets,
       optionalSecrets,
       hasIngestor: route.ingestor !== undefined,

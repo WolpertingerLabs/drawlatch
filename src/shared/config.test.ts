@@ -18,6 +18,13 @@ import {
   getEnvFilePath,
   getLocalKeysDir,
 } from './config.js';
+import { _resetConnectionIndex } from './connections.js';
+
+// Ensure node:fs is properly instrumentable by vitest's spy mechanism.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, default: { ...actual.default } };
+});
 
 describe('resolvePlaceholders', () => {
   it('should replace ${VAR} with secret values', () => {
@@ -881,8 +888,16 @@ describe('resolveCallerRoutes', () => {
   });
 
   it('should resolve built-in template by name', () => {
+    _resetConnectionIndex();
     const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
-      return String(p).endsWith('test-conn.json');
+      const s = String(p);
+      return s.includes('connections') || s.endsWith('test-conn.json');
+    });
+    const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation((_dir: any, opts?: any) => {
+      if (opts?.withFileTypes) {
+        return [{ name: 'test-conn.json', isFile: () => true, isDirectory: () => false }] as any;
+      }
+      return ['test-conn.json'] as any;
     });
     const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
       if (String(p).endsWith('test-conn.json')) {
@@ -910,6 +925,7 @@ describe('resolveCallerRoutes', () => {
     expect(routes[0].name).toBe('Test Connection');
 
     existsSpy.mockRestore();
+    readdirSpy.mockRestore();
     readSpy.mockRestore();
   });
 
@@ -930,8 +946,16 @@ describe('resolveCallerRoutes', () => {
   });
 
   it('should handle mix of custom connectors and built-in templates', () => {
+    _resetConnectionIndex();
     const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
-      return String(p).endsWith('test-conn.json');
+      const s = String(p);
+      return s.includes('connections') || s.endsWith('test-conn.json');
+    });
+    const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation((_dir: any, opts?: any) => {
+      if (opts?.withFileTypes) {
+        return [{ name: 'test-conn.json', isFile: () => true, isDirectory: () => false }] as any;
+      }
+      return ['test-conn.json'] as any;
     });
     const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
       if (String(p).endsWith('test-conn.json')) {
@@ -967,6 +991,7 @@ describe('resolveCallerRoutes', () => {
     expect(routes[1].name).toBe('Built-in Template');
 
     existsSpy.mockRestore();
+    readdirSpy.mockRestore();
     readSpy.mockRestore();
   });
 
@@ -996,8 +1021,16 @@ describe('resolveCallerRoutes', () => {
   });
 
   it('should inject alias into routes from built-in templates', () => {
+    _resetConnectionIndex();
     const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
-      return String(p).endsWith('test-conn.json');
+      const s = String(p);
+      return s.includes('connections') || s.endsWith('test-conn.json');
+    });
+    const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation((_dir: any, opts?: any) => {
+      if (opts?.withFileTypes) {
+        return [{ name: 'test-conn.json', isFile: () => true, isDirectory: () => false }] as any;
+      }
+      return ['test-conn.json'] as any;
     });
     const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
       if (String(p).endsWith('test-conn.json')) {
@@ -1027,6 +1060,7 @@ describe('resolveCallerRoutes', () => {
     expect(routes[0].alias).toBe('test-conn');
 
     existsSpy.mockRestore();
+    readdirSpy.mockRestore();
     readSpy.mockRestore();
   });
 
@@ -1106,8 +1140,16 @@ describe('resolveCallerRoutes', () => {
   });
 
   it('should handle config with no connectors array', () => {
+    _resetConnectionIndex();
     const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
-      return String(p).endsWith('test-conn.json');
+      const s = String(p);
+      return s.includes('connections') || s.endsWith('test-conn.json');
+    });
+    const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation((_dir: any, opts?: any) => {
+      if (opts?.withFileTypes) {
+        return [{ name: 'test-conn.json', isFile: () => true, isDirectory: () => false }] as any;
+      }
+      return ['test-conn.json'] as any;
     });
     const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
       if (String(p).endsWith('test-conn.json')) {
@@ -1133,6 +1175,7 @@ describe('resolveCallerRoutes', () => {
     expect(routes).toHaveLength(1);
 
     existsSpy.mockRestore();
+    readdirSpy.mockRestore();
     readSpy.mockRestore();
   });
 });

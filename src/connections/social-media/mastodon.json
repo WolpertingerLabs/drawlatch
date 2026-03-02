@@ -1,6 +1,7 @@
 {
   "name": "Mastodon API",
   "stability": "beta",
+  "category": "social-media",
   "description": "Mastodon API — statuses (toots), timelines, notifications, accounts, search, and more. Auth is handled automatically via the MASTODON_ACCESS_TOKEN environment variable (OAuth2 Bearer token from your instance's Development settings). This template targets mastodon.social — for other instances, override with a custom connector using the same auth pattern but different allowedEndpoints. Includes a poll ingestor that fetches the home timeline — use poll_events to retrieve them.",
   "docsUrl": "https://docs.joinmastodon.org/api/",
   "headers": {

@@ -1,6 +1,7 @@
 {
   "name": "Twitch API",
   "stability": "beta",
+  "category": "social-media",
   "description": "Twitch Helix API — streams, users, channels, clips, videos, chat, and more. Auth requires both a Bearer token and Client-Id header, handled automatically via TWITCH_ACCESS_TOKEN and TWITCH_CLIENT_ID environment variables. Register an application at https://dev.twitch.tv/console/apps to obtain credentials. Includes a poll ingestor that fetches followed live streams — set TWITCH_USER_ID and use poll_events to retrieve them.",
   "docsUrl": "https://dev.twitch.tv/docs/api/reference/",
   "headers": {

@@ -1,6 +1,7 @@
 {
   "name": "OpenRouter API",
   "stability": "stable",
+  "category": "ai",
   "description": "OpenRouter unified LLM API — chat completions, models, generation stats, and more. Auth is handled automatically via the OPENROUTER_API_KEY environment variable.",
   "docsUrl": "https://openrouter.ai/docs/api-reference",
   "openApiUrl": "https://openrouter.ai/openapi.json",

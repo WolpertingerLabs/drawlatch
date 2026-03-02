@@ -1,23 +1,64 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import {
   loadConnection,
   listAvailableConnections,
   listConnectionTemplates,
+  _resetConnectionIndex,
 } from './connections.js';
 
-// Helper: readdirSync returns string[] when called with encoding, but
-// vi.spyOn infers the Dirent[] overload. Cast through unknown to satisfy tsc.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return
-const mockReaddirSync = (files: string[]) => files as any;
+// Ensure node:fs is properly instrumentable by vitest's spy mechanism.
+// Without this, the first vi.spyOn(fs, 'readFileSync') call in a file can
+// interfere with an already-active vi.spyOn(fs, 'readdirSync') mock.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, default: { ...actual.default } };
+});
+
+// ── Mock helpers ──────────────────────────────────────────────────────────
+
+/** Create a mock Dirent-like object for readdirSync({ withFileTypes: true }). */
+function mockDirent(name: string, isDir: boolean) {
+  return {
+    name,
+    isFile: () => !isDir,
+    isDirectory: () => isDir,
+    isBlockDevice: () => false,
+    isCharacterDevice: () => false,
+    isFIFO: () => false,
+    isSocket: () => false,
+    isSymbolicLink: () => false,
+    parentPath: '',
+    path: '',
+  };
+}
+
+/** Mock readdirSync to return flat top-level JSON files (no subdirs).
+ *  Handles both the { withFileTypes: true } call and string-encoding calls. */
+function mockFlatDir(files: string[]) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  vi.spyOn(fs, 'readdirSync').mockImplementation((_dirPath: any, opts?: any) => {
+    if (opts?.withFileTypes) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return files.map((f) => mockDirent(f, false)) as any;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return files as any;
+  });
+}
 
 describe('loadConnection', () => {
+  beforeEach(() => {
+    _resetConnectionIndex();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
+    _resetConnectionIndex();
   });
 
   it('should load a valid connection template', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['test-api.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'Test API',
@@ -38,39 +79,36 @@ describe('loadConnection', () => {
 
   it('should throw for unknown connection name', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync([]));
 
     expect(() => loadConnection('nonexistent')).toThrow('Unknown connection "nonexistent"');
   });
 
   it('should include available connections in error message', () => {
-    vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
-      // The connection file doesn't exist, but the directory does
-      return !String(p).endsWith('.json');
-    });
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['github.json', 'stripe.json']));
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['github.json', 'stripe.json']);
 
     expect(() => loadConnection('nonexistent')).toThrow('Available connections: github, stripe');
   });
 
   it('should show (none) when no connections are available', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync([]));
 
     expect(() => loadConnection('nonexistent')).toThrow('Available connections: (none)');
   });
 });
 
 describe('listAvailableConnections', () => {
+  beforeEach(() => {
+    _resetConnectionIndex();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
+    _resetConnectionIndex();
   });
 
   it('should list available connections alphabetically', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(
-      mockReaddirSync(['trello.json', 'github.json', 'stripe.json']),
-    );
+    mockFlatDir(['trello.json', 'github.json', 'stripe.json']);
 
     const available = listAvailableConnections();
     expect(available).toEqual(['github', 'stripe', 'trello']);
@@ -85,12 +123,46 @@ describe('listAvailableConnections', () => {
 
   it('should filter out non-JSON files', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(
-      mockReaddirSync(['github.json', 'README.md', '.DS_Store']),
-    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(fs, 'readdirSync').mockImplementation((_dirPath: any, opts?: any) => {
+      if (opts?.withFileTypes) {
+        return [
+          mockDirent('github.json', false),
+          mockDirent('README.md', false),
+          mockDirent('.DS_Store', false),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ] as any;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return ['github.json', 'README.md', '.DS_Store'] as any;
+    });
 
     const available = listAvailableConnections();
     expect(available).toEqual(['github']);
+  });
+
+  it('should find connections in subdirectories', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(fs, 'readdirSync').mockImplementation((dirPath: any, opts?: any) => {
+      const dir = String(dirPath);
+      if (opts?.withFileTypes) {
+        return [
+          mockDirent('ai', true),
+          mockDirent('messaging', true),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ] as any;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (dir.endsWith('ai')) return ['anthropic.json', 'openai.json'] as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (dir.endsWith('messaging')) return ['slack.json'] as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return [] as any;
+    });
+
+    const available = listAvailableConnections();
+    expect(available).toEqual(['anthropic', 'openai', 'slack']);
   });
 });
 
@@ -282,16 +354,21 @@ describe('bundled connection templates', () => {
 // ── listConnectionTemplates ─────────────────────────────────────────────
 
 describe('listConnectionTemplates (unit)', () => {
+  beforeEach(() => {
+    _resetConnectionIndex();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
+    _resetConnectionIndex();
   });
 
   it('should return correct structure for a template with ingestor', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['myapi.json']));
+    mockFlatDir(['myapi.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'My API',
+        category: 'ai',
         description: 'An API with a webhook ingestor',
         docsUrl: 'https://docs.myapi.com',
         headers: { Authorization: 'Bearer ${API_TOKEN}' },
@@ -318,10 +395,11 @@ describe('listConnectionTemplates (unit)', () => {
 
   it('should return correct structure for a template without ingestor', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['simple.json']));
+    mockFlatDir(['simple.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'Simple API',
+        category: 'ai',
         headers: { 'x-api-key': '${KEY}' },
         secrets: { KEY: '${KEY}' },
         allowedEndpoints: ['https://api.simple.com/**'],
@@ -344,10 +422,11 @@ describe('listConnectionTemplates (unit)', () => {
 
   it('should correctly categorize required vs optional secrets', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['mixed.json']));
+    mockFlatDir(['mixed.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'Mixed',
+        category: 'ai',
         headers: {
           Authorization: 'Bearer ${AUTH_TOKEN}',
           'X-Custom': '${CUSTOM_HEADER}',
@@ -377,9 +456,10 @@ describe('listConnectionTemplates (unit)', () => {
 
   it('should fall back to alias when name is missing', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['nameless.json']));
+    mockFlatDir(['nameless.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
+        category: 'ai',
         allowedEndpoints: ['https://api.nameless.com/**'],
       }),
     );
@@ -486,16 +566,21 @@ describe('listConnectionTemplates (integration)', () => {
 // ── listConnectionTemplates — new boolean fields ────────────────────────
 
 describe('listConnectionTemplates — new boolean fields (unit)', () => {
+  beforeEach(() => {
+    _resetConnectionIndex();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
+    _resetConnectionIndex();
   });
 
   it('should report hasTestConnection=true when testConnection is present', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    mockFlatDir(['api.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'API',
+        category: 'ai',
         allowedEndpoints: ['https://api.example.com/**'],
         testConnection: { url: 'https://api.example.com/me', description: 'Test' },
       }),
@@ -507,10 +592,11 @@ describe('listConnectionTemplates — new boolean fields (unit)', () => {
 
   it('should report hasTestConnection=false when testConnection is absent', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    mockFlatDir(['api.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'API',
+        category: 'ai',
         allowedEndpoints: ['https://api.example.com/**'],
       }),
     );
@@ -521,10 +607,11 @@ describe('listConnectionTemplates — new boolean fields (unit)', () => {
 
   it('should report hasTestIngestor=true when testIngestor is present', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    mockFlatDir(['api.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'API',
+        category: 'ai',
         allowedEndpoints: ['https://api.example.com/**'],
         ingestor: { type: 'webhook', webhook: { path: 'api' } },
         testIngestor: {
@@ -541,10 +628,11 @@ describe('listConnectionTemplates — new boolean fields (unit)', () => {
 
   it('should report hasTestIngestor=false when testIngestor is null', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    mockFlatDir(['api.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'API',
+        category: 'ai',
         allowedEndpoints: ['https://api.example.com/**'],
         ingestor: { type: 'webhook', webhook: { path: 'api' } },
         testIngestor: null,
@@ -557,10 +645,11 @@ describe('listConnectionTemplates — new boolean fields (unit)', () => {
 
   it('should report hasTestIngestor=false when testIngestor is absent', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    mockFlatDir(['api.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'API',
+        category: 'ai',
         allowedEndpoints: ['https://api.example.com/**'],
       }),
     );
@@ -571,10 +660,11 @@ describe('listConnectionTemplates — new boolean fields (unit)', () => {
 
   it('should report hasListenerConfig=true when listenerConfig is present', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    mockFlatDir(['api.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'API',
+        category: 'ai',
         allowedEndpoints: ['https://api.example.com/**'],
         ingestor: { type: 'webhook', webhook: { path: 'api' } },
         listenerConfig: {
@@ -590,10 +680,11 @@ describe('listConnectionTemplates — new boolean fields (unit)', () => {
 
   it('should report hasListenerConfig=false when listenerConfig is absent', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    mockFlatDir(['api.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'API',
+        category: 'ai',
         allowedEndpoints: ['https://api.example.com/**'],
       }),
     );
@@ -604,10 +695,11 @@ describe('listConnectionTemplates — new boolean fields (unit)', () => {
 
   it('should correctly report all three boolean fields together', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['full.json']));
+    mockFlatDir(['full.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'Full API',
+        category: 'ai',
         allowedEndpoints: ['https://api.example.com/**'],
         ingestor: { type: 'webhook', webhook: { path: 'api' } },
         testConnection: { url: 'https://api.example.com/me' },
@@ -677,16 +769,21 @@ describe('listConnectionTemplates — new boolean fields (integration)', () => {
 // ── Multi-instance support fields ────────────────────────────────────────
 
 describe('listConnectionTemplates — supportsMultiInstance field (unit)', () => {
+  beforeEach(() => {
+    _resetConnectionIndex();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
+    _resetConnectionIndex();
   });
 
   it('should report supportsMultiInstance=true when listenerConfig has supportsMultiInstance', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    mockFlatDir(['api.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'API',
+        category: 'ai',
         allowedEndpoints: ['https://api.example.com/**'],
         ingestor: { type: 'webhook', webhook: { path: 'api' } },
         listenerConfig: {
@@ -706,10 +803,11 @@ describe('listConnectionTemplates — supportsMultiInstance field (unit)', () =>
 
   it('should report supportsMultiInstance=false when listenerConfig omits it', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    mockFlatDir(['api.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'API',
+        category: 'ai',
         allowedEndpoints: ['https://api.example.com/**'],
         ingestor: { type: 'webhook', webhook: { path: 'api' } },
         listenerConfig: {
@@ -725,10 +823,11 @@ describe('listConnectionTemplates — supportsMultiInstance field (unit)', () =>
 
   it('should report supportsMultiInstance=false when no listenerConfig exists', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    mockFlatDir(['api.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'API',
+        category: 'ai',
         allowedEndpoints: ['https://api.example.com/**'],
       }),
     );
@@ -952,17 +1051,22 @@ describe('connection template JSON structure validation', () => {
 // ── Stability field ─────────────────────────────────────────────────────
 
 describe('listConnectionTemplates — stability field (unit)', () => {
+  beforeEach(() => {
+    _resetConnectionIndex();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
+    _resetConnectionIndex();
   });
 
   it('should return stability when present in template', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    mockFlatDir(['api.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'API',
         stability: 'stable',
+        category: 'ai',
         allowedEndpoints: ['https://api.example.com/**'],
       }),
     );
@@ -973,10 +1077,11 @@ describe('listConnectionTemplates — stability field (unit)', () => {
 
   it('should default stability to "dev" when omitted from template', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+    mockFlatDir(['api.json']);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       JSON.stringify({
         name: 'API',
+        category: 'ai',
         allowedEndpoints: ['https://api.example.com/**'],
       }),
     );
@@ -988,11 +1093,12 @@ describe('listConnectionTemplates — stability field (unit)', () => {
   it('should accept all three stability values', () => {
     for (const level of ['stable', 'beta', 'dev'] as const) {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-      vi.spyOn(fs, 'readdirSync').mockReturnValue(mockReaddirSync(['api.json']));
+      mockFlatDir(['api.json']);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(
         JSON.stringify({
           name: 'API',
           stability: level,
+          category: 'ai',
           allowedEndpoints: ['https://api.example.com/**'],
         }),
       );
@@ -1000,6 +1106,7 @@ describe('listConnectionTemplates — stability field (unit)', () => {
       const templates = listConnectionTemplates();
       expect(templates[0].stability).toBe(level);
       vi.restoreAllMocks();
+      _resetConnectionIndex();
     }
   });
 });
@@ -1041,6 +1148,99 @@ describe('listConnectionTemplates — stability field (integration)', () => {
     for (const alias of devAliases) {
       const t = templates.find((t) => t.alias === alias)!;
       expect(t.stability).toBe('dev');
+    }
+  });
+});
+
+// ── Category field ──────────────────────────────────────────────────────
+
+describe('listConnectionTemplates — category field (unit)', () => {
+  beforeEach(() => {
+    _resetConnectionIndex();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    _resetConnectionIndex();
+  });
+
+  it('should return category when present in template', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['api.json']);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'API',
+        category: 'messaging',
+        allowedEndpoints: ['https://api.example.com/**'],
+      }),
+    );
+
+    const templates = listConnectionTemplates();
+    expect(templates[0].category).toBe('messaging');
+  });
+});
+
+describe('listConnectionTemplates — category field (integration)', () => {
+  it('should have a valid category for all bundled templates', () => {
+    const templates = listConnectionTemplates();
+    const validCategories = ['ai', 'developer-tools', 'gaming', 'messaging', 'productivity', 'social-media'];
+
+    for (const t of templates) {
+      expect(validCategories).toContain(t.category);
+    }
+  });
+
+  it('should have correct category for AI connections', () => {
+    const templates = listConnectionTemplates();
+    for (const alias of ['anthropic', 'openai', 'openrouter', 'google-ai', 'devin']) {
+      const t = templates.find((t) => t.alias === alias)!;
+      expect(t.category).toBe('ai');
+    }
+  });
+
+  it('should have correct category for developer-tools connections', () => {
+    const templates = listConnectionTemplates();
+    for (const alias of ['github', 'linear', 'hex']) {
+      const t = templates.find((t) => t.alias === alias)!;
+      expect(t.category).toBe('developer-tools');
+    }
+  });
+
+  it('should have correct category for messaging connections', () => {
+    const templates = listConnectionTemplates();
+    for (const alias of ['discord-bot', 'discord-oauth', 'slack', 'telegram']) {
+      const t = templates.find((t) => t.alias === alias)!;
+      expect(t.category).toBe('messaging');
+    }
+  });
+
+  it('should have correct category for social-media connections', () => {
+    const templates = listConnectionTemplates();
+    for (const alias of ['x', 'bluesky', 'mastodon', 'reddit', 'twitch']) {
+      const t = templates.find((t) => t.alias === alias)!;
+      expect(t.category).toBe('social-media');
+    }
+  });
+
+  it('should have correct category for productivity connections', () => {
+    const templates = listConnectionTemplates();
+    for (const alias of ['trello', 'notion', 'google', 'stripe']) {
+      const t = templates.find((t) => t.alias === alias)!;
+      expect(t.category).toBe('productivity');
+    }
+  });
+
+  it('should have correct category for gaming connections', () => {
+    const templates = listConnectionTemplates();
+    const lichess = templates.find((t) => t.alias === 'lichess')!;
+    expect(lichess.category).toBe('gaming');
+  });
+
+  it('should have JSON category matching the physical subdirectory name', () => {
+    // Every template's category field should match the directory it lives in
+    const templates = listConnectionTemplates();
+    for (const t of templates) {
+      const route = loadConnection(t.alias);
+      expect(route.category).toBe(t.category);
     }
   });
 });

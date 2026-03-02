@@ -61,6 +61,16 @@ export function getEnvFilePath(): string {
   return path.join(getConfigDir(), '.env');
 }
 
+/** Category grouping for built-in connection templates.
+ *  Matches the subdirectory name under src/connections/. */
+export type ConnectionCategory =
+  | 'ai'
+  | 'developer-tools'
+  | 'gaming'
+  | 'messaging'
+  | 'productivity'
+  | 'social-media';
+
 /** MCP proxy (local) configuration */
 export interface ProxyConfig {
   /** Remote server URL */
@@ -100,6 +110,10 @@ export interface Route {
    *  Defaults to "dev" if omitted. Helps agents and UIs communicate
    *  whether a connection is production-ready, in testing, or experimental. */
   stability?: 'stable' | 'beta' | 'dev';
+  /** Category grouping for this connection template (e.g., "ai", "messaging").
+   *  Matches the subdirectory under src/connections/. Only present on built-in
+   *  connection templates; custom connectors may omit it. */
+  category?: ConnectionCategory;
   /** Headers to inject automatically into outgoing requests for this route.
    *  These MUST NOT conflict with client-provided headers (request is rejected on conflict).
    *  Values may contain ${VAR} placeholders resolved against this route's secrets. */
@@ -145,6 +159,8 @@ export interface ResolvedRoute {
   openApiUrl?: string;
   /** Stability level (carried from config) */
   stability?: 'stable' | 'beta' | 'dev';
+  /** Category grouping (carried from config) */
+  category?: ConnectionCategory;
   headers: Record<string, string>;
   secrets: Record<string, string>;
   allowedEndpoints: string[];
@@ -484,6 +500,7 @@ export function resolveRoutes(
       ...(route.docsUrl !== undefined && { docsUrl: route.docsUrl }),
       ...(route.openApiUrl !== undefined && { openApiUrl: route.openApiUrl }),
       ...(route.stability !== undefined && { stability: route.stability }),
+      ...(route.category !== undefined && { category: route.category }),
       headers: resolvedHeaders,
       secrets: resolvedSecrets,
       allowedEndpoints: route.allowedEndpoints,

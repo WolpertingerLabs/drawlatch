@@ -1,6 +1,7 @@
 {
   "name": "Reddit API",
   "stability": "beta",
+  "category": "social-media",
   "description": "Reddit API — subreddits, posts, comments, users, search, and more. Auth is handled automatically via the REDDIT_ACCESS_TOKEN environment variable (OAuth2 Bearer token). A User-Agent header is required by Reddit and set via REDDIT_USER_AGENT. Obtain an OAuth2 token by registering a 'script' app at https://www.reddit.com/prefs/apps and using the client credentials grant. Tokens expire after 1 hour — rotate externally. Includes a poll ingestor that fetches new posts from a configurable subreddit — set REDDIT_SUBREDDIT and use poll_events to retrieve them.",
   "docsUrl": "https://www.reddit.com/dev/api/",
   "headers": {
