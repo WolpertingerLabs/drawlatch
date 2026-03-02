@@ -78,7 +78,7 @@ export class DiscordGatewayIngestor extends BaseIngestor {
     return Promise.resolve();
   }
 
-  stop(): Promise<void> {
+  stop(_permanent?: boolean): Promise<void> {
     this.state = 'stopped';
     this.clearAllTimers();
     if (this.ws) {

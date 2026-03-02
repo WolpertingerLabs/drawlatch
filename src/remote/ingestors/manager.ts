@@ -218,7 +218,7 @@ export class IngestorManager {
     const stops = Array.from(this.ingestors.entries()).map(async ([key, ingestor]) => {
       log.info(`Stopping ${key}`);
       try {
-        await ingestor.stop();
+        await ingestor.stop(true);
       } catch (err) {
         log.error(`Error stopping ${key}:`, err);
       }
@@ -437,9 +437,10 @@ export class IngestorManager {
     callerAlias: string,
     connectionAlias: string,
     instanceId?: string,
+    options?: { permanent?: boolean },
   ): Promise<LifecycleResult | LifecycleResult[]> {
     if (instanceId) {
-      return this.stopOneInstance(callerAlias, connectionAlias, instanceId);
+      return this.stopOneInstance(callerAlias, connectionAlias, instanceId, options);
     }
 
     // Stop all instances for this connection
@@ -453,14 +454,14 @@ export class IngestorManager {
     if (keysToStop.length === 1) {
       const parsed = parseKey(keysToStop[0]);
       const instId = parsed.instance === DEFAULT_INSTANCE_ID ? undefined : parsed.instance;
-      return this.stopOneInstance(callerAlias, connectionAlias, instId);
+      return this.stopOneInstance(callerAlias, connectionAlias, instId, options);
     }
 
     const results: LifecycleResult[] = [];
     for (const key of keysToStop) {
       const parsed = parseKey(key);
       const instId = parsed.instance === DEFAULT_INSTANCE_ID ? undefined : parsed.instance;
-      results.push(await this.stopOneInstance(callerAlias, connectionAlias, instId));
+      results.push(await this.stopOneInstance(callerAlias, connectionAlias, instId, options));
     }
     return results;
   }
@@ -470,6 +471,7 @@ export class IngestorManager {
     callerAlias: string,
     connectionAlias: string,
     instanceId: string | undefined,
+    options?: { permanent?: boolean },
   ): Promise<LifecycleResult> {
     const key = makeKey(callerAlias, connectionAlias, instanceId ?? DEFAULT_INSTANCE_ID);
     const ingestor = this.ingestors.get(key);
@@ -480,7 +482,7 @@ export class IngestorManager {
 
     log.info(`Stopping ${key}`);
     try {
-      await ingestor.stop();
+      await ingestor.stop(options?.permanent);
       this.ingestors.delete(key);
       return { success: true, connection: connectionAlias, instanceId, state: 'stopped' };
     } catch (err) {
@@ -605,9 +607,13 @@ export class IngestorManager {
       }
 
       // instanceKey on webhook config: attach for payload discrimination
+      // Also inject into secrets for lifecycle ${VAR} template resolution
       if (field.instanceKey && config.webhook) {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
         (config.webhook as any)[`_${paramKey}`] = paramValue;
+        if (typeof paramValue === 'string') {
+          secrets[paramKey] = paramValue;
+        }
       }
     }
   }

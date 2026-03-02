@@ -6,6 +6,8 @@
  * polling) and buffering them for the MCP proxy to retrieve via `poll_events`.
  */
 
+import type { WebhookLifecycleConfig } from './webhook/lifecycle-types.js';
+
 // ── Ingestor configuration (stored in connection templates) ─────────────
 
 /** Top-level ingestor configuration attached to a connection template. */
@@ -74,6 +76,11 @@ export interface WebhookIngestorConfig {
    *  Required for services like Trello that include the callback URL in their
    *  signature computation. May contain ${VAR} placeholders resolved from secrets. */
   callbackUrl?: string;
+
+  /** Declarative webhook lifecycle configuration for auto-registration and cleanup.
+   *  When present, the ingestor will automatically list, register, and unregister
+   *  webhooks with the external service at the appropriate lifecycle moments. */
+  lifecycle?: WebhookLifecycleConfig;
 }
 
 /** Configuration for polling-based ingestors (e.g., Notion search). */
@@ -183,6 +190,13 @@ export interface IngestorStatus {
 
   /** Error message when state is 'error'. */
   error?: string;
+
+  /** Webhook registration status (only present for webhook ingestors with lifecycle config). */
+  webhookRegistration?: {
+    registered: boolean;
+    webhookId?: string;
+    error?: string;
+  };
 }
 
 // ── Constants ───────────────────────────────────────────────────────────

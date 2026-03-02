@@ -66,8 +66,11 @@ export abstract class BaseIngestor extends EventEmitter {
   /** Start the ingestor (connect WebSocket, begin polling, etc.). */
   abstract start(): Promise<void>;
 
-  /** Stop the ingestor cleanly (close connections, clear timers). */
-  abstract stop(): Promise<void>;
+  /** Stop the ingestor cleanly (close connections, clear timers).
+   *  @param permanent  When true, indicates a permanent shutdown (server exit
+   *                    or instance deletion). Webhook ingestors use this to
+   *                    unregister webhooks from the external service. */
+  abstract stop(permanent?: boolean): Promise<void>;
 
   /**
    * Push a new event into the ring buffer.

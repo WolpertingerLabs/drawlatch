@@ -136,7 +136,10 @@ function auditLog(sessionId: string, action: string, details: Record<string, unk
     ...details,
   };
 
-  if ('toolName' in details && details.toolName === 'poll_events') {
+  if (
+    'toolName' in details &&
+    (details.toolName === 'poll_events' || details.toolName === 'ingestor_status')
+  ) {
     return;
   }
 
@@ -1034,7 +1037,7 @@ const toolHandlers: Record<string, ToolHandler> = {
     const mgr = context.ingestorManager;
     if (mgr.has(context.callerAlias, connection, instance_id)) {
       try {
-        await mgr.stopOne(context.callerAlias, connection, instance_id);
+        await mgr.stopOne(context.callerAlias, connection, instance_id, { permanent: true });
       } catch (err) {
         // Log but don't fail the delete
         console.error(

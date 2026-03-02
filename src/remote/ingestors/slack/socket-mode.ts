@@ -64,7 +64,7 @@ export class SlackSocketModeIngestor extends BaseIngestor {
     await this.openConnection();
   }
 
-  stop(): Promise<void> {
+  stop(_permanent?: boolean): Promise<void> {
     this.state = 'stopped';
     this.clearReconnectTimer();
     if (this.ws) {
