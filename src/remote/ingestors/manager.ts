@@ -18,6 +18,7 @@ import {
   resolveCallerRoutes,
   resolveRoutes,
   resolveSecrets,
+  type CallerConfig,
   type IngestorOverrides,
   type RemoteServerConfig,
   type Route,
@@ -315,7 +316,7 @@ export class IngestorManager {
     connectionAlias: string,
     instanceId?: string,
   ): Promise<LifecycleResult | LifecycleResult[]> {
-    const callerConfig = this.config.callers[callerAlias];
+    const callerConfig = this.config.callers[callerAlias] as CallerConfig | undefined;
     if (!callerConfig) {
       return { success: false, connection: connectionAlias, error: `Unknown caller: ${callerAlias}` };
     }
