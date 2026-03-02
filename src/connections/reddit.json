@@ -24,5 +24,55 @@
       "deduplicateBy": "data.name",
       "eventType": "new_post"
     }
+  },
+  "testIngestor": {
+    "description": "Fetches the authenticated user to verify Reddit API access",
+    "strategy": "poll_once",
+    "request": {
+      "url": "https://oauth.reddit.com/api/v1/me",
+      "expectedStatus": [200]
+    }
+  },
+  "listenerConfig": {
+    "name": "Reddit Poll Listener",
+    "description": "Polls a subreddit for new posts at a configurable interval. Supports multiple concurrent instances to watch different subreddits simultaneously.",
+    "supportsMultiInstance": true,
+    "fields": [
+      {
+        "key": "subreddit",
+        "label": "Subreddit",
+        "description": "The subreddit to watch for new posts (without the r/ prefix).",
+        "type": "text",
+        "required": true,
+        "instanceKey": true,
+        "overrideKey": "REDDIT_SUBREDDIT",
+        "placeholder": "e.g., rust",
+        "group": "Connection"
+      },
+      {
+        "key": "intervalMs",
+        "label": "Poll Interval (ms)",
+        "description": "How often to check for new posts, in milliseconds.",
+        "type": "number",
+        "default": 60000,
+        "min": 10000,
+        "max": 3600000,
+        "group": "Connection"
+      },
+      {
+        "key": "bufferSize",
+        "label": "Buffer Size",
+        "description": "Maximum number of events to keep in memory.",
+        "type": "number",
+        "default": 200,
+        "min": 10,
+        "max": 1000,
+        "group": "Advanced"
+      }
+    ]
+  },
+  "testConnection": {
+    "url": "https://oauth.reddit.com/api/v1/me",
+    "description": "Fetches the authenticated Reddit user"
   }
 }

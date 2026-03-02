@@ -12,12 +12,20 @@
  * extraction by overriding `verifySignature()`, `extractEventType()`, and
  * `extractEventData()`.
  *
+ * When a `lifecycle` config is present on the webhook config, this class
+ * automatically manages webhook registration with the external service:
+ * - On `start()`: lists existing webhooks, cleans up stale ones, registers new
+ * - On `stop(permanent=true)`: unregisters the webhook (deletion/shutdown only)
+ *
  * @see GitHubWebhookIngestor
  * @see StripeWebhookIngestor
  */
 
 import { BaseIngestor } from '../base-ingestor.js';
-import type { WebhookIngestorConfig } from '../types.js';
+import type { WebhookIngestorConfig, IngestorStatus } from '../types.js';
+import type { WebhookRegistrationState } from './lifecycle-types.js';
+import { WebhookLifecycleManager } from './webhook-lifecycle-manager.js';
+import { resolvePlaceholders } from '../../../shared/config.js';
 import { createLogger } from '../../../shared/logger.js';
 
 const log = createLogger('webhook');
@@ -37,41 +45,142 @@ export abstract class WebhookIngestor extends BaseIngestor {
   /** Event type filter (empty = capture all). */
   protected readonly eventFilter: string[];
 
+  /** Resolved callback URL (with ${VAR} placeholders replaced). */
+  protected readonly resolvedCallbackUrl: string | undefined;
+
+  /** Lifecycle manager for auto-registration (null if no lifecycle config). */
+  private readonly lifecycleManager: WebhookLifecycleManager | null;
+
+  /** Runtime state of the webhook registration. */
+  protected registrationState: WebhookRegistrationState | null = null;
+
   constructor(
     connectionAlias: string,
     secrets: Record<string, string>,
     webhookConfig: WebhookIngestorConfig,
     bufferSize?: number,
+    instanceId?: string,
   ) {
-    super(connectionAlias, 'webhook', secrets, bufferSize);
+    super(connectionAlias, 'webhook', secrets, bufferSize, instanceId);
     this.webhookPath = webhookConfig.path;
     this.signatureHeader = webhookConfig.signatureHeader;
     this.signatureSecretName = webhookConfig.signatureSecret;
     this.eventFilter = [];
+
+    // Resolve callbackUrl from secrets if it contains ${VAR} placeholders
+    if (webhookConfig.callbackUrl) {
+      this.resolvedCallbackUrl = resolvePlaceholders(webhookConfig.callbackUrl, secrets);
+    }
+
+    // Initialize lifecycle manager if lifecycle config is present
+    if (webhookConfig.lifecycle) {
+      this.lifecycleManager = new WebhookLifecycleManager(webhookConfig.lifecycle, secrets);
+    } else {
+      this.lifecycleManager = null;
+    }
   }
 
   /**
    * Start the webhook ingestor.
    *
-   * Unlike WebSocket ingestors, there's nothing to "connect" to — the ingestor
-   * is passive and waits for `handleWebhook()` calls from the Express route.
-   * We set the state to 'connected' immediately.
+   * If a lifecycle config is present, attempts to auto-register the webhook
+   * with the external service before setting state to 'connected'.
+   * Registration failures are logged but never prevent the ingestor from starting
+   * (graceful degradation).
    */
-  start(): Promise<void> {
+  async start(): Promise<void> {
+    // Attempt lifecycle registration if configured
+    if (this.lifecycleManager && this.resolvedCallbackUrl) {
+      try {
+        this.registrationState = await this.lifecycleManager.ensureRegistered(
+          this.resolvedCallbackUrl,
+          this.getModelId(),
+        );
+        if (this.registrationState.registered) {
+          log.info(
+            `Webhook auto-registered for ${this.connectionAlias} ` +
+              `(ID: ${this.registrationState.webhookId})`,
+          );
+        } else if (this.registrationState.error) {
+          log.warn(
+            `Webhook auto-registration failed for ${this.connectionAlias}: ` +
+              this.registrationState.error,
+          );
+        }
+      } catch (err) {
+        log.warn(`Webhook lifecycle error for ${this.connectionAlias}:`, err);
+        this.registrationState = {
+          registered: false,
+          error: err instanceof Error ? err.message : String(err),
+          lastAttempt: new Date().toISOString(),
+        };
+      }
+    }
+
+    // Always proceed to connected state (graceful degradation)
     this.state = 'connected';
     log.info(
       `Webhook ingestor ready for ${this.connectionAlias} ` +
         `(path: /webhooks/${this.webhookPath})`,
     );
-    return Promise.resolve();
   }
 
   /**
-   * Stop the webhook ingestor. Nothing to clean up — just set state.
+   * Stop the webhook ingestor.
+   *
+   * When `permanent` is true (server shutdown or instance deletion), unregisters
+   * the webhook from the external service if one was registered.
+   * Regular stops (pause/restart) leave the webhook intact.
    */
-  stop(): Promise<void> {
+  async stop(permanent?: boolean): Promise<void> {
+    // Unregister webhook on permanent stop if we have a registered webhook
+    if (
+      permanent &&
+      this.lifecycleManager &&
+      this.registrationState?.registered &&
+      this.registrationState.webhookId
+    ) {
+      try {
+        await this.lifecycleManager.unregister(this.registrationState.webhookId);
+        log.info(`Webhook unregistered for ${this.connectionAlias}`);
+      } catch (err) {
+        log.warn(`Webhook unregistration failed for ${this.connectionAlias}:`, err);
+      }
+    }
+
     this.state = 'stopped';
-    return Promise.resolve();
+  }
+
+  // ── Lifecycle hooks for subclasses ───────────────────────────────────
+
+  /**
+   * Return the model/resource ID for multi-instance webhook registration.
+   *
+   * Override in subclasses that support multi-instance webhooks (e.g., Trello
+   * board ID, GitHub repo name). Used by the lifecycle manager to match
+   * existing webhooks and clean up stale registrations.
+   *
+   * Default: undefined (single-instance).
+   */
+  protected getModelId(): string | undefined {
+    return undefined;
+  }
+
+  // ── Status ─────────────────────────────────────────────────────────────
+
+  /** Return status including webhook registration state. */
+  override getStatus(): IngestorStatus {
+    const status = super.getStatus();
+
+    if (this.registrationState) {
+      status.webhookRegistration = {
+        registered: this.registrationState.registered,
+        ...(this.registrationState.webhookId && { webhookId: this.registrationState.webhookId }),
+        ...(this.registrationState.error && { error: this.registrationState.error }),
+      };
+    }
+
+    return status;
   }
 
   // ── Abstract methods for subclasses ───────────────────────────────────
@@ -123,6 +232,19 @@ export abstract class WebhookIngestor extends BaseIngestor {
     headers: Record<string, string | string[] | undefined>,
     body: unknown,
   ): unknown;
+
+  /**
+   * Instance-level content filter for multi-instance webhook discrimination.
+   *
+   * Called after signature verification and body parsing. Override in subclasses
+   * to filter webhooks by resource (e.g., Trello board ID, GitHub repo name).
+   * Return false to silently skip the webhook for this instance.
+   *
+   * Default: accept all webhooks.
+   */
+  protected shouldAcceptPayload(_body: unknown): boolean {
+    return true;
+  }
 
   /**
    * Extract a service-specific idempotency key from the webhook request.
@@ -177,6 +299,11 @@ export abstract class WebhookIngestor extends BaseIngestor {
       body = JSON.parse(rawBody.toString('utf-8'));
     } catch {
       return { accepted: false, reason: 'Invalid JSON body' };
+    }
+
+    // 2.5. Instance-level content filter (for multi-instance discrimination)
+    if (!this.shouldAcceptPayload(body)) {
+      return { accepted: true, reason: 'Not for this instance' };
     }
 
     // 3. Determine event type (delegated to subclass)

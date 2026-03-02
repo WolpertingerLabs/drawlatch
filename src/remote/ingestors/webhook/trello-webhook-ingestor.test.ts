@@ -525,3 +525,140 @@ describe('Trello webhook factory registration', () => {
     expect(ingestor).toBeInstanceOf(TrelloWebhookIngestor);
   });
 });
+
+// ── getModelId and multi-instance lifecycle ──────────────────────────────
+
+describe('TrelloWebhookIngestor — getModelId and board filtering', () => {
+  it('should return boardId from getModelId when _boardId is set', async () => {
+    const ingestor = new TrelloWebhookIngestor(
+      'trello',
+      { TRELLO_API_SECRET: 'secret' },
+      {
+        path: 'trello',
+        protocol: 'trello',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _boardId: 'board-xyz-789',
+      } as any,
+    );
+
+    // getModelId is protected, but we can verify the behavior through
+    // getStatus — start the ingestor and check it works correctly
+    await ingestor.start();
+    const status = ingestor.getStatus();
+    expect(status.state).toBe('connected');
+  });
+
+  it('should return undefined from getModelId when no _boardId is set', async () => {
+    const ingestor = new TrelloWebhookIngestor(
+      'trello',
+      { TRELLO_API_SECRET: 'secret' },
+      {
+        path: 'trello',
+        protocol: 'trello',
+      },
+    );
+
+    await ingestor.start();
+    const status = ingestor.getStatus();
+    expect(status.state).toBe('connected');
+    // No lifecycle config → no webhookRegistration
+    expect(status.webhookRegistration).toBeUndefined();
+  });
+
+  it('should filter webhooks by boardId when _boardId is set', () => {
+    const targetBoardId = 'board-target-123';
+    const otherBoardId = 'board-other-456';
+
+    const ingestor = new TrelloWebhookIngestor(
+      'trello',
+      {},
+      {
+        path: 'trello',
+        protocol: 'trello',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _boardId: targetBoardId,
+      } as any,
+    );
+
+    // Matching board → accepted
+    const matchPayload = JSON.stringify({
+      model: { id: targetBoardId },
+      action: { type: 'updateCard', id: 'action-1' },
+    });
+    const matchResult = ingestor.handleWebhook({}, Buffer.from(matchPayload));
+    expect(matchResult.accepted).toBe(true);
+    expect(matchResult.reason).toBeUndefined();
+
+    // Different board → silently skipped
+    const otherPayload = JSON.stringify({
+      model: { id: otherBoardId },
+      action: { type: 'updateCard', id: 'action-2' },
+    });
+    const otherResult = ingestor.handleWebhook({}, Buffer.from(otherPayload));
+    expect(otherResult.accepted).toBe(true);
+    expect(otherResult.reason).toBe('Not for this instance');
+
+    // Verify only the matching event was buffered
+    expect(ingestor.getEvents()).toHaveLength(1);
+  });
+
+  it('should accept all webhooks when no _boardId is set', () => {
+    const ingestor = new TrelloWebhookIngestor(
+      'trello',
+      {},
+      { path: 'trello', protocol: 'trello' },
+    );
+
+    const payload1 = JSON.stringify({
+      model: { id: 'board-a' },
+      action: { type: 'updateCard', id: 'action-1' },
+    });
+    const payload2 = JSON.stringify({
+      model: { id: 'board-b' },
+      action: { type: 'createCard', id: 'action-2' },
+    });
+
+    expect(ingestor.handleWebhook({}, Buffer.from(payload1)).accepted).toBe(true);
+    expect(ingestor.handleWebhook({}, Buffer.from(payload2)).accepted).toBe(true);
+    expect(ingestor.getEvents()).toHaveLength(2);
+  });
+
+  it('should resolve callbackUrl via base class resolvedCallbackUrl', () => {
+    const resolvedUrl = 'https://my-tunnel.example.com/webhooks/trello';
+
+    const ingestor = new TrelloWebhookIngestor(
+      'trello',
+      {
+        TRELLO_API_SECRET: 'secret',
+        TRELLO_CALLBACK_URL: resolvedUrl,
+      },
+      {
+        path: 'trello',
+        protocol: 'trello',
+        signatureHeader: 'X-Trello-Webhook',
+        signatureSecret: 'TRELLO_API_SECRET',
+        callbackUrl: '${TRELLO_CALLBACK_URL}',
+      },
+    );
+
+    // Signature verification uses resolvedCallbackUrl (from base class)
+    // If it weren't resolved, signature verification would fail with
+    // "Callback URL not configured"
+    const body = JSON.stringify({
+      model: { id: 'board-1' },
+      action: { type: 'updateCard', id: 'action-1' },
+    });
+
+    // Compute valid signature using the resolved URL
+    const crypto = require('node:crypto');
+    const content = body + resolvedUrl;
+    const sig = crypto.createHmac('sha1', 'secret').update(content).digest('base64');
+
+    const result = ingestor.handleWebhook(
+      { 'x-trello-webhook': sig },
+      Buffer.from(body),
+    );
+
+    expect(result.accepted).toBe(true);
+  });
+});

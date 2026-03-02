@@ -61,8 +61,9 @@ export class DiscordGatewayIngestor extends BaseIngestor {
     secrets: Record<string, string>,
     private readonly wsConfig: WebSocketIngestorConfig,
     bufferSize?: number,
+    instanceId?: string,
   ) {
-    super(connectionAlias, 'websocket', secrets, bufferSize);
+    super(connectionAlias, 'websocket', secrets, bufferSize, instanceId);
     this.gatewayUrl = wsConfig.gatewayUrl;
     this.intents = wsConfig.intents ?? DEFAULT_INTENTS;
     this.eventFilter = wsConfig.eventFilter ?? [];
@@ -77,7 +78,7 @@ export class DiscordGatewayIngestor extends BaseIngestor {
     return Promise.resolve();
   }
 
-  stop(): Promise<void> {
+  stop(_permanent?: boolean): Promise<void> {
     this.state = 'stopped';
     this.clearAllTimers();
     if (this.ws) {
@@ -389,10 +390,10 @@ export class DiscordGatewayIngestor extends BaseIngestor {
 
 // ── Self-registration ────────────────────────────────────────────────────
 
-registerIngestorFactory('websocket:discord', (connectionAlias, config, secrets, bufferSize) => {
+registerIngestorFactory('websocket:discord', (connectionAlias, config, secrets, bufferSize, instanceId) => {
   if (!config.websocket) {
     log.error(`Missing websocket config for ${connectionAlias}`);
     return null;
   }
-  return new DiscordGatewayIngestor(connectionAlias, secrets, config.websocket, bufferSize);
+  return new DiscordGatewayIngestor(connectionAlias, secrets, config.websocket, bufferSize, instanceId);
 });

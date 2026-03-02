@@ -27,41 +27,48 @@ import { createLogger } from '../../../shared/logger.js';
 
 const log = createLogger('webhook');
 
-// ── Placeholder resolution ──────────────────────────────────────────────
-
-/**
- * Resolve ${VAR} placeholders in a string using a secrets map.
- * Returns the original string if no placeholders are found.
- */
-function resolvePlaceholder(value: string, secrets: Record<string, string>): string {
-  return value.replace(/\$\{(\w+)\}/g, (match, name: string) => {
-    if (name in secrets) return secrets[name];
-    return match;
-  });
-}
-
 // ── Trello Webhook Ingestor ─────────────────────────────────────────────
 
 export class TrelloWebhookIngestor extends WebhookIngestor {
   /**
-   * The callback URL used when the webhook was registered with Trello.
-   * Needed for signature verification (Trello signs `body + callbackURL`).
-   * Resolved from ${VAR} placeholders in the webhook config.
+   * Board ID filter for multi-instance support.
+   * When set, only webhooks from this specific board are accepted.
+   * Set via `_boardId` on the webhook config (injected by IngestorManager).
    */
-  private readonly callbackUrl: string | undefined;
+  private readonly boardId: string | undefined;
 
   constructor(
     connectionAlias: string,
     secrets: Record<string, string>,
     webhookConfig: WebhookIngestorConfig,
     bufferSize?: number,
+    instanceId?: string,
   ) {
-    super(connectionAlias, secrets, webhookConfig, bufferSize);
+    super(connectionAlias, secrets, webhookConfig, bufferSize, instanceId);
 
-    // Resolve callbackUrl from secrets if it contains ${VAR} placeholders
-    if (webhookConfig.callbackUrl) {
-      this.callbackUrl = resolvePlaceholder(webhookConfig.callbackUrl, secrets);
-    }
+    // Board ID filter for multi-instance discrimination
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- injected by IngestorManager for multi-instance support
+    this.boardId = (webhookConfig as any)._boardId as string | undefined;
+  }
+
+  /**
+   * Return the board ID for lifecycle webhook registration.
+   * Used by the lifecycle manager to match existing webhooks by model ID
+   * and clean up stale registrations.
+   */
+  protected override getModelId(): string | undefined {
+    return this.boardId;
+  }
+
+  /**
+   * Filter webhooks by board ID for multi-instance support.
+   * When boardId is set, only events from that specific board are accepted.
+   * The board ID is found in `body.model.id` of Trello webhook payloads.
+   */
+  protected shouldAcceptPayload(body: unknown): boolean {
+    if (!this.boardId) return true;
+    const payload = body as { model?: { id?: string } };
+    return payload?.model?.id === this.boardId;
   }
 
   /**
@@ -90,7 +97,7 @@ export class TrelloWebhookIngestor extends WebhookIngestor {
       return { valid: false, reason: 'Signature secret not configured' };
     }
 
-    if (!this.callbackUrl) {
+    if (!this.resolvedCallbackUrl) {
       log.error(
         `Callback URL not configured for ${this.connectionAlias}. ` +
           `Trello signature verification requires the callbackUrl.`,
@@ -107,7 +114,7 @@ export class TrelloWebhookIngestor extends WebhookIngestor {
       return { valid: false, reason: 'Missing signature header' };
     }
 
-    if (!verifyTrelloSignature(rawBody, signatureValue, secret, this.callbackUrl)) {
+    if (!verifyTrelloSignature(rawBody, signatureValue, secret, this.resolvedCallbackUrl)) {
       log.warn(`Signature verification failed for ${this.connectionAlias}`);
       return { valid: false, reason: 'Signature verification failed' };
     }
@@ -164,10 +171,19 @@ export class TrelloWebhookIngestor extends WebhookIngestor {
 
 // ── Self-registration ───────────────────────────────────────────────────
 
-registerIngestorFactory('webhook:trello', (connectionAlias, config, secrets, bufferSize) => {
-  if (!config.webhook) {
-    log.error(`Missing webhook config for ${connectionAlias}`);
-    return null;
-  }
-  return new TrelloWebhookIngestor(connectionAlias, secrets, config.webhook, bufferSize);
-});
+registerIngestorFactory(
+  'webhook:trello',
+  (connectionAlias, config, secrets, bufferSize, instanceId) => {
+    if (!config.webhook) {
+      log.error(`Missing webhook config for ${connectionAlias}`);
+      return null;
+    }
+    return new TrelloWebhookIngestor(
+      connectionAlias,
+      secrets,
+      config.webhook,
+      bufferSize,
+      instanceId,
+    );
+  },
+);

@@ -22,5 +22,44 @@
       "deduplicateBy": "uri",
       "eventType": "notification"
     }
+  },
+  "testIngestor": {
+    "description": "Fetches notifications to verify Bluesky access token",
+    "strategy": "poll_once",
+    "request": {
+      "url": "https://bsky.social/xrpc/app.bsky.notification.listNotifications?limit=1",
+      "expectedStatus": [200]
+    }
+  },
+  "listenerConfig": {
+    "name": "Bluesky Poll Listener",
+    "description": "Polls Bluesky notifications at a configurable interval.",
+    "fields": [
+      {
+        "key": "intervalMs",
+        "label": "Poll Interval (ms)",
+        "description": "How often to check for new notifications, in milliseconds.",
+        "type": "number",
+        "default": 60000,
+        "min": 10000,
+        "max": 3600000,
+        "group": "Connection"
+      },
+      {
+        "key": "bufferSize",
+        "label": "Buffer Size",
+        "description": "Maximum number of events to keep in memory.",
+        "type": "number",
+        "default": 200,
+        "min": 10,
+        "max": 1000,
+        "group": "Advanced"
+      }
+    ]
+  },
+  "testConnection": {
+    "url": "https://bsky.social/xrpc/app.bsky.actor.getProfile?actor=did:self",
+    "description": "Fetches the authenticated user's profile",
+    "expectedStatus": [200, 400]
   }
 }
