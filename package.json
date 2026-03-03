@@ -46,6 +46,10 @@
     "./remote/ingestors": {
       "types": "./dist/remote/ingestors/index.d.ts",
       "import": "./dist/remote/ingestors/index.js"
+    },
+    "./remote/tunnel": {
+      "types": "./dist/remote/tunnel.d.ts",
+      "import": "./dist/remote/tunnel.js"
     }
   },
   "scripts": {
