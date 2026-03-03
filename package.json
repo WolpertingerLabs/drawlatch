@@ -55,8 +55,8 @@
   "scripts": {
     "build": "tsc && rm -rf dist/connections && cp -r src/connections dist/connections",
     "prepare": "npm run build",
-    "dev:remote": "tsx src/remote/server.ts",
-    "dev:mcp": "tsx src/mcp/server.ts",
+    "dev:remote": "MCP_CONFIG_DIR=~/.drawlatch-dev tsx src/remote/server.ts",
+    "dev:mcp": "MCP_CONFIG_DIR=~/.drawlatch-dev tsx src/mcp/server.ts",
     "generate-keys": "tsx src/cli/generate-keys.ts",
     "start:remote": "NODE_ENV=production node dist/remote/server.js",
     "start:mcp": "node dist/mcp/server.js",
