@@ -573,7 +573,15 @@ describe('resolveRoutes', () => {
 });
 
 describe('config exports', () => {
+  const originalEnv = process.env;
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
   it('should export expected path getter functions', () => {
+    process.env = { ...originalEnv };
+    delete process.env.MCP_CONFIG_DIR;
     expect(getConfigDir()).toBe(path.join(os.homedir(), '.drawlatch'));
     expect(getConfigPath()).toContain('config.json');
   });

@@ -30,6 +30,10 @@ class MockWebSocket {
     this.handlers.set(event, handler);
   }
 
+  removeEventListener(event: string, _handler: Handler): void {
+    this.handlers.delete(event);
+  }
+
   /** Simulate receiving a message from Slack. */
   simulateMessage(data: SlackEnvelope | Record<string, unknown>): void {
     const handler = this.handlers.get('message') as MessageHandler | undefined;
@@ -217,7 +221,11 @@ describe('SlackSocketModeIngestor', () => {
       const ingestor = createTestIngestor();
       await ingestor.start();
 
-      await ingestor.stop();
+      const stopPromise = ingestor.stop();
+      // stop() waits for the WebSocket 'close' event — simulate it so the promise resolves
+      latestMockWs!.simulateClose(1000, 'Shutting down');
+      await stopPromise;
+
       expect(latestMockWs!.close).toHaveBeenCalledWith(1000, 'Shutting down');
       expect(ingestor.getStatus().state).toBe('stopped');
     });
@@ -561,8 +569,10 @@ describe('SlackSocketModeIngestor', () => {
       const ingestor = createTestIngestor();
       await ingestor.start();
 
-      await ingestor.stop();
+      const stopPromise = ingestor.stop();
+      // stop() waits for the WebSocket 'close' event — simulate it so the promise resolves
       latestMockWs!.simulateClose(1000, 'Shutting down');
+      await stopPromise;
 
       // Should remain stopped, not reconnecting
       expect(ingestor.getStatus().state).toBe('stopped');
