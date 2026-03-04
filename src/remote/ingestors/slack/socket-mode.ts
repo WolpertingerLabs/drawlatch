@@ -68,8 +68,29 @@ export class SlackSocketModeIngestor extends BaseIngestor {
     this.state = 'stopped';
     this.clearReconnectTimer();
     if (this.ws) {
-      this.ws.close(1000, 'Shutting down');
+      const ws = this.ws;
       this.ws = null;
+      // Wait for the WebSocket to fully close before resolving.
+      // This prevents a race where the old connection is still alive when a new
+      // ingestor starts, causing Slack to distribute events to the dying
+      // connection (where nobody processes them).
+      return new Promise<void>((resolve) => {
+        const onClose = () => {
+          ws.removeEventListener('close', onClose);
+          resolve();
+        };
+        if (ws.readyState === WebSocket.CLOSED) {
+          resolve();
+        } else {
+          ws.addEventListener('close', onClose);
+          ws.close(1000, 'Shutting down');
+          // Safety timeout — don't block forever if close event never fires
+          setTimeout(() => {
+            ws.removeEventListener('close', onClose);
+            resolve();
+          }, 5000);
+        }
+      });
     }
     return Promise.resolve();
   }
