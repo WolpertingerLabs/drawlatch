@@ -24,15 +24,19 @@ const log = createLogger('ingestor');
 const MAX_SEEN_KEYS = 2000;
 
 /**
- * Epoch-based event IDs that are monotonically increasing across server reboots.
+ * Epoch-based event IDs that are monotonically increasing across restarts.
  * Format: `bootEpochSeconds * 1_000_000 + counter`.
  *
  * Uses seconds (not milliseconds) so the product stays within Number.MAX_SAFE_INTEGER.
  * This prevents clients with a stale `after_id` cursor from missing events
  * after a reboot — new IDs will always be higher than pre-reboot IDs
- * (assuming <1M events per boot and >1s between boots).
+ * (assuming <1M events per instance and >1s between restarts).
+ *
+ * Uses a monotonically increasing module-level epoch so that in-process restarts
+ * (e.g., LocalProxy.reinitialize()) also produce strictly increasing IDs.
+ * Each new BaseIngestor instance claims the next available epoch.
  */
-const BOOT_EPOCH = Math.floor(Date.now() / 1000);
+let nextEpoch = Math.floor(Date.now() / 1000);
 const ID_MULTIPLIER = 1_000_000;
 
 export abstract class BaseIngestor extends EventEmitter {
@@ -41,6 +45,10 @@ export abstract class BaseIngestor extends EventEmitter {
   protected counter = 0;
   protected lastEventAt: string | null = null;
   protected errorMessage?: string;
+
+  /** Per-instance epoch for event ID generation.
+   *  Each instance claims a unique epoch so IDs never collide across restarts. */
+  private readonly bootEpoch: number;
 
   /** Recently seen idempotency keys for deduplication. */
   private readonly seenKeys = new Set<string>();
@@ -61,6 +69,9 @@ export abstract class BaseIngestor extends EventEmitter {
   ) {
     super();
     this.buffer = new RingBuffer<IngestedEvent>(bufferSize);
+    // Claim a unique epoch for this instance — ensures event IDs are strictly
+    // increasing even when ingestors are restarted in-process.
+    this.bootEpoch = nextEpoch++;
   }
 
   /** Start the ingestor (connect WebSocket, begin polling, etc.). */
@@ -90,7 +101,7 @@ export abstract class BaseIngestor extends EventEmitter {
     }
 
     const now = new Date();
-    const id = BOOT_EPOCH * ID_MULTIPLIER + this.counter++;
+    const id = this.bootEpoch * ID_MULTIPLIER + this.counter++;
     const key = idempotencyKey ?? `${this.connectionAlias}:${crypto.randomUUID()}`;
 
     const event: IngestedEvent = {
