@@ -82,8 +82,30 @@ export class DiscordGatewayIngestor extends BaseIngestor {
     this.state = 'stopped';
     this.clearAllTimers();
     if (this.ws) {
-      this.ws.close(1000, 'Shutting down');
+      const ws = this.ws;
       this.ws = null;
+      // Wait for the WebSocket to fully close before resolving.
+      // This prevents a race where the old connection is still alive when a new
+      // ingestor starts. For Discord, this avoids the old gateway session
+      // lingering while a new IDENTIFY is sent (which Discord may reject
+      // if it sees two sessions for the same bot token).
+      return new Promise<void>((resolve) => {
+        const onClose = () => {
+          ws.removeEventListener('close', onClose);
+          resolve();
+        };
+        if (ws.readyState === WebSocket.CLOSED) {
+          resolve();
+        } else {
+          ws.addEventListener('close', onClose);
+          ws.close(1000, 'Shutting down');
+          // Safety timeout — don't block forever if close event never fires
+          setTimeout(() => {
+            ws.removeEventListener('close', onClose);
+            resolve();
+          }, 5000);
+        }
+      });
     }
     return Promise.resolve();
   }
