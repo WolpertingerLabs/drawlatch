@@ -14,6 +14,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 import { loadProxyConfig } from '../shared/config.js';
 import { loadKeyBundle, loadPublicKeys, EncryptedChannel } from '../shared/crypto/index.js';
@@ -167,15 +169,70 @@ server.tool(
       .optional()
       .describe('Request headers, may contain ${VAR} placeholders'),
     body: z.any().optional().describe('Request body (object for JSON, string for raw)'),
+    files: z
+      .array(
+        z.object({
+          field: z
+            .string()
+            .describe('Form field name (e.g., "files[0]", "file", "attachment")'),
+          path: z.string().describe('Absolute path to the file on the local filesystem'),
+          filename: z.string().describe('Filename to use in the upload'),
+          contentType: z
+            .string()
+            .describe('MIME type (e.g., "image/png", "application/pdf")'),
+        }),
+      )
+      .optional()
+      .describe(
+        'File attachments for multipart/form-data uploads. When present, the request is sent as multipart with the JSON body as "payload_json". Use bodyFieldName to change the JSON part name.',
+      ),
+    bodyFieldName: z
+      .string()
+      .optional()
+      .describe(
+        'Form field name for the JSON body part in multipart requests (default: "payload_json"). Only used when files are present.',
+      ),
   },
-  async ({ method, url, headers, body }) => {
+  async ({ method, url, headers, body, files, bodyFieldName }) => {
     try {
-      const result = await sendEncryptedRequest('http_request', {
+      const toolInput: Record<string, unknown> = {
         method,
         url,
         headers: headers ?? {},
         body,
-      });
+      };
+
+      // Read and base64-encode files from the local filesystem before sending
+      // through the encrypted channel (remote server can't access local files)
+      if (files?.length) {
+        const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB per file
+        const encodedFiles = await Promise.all(
+          files.map(async ({ field, path: filePath, filename, contentType }) => {
+            if (!path.isAbsolute(filePath)) {
+              throw new Error(`File path must be absolute: ${filePath}`);
+            }
+            let stat;
+            try {
+              stat = await fs.stat(filePath);
+            } catch {
+              throw new Error(`File not found: ${filePath}`);
+            }
+            if (stat.size > MAX_FILE_SIZE) {
+              throw new Error(
+                `File too large (${(stat.size / 1024 / 1024).toFixed(1)} MB): ${filePath} — max ${MAX_FILE_SIZE / 1024 / 1024} MB`,
+              );
+            }
+            const buffer = await fs.readFile(filePath);
+            return { field, data: buffer.toString('base64'), filename, contentType };
+          }),
+        );
+        toolInput.files = encodedFiles;
+        if (bodyFieldName) {
+          toolInput.bodyFieldName = bodyFieldName;
+        }
+      }
+
+      const result = await sendEncryptedRequest('http_request', toolInput);
 
       return {
         content: [
