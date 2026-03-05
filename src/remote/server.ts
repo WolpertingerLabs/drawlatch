@@ -227,11 +227,27 @@ setInterval(() => {
 
 // ── Proxy request execution ────────────────────────────────────────────────
 
+/** A file attachment transmitted as base64 data through the encrypted channel. */
+export interface FileAttachment {
+  /** Form field name (e.g., "files[0]", "file", "attachment") */
+  field: string;
+  /** Base64-encoded file content */
+  data: string;
+  /** Filename for the upload */
+  filename: string;
+  /** MIME type (e.g., "image/png", "application/pdf") */
+  contentType: string;
+}
+
 export interface ProxyRequestInput {
   method: string;
   url: string;
   headers?: Record<string, string>;
   body?: unknown;
+  /** File attachments — triggers multipart/form-data encoding */
+  files?: FileAttachment[];
+  /** Form field name for the JSON body part (default: "payload_json") */
+  bodyFieldName?: string;
 }
 
 export interface ProxyRequestResult {
@@ -255,7 +271,7 @@ export async function executeProxyRequest(
   input: ProxyRequestInput,
   routes: ResolvedRoute[],
 ): Promise<ProxyRequestResult> {
-  const { method, url, headers = {}, body } = input;
+  const { method, url, headers = {}, body, files, bodyFieldName } = input;
 
   // Step 1: Find matching route — try raw URL first
   let matched: ResolvedRoute | null = matchRoute(url, routes);
@@ -307,16 +323,47 @@ export async function executeProxyRequest(
   // Only when the route explicitly opts in via resolveSecretsInBody — prevents
   // exfiltration of secrets by writing placeholder strings into API resources
   // and reading them back.
-  let resolvedBody: string | undefined;
-  if (typeof body === 'string') {
-    resolvedBody = matched.resolveSecretsInBody ? resolvePlaceholders(body, matched.secrets) : body;
-  } else if (body !== null && body !== undefined) {
-    const serialized = JSON.stringify(body);
-    resolvedBody = matched.resolveSecretsInBody
-      ? resolvePlaceholders(serialized, matched.secrets)
-      : serialized;
-    if (!resolvedHeaders['content-type'] && !resolvedHeaders['Content-Type']) {
-      resolvedHeaders['Content-Type'] = 'application/json';
+  let fetchBody: string | FormData | undefined;
+
+  if (files?.length) {
+    // ── Multipart mode: build FormData with file attachments ──
+    const form = new FormData();
+
+    // Add the JSON body as a named part (default: "payload_json" for Discord-style APIs)
+    if (body !== null && body !== undefined) {
+      const serialized = typeof body === 'string' ? body : JSON.stringify(body);
+      const resolvedPayload = matched.resolveSecretsInBody
+        ? resolvePlaceholders(serialized, matched.secrets)
+        : serialized;
+      form.append(bodyFieldName ?? 'payload_json', resolvedPayload);
+    }
+
+    // Attach each file from base64 data
+    for (const file of files) {
+      const buffer = Buffer.from(file.data, 'base64');
+      const blob = new Blob([buffer], { type: file.contentType });
+      form.append(file.field, blob, file.filename);
+    }
+
+    fetchBody = form;
+    // Let fetch auto-set Content-Type with the correct multipart boundary —
+    // remove any Content-Type that may have been set by route headers
+    delete resolvedHeaders['Content-Type'];
+    delete resolvedHeaders['content-type'];
+  } else {
+    // ── Standard JSON/string body ──
+    if (typeof body === 'string') {
+      fetchBody = matched.resolveSecretsInBody
+        ? resolvePlaceholders(body, matched.secrets)
+        : body;
+    } else if (body !== null && body !== undefined) {
+      const serialized = JSON.stringify(body);
+      fetchBody = matched.resolveSecretsInBody
+        ? resolvePlaceholders(serialized, matched.secrets)
+        : serialized;
+      if (!resolvedHeaders['content-type'] && !resolvedHeaders['Content-Type']) {
+        resolvedHeaders['Content-Type'] = 'application/json';
+      }
     }
   }
 
@@ -329,7 +376,7 @@ export async function executeProxyRequest(
   const resp = await fetch(resolvedUrl, {
     method,
     headers: resolvedHeaders,
-    body: resolvedBody,
+    body: fetchBody,
   });
 
   const contentType = resp.headers.get('content-type') ?? '';
@@ -1088,8 +1135,8 @@ export function createApp(options: CreateAppOptions = {}) {
   // Parse JSON for handshake endpoints
   app.use('/handshake', express.json());
 
-  // Raw buffer for encrypted request endpoint
-  app.use('/request', express.raw({ type: 'application/octet-stream', limit: '10mb' }));
+  // Raw buffer for encrypted request endpoint (50 MB to accommodate base64-encoded file uploads)
+  app.use('/request', express.raw({ type: 'application/octet-stream', limit: '50mb' }));
 
   // Raw buffer for webhook endpoints (needed for signature verification)
   app.use('/webhooks', express.raw({ type: 'application/json', limit: '1mb' }));
