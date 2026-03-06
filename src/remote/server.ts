@@ -25,6 +25,7 @@ import {
   resolveSecrets,
   resolvePlaceholders,
   getEnvFilePath,
+  getRemoteConfigPath,
   type RemoteServerConfig,
   type CallerConfig,
   type IngestorOverrides,
@@ -128,6 +129,14 @@ function loadCallerPeers(callers: Record<string, CallerConfig>): AuthorizedPeer[
       console.error(`[remote] Failed to load peer ${alias}:`, err);
     }
   }
+
+  if (peers.length === 0 && Object.keys(callers).length > 0) {
+    console.error(
+      '[remote] WARNING: No authorized peers loaded. No clients will be able to connect.',
+    );
+    console.error('[remote] Check peer key directories in remote.config.json.');
+  }
+
   return peers;
 }
 
@@ -1336,6 +1345,34 @@ export function createApp(options: CreateAppOptions = {}) {
   console.log(`[remote] ${authorizedPeers.length} authorized peer(s)`);
   console.log(`[remote] Rate limit: ${rateLimitPerMinute} req/min per session`);
 
+  // Boot-time connection health table: check required secrets for each caller's connections
+  const templates = listConnectionTemplates();
+  const templateMap = new Map(templates.map((t) => [t.alias, t]));
+
+  for (const [callerAlias, caller] of Object.entries(config.callers)) {
+    const secretIssues: string[] = [];
+
+    for (const connName of caller.connections) {
+      const tpl = templateMap.get(connName);
+      if (!tpl) continue; // custom connector, skip
+
+      for (const secret of tpl.requiredSecrets) {
+        const isSet = isSecretSetForCaller(secret, callerAlias, caller.env);
+        if (!isSet) {
+          secretIssues.push(`    ${connName.padEnd(16)} ${secret.padEnd(28)} [NOT SET]`);
+        }
+      }
+    }
+
+    if (secretIssues.length > 0) {
+      console.log(`[remote] Connection secrets for "${callerAlias}":`);
+      for (const issue of secretIssues) {
+        console.log(issue);
+      }
+      console.log(`[remote] Set missing secrets in ${getEnvFilePath()}`);
+    }
+  }
+
   // ── Handshake init ─────────────────────────────────────────────────────
 
   app.post('/handshake/init', (req, res) => {
@@ -1592,7 +1629,27 @@ export function createApp(options: CreateAppOptions = {}) {
 // ── Start ──────────────────────────────────────────────────────────────────
 
 export function main(): void {
+  // Pre-flight validation: check for common setup issues before starting
+  const remoteConfigPath = getRemoteConfigPath();
+  if (!fs.existsSync(remoteConfigPath)) {
+    console.error(`[remote] Error: No remote config found at ${remoteConfigPath}`);
+    console.error('[remote] Run: drawlatch init');
+    process.exit(1);
+  }
+
   const config = loadRemoteConfig();
+
+  if (!fs.existsSync(config.localKeysDir)) {
+    console.error(`[remote] Error: Remote server keys not found at ${config.localKeysDir}`);
+    console.error('[remote] Run: drawlatch generate-keys remote');
+    process.exit(1);
+  }
+
+  if (Object.keys(config.callers).length === 0) {
+    console.error('[remote] Warning: No callers configured. No clients will be able to connect.');
+    console.error('[remote] Add callers to remote.config.json or run: drawlatch init');
+  }
+
   const port = process.env.DRAWLATCH_PORT ? parseInt(process.env.DRAWLATCH_PORT, 10) : config.port;
   const host = process.env.DRAWLATCH_HOST ?? config.host;
   const useTunnel = process.env.DRAWLATCH_TUNNEL === '1';

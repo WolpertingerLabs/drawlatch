@@ -70,31 +70,51 @@ Or load it directly during development:
 claude --plugin-dir ./path/to/drawlatch
 ```
 
-Before using, set the `MCP_CONFIG_DIR` environment variable so the proxy can find its config and keys:
-
-```bash
-export MCP_CONFIG_DIR=~/.drawlatch
-```
-
-The plugin's MCP server starts automatically when enabled. The `secure_request` and `list_routes` tools become available immediately.
+The plugin's MCP server starts automatically when enabled. The `secure_request` and `list_routes` tools become available immediately. The proxy uses `~/.drawlatch/` by default — see [Advanced Configuration](#advanced-configuration) to use a custom path.
 
 ### Option 2: Auto-Discovery (opening this repo directly)
 
 This repo includes a `.mcp.json` file at the root, so Claude Code **automatically discovers** the MCP proxy server when you open the project. On first launch, Claude Code will prompt you to approve the server — accept, and the `secure_request` and `list_routes` tools become available immediately.
 
-Before approving, set the `MCP_CONFIG_DIR` environment variable:
-
-```bash
-export MCP_CONFIG_DIR=~/.drawlatch
-```
-
-The `.mcp.json` passes this through to the MCP server process. You also need a working setup (keys generated, public keys exchanged, configs in place, remote server running). See [Setup](#setup) below for the full walkthrough.
+You need a working setup first (run `drawlatch init` + `drawlatch start`). See [Setup](#setup) below. The proxy uses `~/.drawlatch/` by default — see [Advanced Configuration](#advanced-configuration) to use a custom path.
 
 > **Note:** Auto-discovery uses the `dist/mcp/server.js` entrypoint. The `dist/` directory is built automatically when you run `npm install` (via the `prepare` script). If you need to rebuild manually, run `npm run build`.
 
 ## Setup
 
-### Prerequisites
+### Quick Start (Recommended)
+
+Get from zero to working in three commands:
+
+```bash
+# Install globally
+npm install -g @wolpertingerlabs/drawlatch
+
+# Set up keys, config, and .env in one step
+drawlatch init --connections github
+
+# Set your API token (edit the file or run this)
+echo "GITHUB_TOKEN=ghp_your_token_here" >> ~/.drawlatch/.env
+
+# Start the remote server
+drawlatch start
+```
+
+Verify your setup:
+
+```bash
+drawlatch doctor    # Validate full setup
+drawlatch status    # Check server is running
+drawlatch config    # View configuration and secret status
+```
+
+That's it. The `init` command generates keys, creates configs, exchanges public keys, and scaffolds the `.env` file. All steps are idempotent — safe to re-run.
+
+For custom setups (different aliases, multiple callers, different machines), see the [Manual Setup](#manual-setup) section below.
+
+### Manual Setup
+
+#### Prerequisites
 
 ```bash
 git clone <repo-url>
@@ -103,9 +123,9 @@ npm install
 npm run build
 ```
 
-### Directory Structure
+#### Directory Structure
 
-All config and key files live inside `~/.drawlatch/` in the user's home directory by default. You can override this by setting the `MCP_CONFIG_DIR` environment variable.
+All config and key files live inside `~/.drawlatch/` in the user's home directory by default. Override with `MCP_CONFIG_DIR` for custom deployments (see [Advanced Configuration](#advanced-configuration)).
 
 ```
 ~/.drawlatch/
@@ -135,7 +155,7 @@ All config and key files live inside `~/.drawlatch/` in the user's home director
             └── exchange.pub.pem
 ```
 
-### Step 1: Generate Keys
+#### Step 1: Generate Keys
 
 Generate keypairs for both the local proxy and the remote server:
 
@@ -166,7 +186,7 @@ Or inspect the fingerprint of an existing keypair:
 npm run generate-keys -- show ~/.drawlatch/keys/local/my-laptop
 ```
 
-### Step 2: Exchange Public Keys
+#### Step 2: Exchange Public Keys
 
 The local proxy and remote server need each other's public keys for mutual authentication. Copy the **public** key files (`.pub.pem` only — never share private keys):
 
@@ -196,7 +216,7 @@ cp ~/.drawlatch/keys/remote/exchange.pub.pem \
 
 > **Tip:** If the proxy and remote server are on different machines, securely transfer only the `*.pub.pem` files (e.g., via `scp`). Each caller gets its own subdirectory under the peers directory — the directory name becomes the caller's alias used in the remote config and audit logs.
 
-### Step 3: Create the Local Proxy Config
+#### Step 3: Create the Local Proxy Config
 
 Copy the example and edit the paths to match your setup:
 
@@ -232,7 +252,7 @@ Edit `~/.drawlatch/proxy.config.json`:
 3. `localKeysDir` in `proxy.config.json` (explicit full path for custom deployments)
 4. Default: `keys/local/default`
 
-### Step 4: Create the Remote Server Config
+#### Step 4: Create the Remote Server Config
 
 Copy the example and edit it to match your setup:
 
@@ -393,7 +413,7 @@ Header values can reference secrets using `${VAR}` placeholders:
 
 The placeholder `${API_TOKEN}` is resolved against the route's resolved `secrets` map. This means the actual secret value is never exposed to the local proxy or Claude Code — it only exists on the remote server.
 
-### Connections (Pre-built Route Templates)
+#### Connections (Pre-built Route Templates)
 
 Instead of manually configuring connectors for popular APIs, you can use **connections** — pre-built route templates that ship with the package (`github`, `stripe`, `openai`, etc.). Reference them by name in a caller's `connections` list:
 
@@ -412,27 +432,46 @@ Set the required environment variables (e.g., `GITHUB_TOKEN`, `STRIPE_SECRET_KEY
 
 See **[CONNECTIONS.md](CONNECTIONS.md)** for the full list of available connections, required environment variables, and usage examples.
 
-### Step 5: Start the Servers
+#### Step 5: Create an Environment File
+
+Create a `.env` file in your config directory with your API secrets:
+
+```bash
+cat > ~/.drawlatch/.env << 'EOF'
+# Uncomment and set tokens for your enabled connections
+# GITHUB_TOKEN=ghp_your_token_here
+# DISCORD_BOT_TOKEN=your_bot_token_here
+# STRIPE_SECRET_KEY=sk_your_key_here
+EOF
+```
+
+The remote server reads this file at startup. Use `drawlatch config` to check which secrets are set.
+
+#### Step 6: Start the Servers
 
 **Start the remote server:**
 
 ```bash
-# Development (with hot reload via tsx)
+# Using the drawlatch CLI (recommended — runs as a background daemon)
+drawlatch start
+
+# Or for development (with hot reload via tsx)
 npm run dev:remote
 
-# Production (requires `npm run build` first)
+# Or production without the daemon (requires `npm run build` first)
 npm run start:remote
+```
+
+Verify it's running:
+
+```bash
+drawlatch status    # Check PID, uptime, health
+drawlatch doctor    # Validate full setup
 ```
 
 **Connect the local MCP proxy to Claude Code:**
 
-The repo includes a `.mcp.json` at the root, so Claude Code auto-discovers the proxy when you open the project directory. Just approve the server when prompted — no manual registration needed.
-
-The `.mcp.json` requires the `MCP_CONFIG_DIR` environment variable to be set so the proxy can locate its config and keys. Set it to the absolute path of your `~/.drawlatch/` directory:
-
-```bash
-export MCP_CONFIG_DIR=~/.drawlatch
-```
+The repo includes a `.mcp.json` at the root, so Claude Code auto-discovers the proxy when you open the project directory. Just approve the server when prompted — no manual registration needed. The proxy uses `~/.drawlatch/` by default.
 
 **Alternative: manual registration**
 
@@ -441,13 +480,12 @@ If you prefer not to use auto-discovery, register the MCP server directly:
 ```bash
 claude mcp add secure-proxy \
   --transport stdio --scope local \
-  -e MCP_CONFIG_DIR=~/.drawlatch \
   -- node /absolute/path/to/drawlatch/dist/mcp/server.js
 ```
 
 After connecting (either via auto-discovery or manual registration), the proxy will automatically perform the encrypted handshake with the remote server on first use.
 
-### Step 6: Webhook Endpoints (Optional)
+#### Step 7: Webhook Endpoints (Optional)
 
 If any of your connections use webhook ingestors (e.g., GitHub, Stripe, Trello), the remote server automatically exposes `POST /webhooks/:path` routes on the same port. External services send webhook POSTs to these endpoints, and the server verifies signatures, buffers events in per-caller ring buffers, and makes them available via `poll_events`.
 
@@ -459,7 +497,19 @@ If any of your connections use webhook ingestors (e.g., GitHub, Stripe, Trello),
 
 The webhook path is configured in each connection template's `ingestor.webhook.path` field. See **[INGESTORS.md](INGESTORS.md)** for full details on webhook, WebSocket, and poll ingestors.
 
-### Multiple Agents (Multi-Identity)
+### Advanced Configuration
+
+#### `MCP_CONFIG_DIR`
+
+By default, all config and key files live in `~/.drawlatch/`. You can override this by setting the `MCP_CONFIG_DIR` environment variable before launching the proxy or server:
+
+```bash
+export MCP_CONFIG_DIR=/custom/path/to/config
+```
+
+This is useful for non-standard deployments, CI environments, or running multiple independent setups on the same machine.
+
+#### Multiple Agents (Multi-Identity)
 
 When multiple agents share the same machine, each needs its own key identity. Generate a keypair per agent:
 
