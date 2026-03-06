@@ -17,8 +17,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { loadProxyConfig } from '../shared/config.js';
-import { loadKeyBundle, loadPublicKeys, EncryptedChannel } from '../shared/crypto/index.js';
+import { loadProxyConfig, getProxyConfigPath } from '../shared/config.js';
+import { loadKeyBundle, loadPublicKeys, EncryptedChannel, extractPublicKeys, fingerprint } from '../shared/crypto/index.js';
+import { existsSync } from 'node:fs';
 import {
   HandshakeInitiator,
   type ProxyRequest,
@@ -33,6 +34,13 @@ let remoteUrl: string;
 // ── Handshake ──────────────────────────────────────────────────────────────
 
 async function establishChannel(): Promise<EncryptedChannel> {
+  // Pre-flight validation
+  if (!existsSync(getProxyConfigPath())) {
+    throw new Error(
+      `No proxy config found at ${getProxyConfigPath()}. Run: drawlatch init`,
+    );
+  }
+
   const config = loadProxyConfig();
   remoteUrl = config.remoteUrl;
 
@@ -45,22 +53,74 @@ async function establishChannel(): Promise<EncryptedChannel> {
   }
   console.error(`[mcp-proxy] Local keys dir: ${config.localKeysDir}`);
 
-  const ownKeys = loadKeyBundle(config.localKeysDir);
-  const remotePub = loadPublicKeys(config.remotePublicKeysDir);
+  // Validate key paths before attempting to load
+  if (!existsSync(config.localKeysDir)) {
+    const alias = envAlias ?? config.localKeyAlias ?? 'default';
+    throw new Error(
+      `Local proxy keys not found at ${config.localKeysDir}. Run: drawlatch generate-keys local ${alias}`,
+    );
+  }
+  if (!existsSync(config.remotePublicKeysDir)) {
+    throw new Error(
+      `Remote server public keys not found at ${config.remotePublicKeysDir}. Run: drawlatch init (or copy keys manually)`,
+    );
+  }
+
+  let ownKeys, remotePub;
+  try {
+    ownKeys = loadKeyBundle(config.localKeysDir);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to load local proxy keys from ${config.localKeysDir}: ${msg}. Run: drawlatch generate-keys local`,
+    );
+  }
+  try {
+    remotePub = loadPublicKeys(config.remotePublicKeysDir);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to load remote server public keys from ${config.remotePublicKeysDir}: ${msg}. Run: drawlatch init`,
+    );
+  }
 
   const initiator = new HandshakeInitiator(ownKeys, remotePub);
 
   // Step 1: Send HandshakeInit
   const initMsg = initiator.createInit();
-  const initResp = await fetch(`${remoteUrl}/handshake/init`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(initMsg),
-    signal: AbortSignal.timeout(config.connectTimeout),
-  });
+  let initResp: Response;
+  try {
+    initResp = await fetch(`${remoteUrl}/handshake/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(initMsg),
+      signal: AbortSignal.timeout(config.connectTimeout),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('ECONNREFUSED')) {
+      throw new Error(
+        `Remote server is not running at ${remoteUrl}. Start it with: drawlatch start`,
+      );
+    }
+    if (err instanceof DOMException && err.name === 'AbortError' || msg.includes('timed out')) {
+      throw new Error(
+        `Remote server at ${remoteUrl} is not responding (timed out after ${config.connectTimeout}ms)`,
+      );
+    }
+    throw new Error(`Failed to connect to remote server at ${remoteUrl}: ${msg}`);
+  }
 
   if (!initResp.ok) {
     const errText = await initResp.text();
+    const localFp = fingerprint(extractPublicKeys(ownKeys));
+    if (initResp.status === 401 || initResp.status === 403) {
+      console.error(`[mcp-proxy] Handshake rejected by server. Your key fingerprint: ${localFp}`);
+      console.error('[mcp-proxy] Ensure this fingerprint matches an authorized peer on the remote server.');
+      throw new Error(
+        `Handshake rejected (${initResp.status}). Your fingerprint: ${localFp}. Check that public keys are correctly exchanged. See: drawlatch init`,
+      );
+    }
     throw new Error(`Handshake init failed: ${initResp.status} ${errText}`);
   }
 
@@ -115,22 +175,45 @@ async function sendEncryptedRequest(
   // Encrypt the entire request
   const encrypted = ch.encryptJSON(request);
 
-  const resp = await fetch(`${remoteUrl}/request`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      'X-Session-Id': ch.sessionId,
-    },
-    body: new Uint8Array(encrypted),
-    signal: AbortSignal.timeout(config.requestTimeout),
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(`${remoteUrl}/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Session-Id': ch.sessionId,
+      },
+      body: new Uint8Array(encrypted),
+      signal: AbortSignal.timeout(config.requestTimeout),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('ECONNREFUSED')) {
+      channel = null;
+      throw new Error(
+        `Remote server is not running at ${remoteUrl}. Start it with: drawlatch start`,
+      );
+    }
+    if (err instanceof DOMException && err.name === 'AbortError' || msg.includes('timed out')) {
+      throw new Error(
+        `Remote server at ${remoteUrl} is not responding (timed out after ${config.requestTimeout}ms)`,
+      );
+    }
+    channel = null;
+    throw new Error(`Failed to reach remote server at ${remoteUrl}: ${msg}`);
+  }
 
   if (!resp.ok) {
     // If session expired, re-establish
     if (resp.status === 401) {
       console.error('[mcp-proxy] Session expired, re-establishing...');
       channel = null;
-      return sendEncryptedRequest(toolName, toolInput);
+      try {
+        return await sendEncryptedRequest(toolName, toolInput);
+      } catch (reEstErr) {
+        const msg = reEstErr instanceof Error ? reEstErr.message : String(reEstErr);
+        throw new Error(`Session re-establishment failed: ${msg}`);
+      }
     }
     throw new Error(`Request failed: ${resp.status} ${await resp.text()}`);
   }
@@ -813,6 +896,26 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('[mcp-proxy] MCP Secure Proxy server started (stdio transport)');
+
+  // Non-blocking health check: advise user if the remote server is not reachable
+  try {
+    const config = loadProxyConfig();
+    const resp = await fetch(`${config.remoteUrl}/health`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (resp.ok) {
+      console.error(`[mcp-proxy] Remote server reachable at ${config.remoteUrl}`);
+    } else {
+      console.error(
+        `[mcp-proxy] WARNING: Remote server at ${config.remoteUrl} returned ${resp.status}. Check server health.`,
+      );
+    }
+  } catch {
+    const config = loadProxyConfig();
+    console.error(
+      `[mcp-proxy] WARNING: Remote server at ${config.remoteUrl} is not reachable. Start it with: drawlatch start`,
+    );
+  }
 }
 
 main().catch((err: unknown) => {
