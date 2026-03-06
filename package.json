@@ -39,6 +39,10 @@
       "types": "./dist/shared/connections.d.ts",
       "import": "./dist/shared/connections.js"
     },
+    "./shared/env-utils": {
+      "types": "./dist/shared/env-utils.d.ts",
+      "import": "./dist/shared/env-utils.js"
+    },
     "./remote/server": {
       "types": "./dist/remote/server.d.ts",
       "import": "./dist/remote/server.js"
