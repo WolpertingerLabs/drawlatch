@@ -44,6 +44,8 @@ import {
   type ProxyResponse,
 } from '../shared/protocol/index.js';
 import { IngestorManager } from './ingestors/index.js';
+import { listConnectionTemplates } from '../shared/connections.js';
+import { isSecretSetForCaller, setCallerSecrets } from '../shared/env-utils.js';
 
 // ── Environment loading ─────────────────────────────────────────────────────
 
@@ -1112,6 +1114,179 @@ const toolHandlers: Record<string, ToolHandler> = {
     saveRemoteConfig(config);
 
     return { success: true, connection, instance_id };
+  },
+
+  // ── Config management tools ─────────────────────────────────────────────
+
+  /**
+   * List all available connection templates with caller-specific status.
+   * Returns template metadata, which ones the caller has enabled,
+   * and which secrets are configured.
+   */
+  list_connection_templates: async (
+    _input: Record<string, unknown>,
+    _routes: ResolvedRoute[],
+    context: ToolContext,
+  ) => {
+    const config = loadRemoteConfig();
+    const caller = config.callers[context.callerAlias];
+    const enabledSet = new Set(caller?.connections ?? []);
+
+    const templates = listConnectionTemplates();
+
+    return templates.map((t) => {
+      const callerEnv = caller?.env;
+      const requiredSecretsSet: Record<string, boolean> = {};
+      for (const s of t.requiredSecrets) {
+        requiredSecretsSet[s] = isSecretSetForCaller(s, context.callerAlias, callerEnv);
+      }
+      const optionalSecretsSet: Record<string, boolean> = {};
+      for (const s of t.optionalSecrets) {
+        optionalSecretsSet[s] = isSecretSetForCaller(s, context.callerAlias, callerEnv);
+      }
+
+      return {
+        alias: t.alias,
+        name: t.name,
+        ...(t.description !== undefined && { description: t.description }),
+        ...(t.docsUrl !== undefined && { docsUrl: t.docsUrl }),
+        ...(t.openApiUrl !== undefined && { openApiUrl: t.openApiUrl }),
+        stability: t.stability,
+        category: t.category,
+        requiredSecrets: t.requiredSecrets,
+        optionalSecrets: t.optionalSecrets,
+        hasIngestor: t.hasIngestor,
+        ...(t.ingestorType !== undefined && { ingestorType: t.ingestorType }),
+        allowedEndpoints: t.allowedEndpoints,
+        enabled: enabledSet.has(t.alias),
+        requiredSecretsSet,
+        optionalSecretsSet,
+      };
+    });
+  },
+
+  /**
+   * Enable or disable a connection for the authenticated caller.
+   */
+  set_connection_enabled: async (
+    input: Record<string, unknown>,
+    _routes: ResolvedRoute[],
+    context: ToolContext,
+  ) => {
+    const connection = input.connection as string;
+    const enabled = input.enabled as boolean;
+
+    if (!connection || typeof enabled !== 'boolean') {
+      throw new Error('Required: connection (string) and enabled (boolean)');
+    }
+
+    const config = loadRemoteConfig();
+    const caller = config.callers[context.callerAlias];
+    if (!caller) {
+      throw new Error(`Unknown caller: ${context.callerAlias}`);
+    }
+
+    // Verify the connection template exists (built-in or custom connector)
+    const connectorAliases = new Set((config.connectors ?? []).map((c) => c.alias).filter(Boolean));
+    const templateAliases = new Set(listConnectionTemplates().map((t) => t.alias));
+    if (!connectorAliases.has(connection) && !templateAliases.has(connection)) {
+      throw new Error(`Unknown connection: ${connection}`);
+    }
+
+    const connectionSet = new Set(caller.connections);
+
+    if (enabled) {
+      connectionSet.add(connection);
+    } else {
+      connectionSet.delete(connection);
+
+      // Stop any running ingestors for this connection
+      const ingestorManager = context.ingestorManager;
+      try {
+        await ingestorManager.stopOne(context.callerAlias, connection);
+      } catch {
+        // Ingestor may not be running — that's fine
+      }
+    }
+
+    caller.connections = [...connectionSet];
+    saveRemoteConfig(config);
+
+    // Re-resolve routes for this caller and update the session
+    // (new routes will take effect on next request naturally via config reload)
+
+    return { success: true, connection, enabled };
+  },
+
+  /**
+   * Set or delete secrets for the authenticated caller.
+   * Uses prefixed env vars to prevent cross-caller collisions.
+   */
+  set_secrets: async (
+    input: Record<string, unknown>,
+    _routes: ResolvedRoute[],
+    context: ToolContext,
+  ) => {
+    const secrets = input.secrets as Record<string, string> | undefined;
+
+    if (!secrets || typeof secrets !== 'object') {
+      throw new Error('Required: secrets (Record<string, string>)');
+    }
+
+    const config = loadRemoteConfig();
+
+    const { config: updatedConfig, status } = setCallerSecrets(
+      secrets,
+      context.callerAlias,
+      config,
+    );
+
+    saveRemoteConfig(updatedConfig);
+
+    return { success: true, secretsSet: status };
+  },
+
+  /**
+   * Check which secrets are set for the authenticated caller (never returns values).
+   */
+  get_secret_status: async (
+    input: Record<string, unknown>,
+    _routes: ResolvedRoute[],
+    context: ToolContext,
+  ) => {
+    const connection = input.connection as string;
+
+    if (!connection) {
+      throw new Error('Required: connection (string)');
+    }
+
+    // Find the connection template
+    const templates = listConnectionTemplates();
+    const template = templates.find((t) => t.alias === connection);
+    if (!template) {
+      throw new Error(`Unknown connection: ${connection}`);
+    }
+
+    const config = loadRemoteConfig();
+    const caller = config.callers[context.callerAlias];
+    const callerEnv = caller?.env;
+
+    const requiredSecretsSet: Record<string, boolean> = {};
+    for (const s of template.requiredSecrets) {
+      requiredSecretsSet[s] = isSecretSetForCaller(s, context.callerAlias, callerEnv);
+    }
+
+    const optionalSecretsSet: Record<string, boolean> = {};
+    for (const s of template.optionalSecrets) {
+      optionalSecretsSet[s] = isSecretSetForCaller(s, context.callerAlias, callerEnv);
+    }
+
+    return {
+      success: true,
+      connection,
+      requiredSecretsSet,
+      optionalSecretsSet,
+    };
   },
 };
 

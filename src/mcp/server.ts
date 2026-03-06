@@ -680,6 +680,133 @@ server.tool(
   },
 );
 
+/**
+ * List all available connection templates with caller-specific status.
+ * Returns which connections are enabled and which secrets are configured.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'list_connection_templates',
+  'List all available connection templates (built-in + custom). Returns template metadata, which connections are enabled for this caller, and which secrets are configured (boolean only, never values).',
+  { _: z.string().optional().describe('unused') },
+  async () => {
+    try {
+      const result = await sendEncryptedRequest('list_connection_templates', {});
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
+ * Enable or disable a connection for the authenticated caller.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'set_connection_enabled',
+  'Enable or disable a connection for the authenticated caller. When disabling, any running ingestors for the connection are stopped.',
+  {
+    connection: z.string().describe('Connection alias (e.g., "github", "discord-bot")'),
+    enabled: z.boolean().describe('Whether to enable (true) or disable (false) the connection'),
+  },
+  async ({ connection, enabled }) => {
+    try {
+      const result = await sendEncryptedRequest('set_connection_enabled', { connection, enabled });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
+ * Set or delete secrets for the authenticated caller.
+ * Uses prefixed env vars for caller isolation. Never returns secret values.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'set_secrets',
+  'Set or delete secrets for the authenticated caller. Pass secret name → value pairs. Use empty string to delete a secret. Returns boolean status per secret (never values).',
+  {
+    secrets: z
+      .record(z.string(), z.string())
+      .describe('Secret name → value pairs. Empty string deletes the secret.'),
+  },
+  async ({ secrets }) => {
+    try {
+      const result = await sendEncryptedRequest('set_secrets', { secrets });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
+ * Check which secrets are set for the authenticated caller (never returns values).
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'get_secret_status',
+  'Check which secrets are configured for a connection. Returns boolean status for each required and optional secret (never returns values).',
+  {
+    connection: z.string().describe('Connection alias to check secrets for (e.g., "github")'),
+  },
+  async ({ connection }) => {
+    try {
+      const result = await sendEncryptedRequest('get_secret_status', { connection });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
 // ── Start ──────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
