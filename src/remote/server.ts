@@ -364,9 +364,7 @@ export async function executeProxyRequest(
   } else {
     // ── Standard JSON/string body ──
     if (typeof body === 'string') {
-      fetchBody = matched.resolveSecretsInBody
-        ? resolvePlaceholders(body, matched.secrets)
-        : body;
+      fetchBody = matched.resolveSecretsInBody ? resolvePlaceholders(body, matched.secrets) : body;
     } else if (body !== null && body !== undefined) {
       const serialized = JSON.stringify(body);
       fetchBody = matched.resolveSecretsInBody
@@ -421,7 +419,7 @@ type ToolHandler = (
   input: Record<string, unknown>,
   routes: ResolvedRoute[],
   context: ToolContext,
-) => Promise<unknown>;
+) => Promise<unknown> | object;
 
 const toolHandlers: Record<string, ToolHandler> = {
   /**
@@ -1132,19 +1130,19 @@ const toolHandlers: Record<string, ToolHandler> = {
    * Returns template metadata, which ones the caller has enabled,
    * and which secrets are configured.
    */
-  list_connection_templates: async (
+  list_connection_templates: (
     _input: Record<string, unknown>,
     _routes: ResolvedRoute[],
     context: ToolContext,
   ) => {
     const config = loadRemoteConfig();
     const caller = config.callers[context.callerAlias];
-    const enabledSet = new Set(caller?.connections ?? []);
+    const enabledSet = new Set(caller.connections);
 
     const templates = listConnectionTemplates();
 
     return templates.map((t) => {
-      const callerEnv = caller?.env;
+      const callerEnv = caller.env;
       const requiredSecretsSet: Record<string, boolean> = {};
       for (const s of t.requiredSecrets) {
         requiredSecretsSet[s] = isSecretSetForCaller(s, context.callerAlias, callerEnv);
@@ -1191,9 +1189,6 @@ const toolHandlers: Record<string, ToolHandler> = {
 
     const config = loadRemoteConfig();
     const caller = config.callers[context.callerAlias];
-    if (!caller) {
-      throw new Error(`Unknown caller: ${context.callerAlias}`);
-    }
 
     // Verify the connection template exists (built-in or custom connector)
     const connectorAliases = new Set((config.connectors ?? []).map((c) => c.alias).filter(Boolean));
@@ -1231,7 +1226,7 @@ const toolHandlers: Record<string, ToolHandler> = {
    * Set or delete secrets for the authenticated caller.
    * Uses prefixed env vars to prevent cross-caller collisions.
    */
-  set_secrets: async (
+  set_secrets: (
     input: Record<string, unknown>,
     _routes: ResolvedRoute[],
     context: ToolContext,
@@ -1258,7 +1253,7 @@ const toolHandlers: Record<string, ToolHandler> = {
   /**
    * Check which secrets are set for the authenticated caller (never returns values).
    */
-  get_secret_status: async (
+  get_secret_status: (
     input: Record<string, unknown>,
     _routes: ResolvedRoute[],
     context: ToolContext,
@@ -1278,7 +1273,7 @@ const toolHandlers: Record<string, ToolHandler> = {
 
     const config = loadRemoteConfig();
     const caller = config.callers[context.callerAlias];
-    const callerEnv = caller?.env;
+    const callerEnv = caller.env;
 
     const requiredSecretsSet: Record<string, boolean> = {};
     for (const s of template.requiredSecrets) {

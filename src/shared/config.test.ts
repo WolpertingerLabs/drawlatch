@@ -515,7 +515,11 @@ describe('resolveRoutes', () => {
   it('should carry through ingestorConfig (from ingestor) when present', () => {
     const ingestor = {
       type: 'webhook' as const,
-      webhook: { path: 'github', signatureHeader: 'X-Hub-Signature-256', signatureSecret: 'GITHUB_WEBHOOK_SECRET' },
+      webhook: {
+        path: 'github',
+        signatureHeader: 'X-Hub-Signature-256',
+        signatureSecret: 'GITHUB_WEBHOOK_SECRET',
+      },
     };
     const routes = resolveRoutes([
       {
@@ -539,8 +543,15 @@ describe('resolveRoutes', () => {
 
   it('should carry through all new fields together', () => {
     const testConnection = { url: 'https://api.github.com/user', description: 'Test' };
-    const testIngestor = { description: 'Verify webhook', strategy: 'webhook_verify' as const, requireSecrets: ['SECRET'] };
-    const listenerConfig = { name: 'Listener', fields: [{ key: 'eventFilter', label: 'Events', type: 'multiselect' as const }] };
+    const testIngestor = {
+      description: 'Verify webhook',
+      strategy: 'webhook_verify' as const,
+      requireSecrets: ['SECRET'],
+    };
+    const listenerConfig = {
+      name: 'Listener',
+      fields: [{ key: 'eventFilter', label: 'Events', type: 'multiselect' as const }],
+    };
     const ingestor = { type: 'webhook' as const, webhook: { path: 'github' } };
 
     const routes = resolveRoutes([
@@ -1121,7 +1132,10 @@ describe('resolveCallerRoutes', () => {
 
   it('should carry testIngestor and listenerConfig through resolveCallerRoutes', () => {
     const testIngestor = { description: 'Verify webhook', strategy: 'webhook_verify' as const };
-    const listenerConfig = { name: 'Listener', fields: [{ key: 'eventFilter', label: 'Events', type: 'multiselect' as const }] };
+    const listenerConfig = {
+      name: 'Listener',
+      fields: [{ key: 'eventFilter', label: 'Events', type: 'multiselect' as const }],
+    };
     const config = {
       host: '127.0.0.1',
       port: 9999,

@@ -2351,10 +2351,7 @@ describe('test_connection tool', () => {
   });
 
   async function tcHandshake(): Promise<EncryptedChannel> {
-    const initiator = new HandshakeInitiator(
-      tcClientKeys,
-      extractPublicKeys(tcServerKeys),
-    );
+    const initiator = new HandshakeInitiator(tcClientKeys, extractPublicKeys(tcServerKeys));
     const initMsg = initiator.createInit();
     const initResp = await fetch(`${testServerUrl}/handshake/init`, {
       method: 'POST',
@@ -2418,7 +2415,9 @@ describe('test_connection tool', () => {
 
   it('should successfully test a connection with POST', async () => {
     const channel = await tcHandshake();
-    const response = await tcSendRequest(channel, 'test_connection', { connection: 'test-api-post' });
+    const response = await tcSendRequest(channel, 'test_connection', {
+      connection: 'test-api-post',
+    });
     expect(response.success).toBe(true);
 
     const result = response.result as Record<string, unknown>;
@@ -2428,7 +2427,9 @@ describe('test_connection tool', () => {
 
   it('should report failure when test connection returns unexpected status', async () => {
     const channel = await tcHandshake();
-    const response = await tcSendRequest(channel, 'test_connection', { connection: 'test-api-fail' });
+    const response = await tcSendRequest(channel, 'test_connection', {
+      connection: 'test-api-fail',
+    });
     expect(response.success).toBe(true);
 
     const result = response.result as Record<string, unknown>;
@@ -2600,10 +2601,7 @@ describe('test_ingestor tool', () => {
   });
 
   async function tiHandshake(): Promise<EncryptedChannel> {
-    const initiator = new HandshakeInitiator(
-      tiClientKeys,
-      extractPublicKeys(tiServerKeys),
-    );
+    const initiator = new HandshakeInitiator(tiClientKeys, extractPublicKeys(tiServerKeys));
     const initMsg = initiator.createInit();
     const initResp = await fetch(`${tiServerUrl}/handshake/init`, {
       method: 'POST',
@@ -2664,7 +2662,9 @@ describe('test_ingestor tool', () => {
 
   it('should fail webhook_verify strategy when secrets are missing', async () => {
     const channel = await tiHandshake();
-    const response = await tiSendRequest(channel, 'test_ingestor', { connection: 'missing-secret-conn' });
+    const response = await tiSendRequest(channel, 'test_ingestor', {
+      connection: 'missing-secret-conn',
+    });
     expect(response.success).toBe(true);
 
     const result = response.result as Record<string, unknown>;
@@ -2688,7 +2688,9 @@ describe('test_ingestor tool', () => {
 
   it('should return not-testable for null testIngestor', async () => {
     const channel = await tiHandshake();
-    const response = await tiSendRequest(channel, 'test_ingestor', { connection: 'null-test-conn' });
+    const response = await tiSendRequest(channel, 'test_ingestor', {
+      connection: 'null-test-conn',
+    });
     expect(response.success).toBe(true);
 
     const result = response.result as Record<string, unknown>;
@@ -2699,7 +2701,9 @@ describe('test_ingestor tool', () => {
 
   it('should return error for connection without ingestor', async () => {
     const channel = await tiHandshake();
-    const response = await tiSendRequest(channel, 'test_ingestor', { connection: 'no-ingestor-conn' });
+    const response = await tiSendRequest(channel, 'test_ingestor', {
+      connection: 'no-ingestor-conn',
+    });
     expect(response.success).toBe(true);
 
     const result = response.result as Record<string, unknown>;
@@ -2710,7 +2714,9 @@ describe('test_ingestor tool', () => {
 
   it('should return error for connection with ingestor but no testIngestor', async () => {
     const channel = await tiHandshake();
-    const response = await tiSendRequest(channel, 'test_ingestor', { connection: 'no-test-ingestor' });
+    const response = await tiSendRequest(channel, 'test_ingestor', {
+      connection: 'no-test-ingestor',
+    });
     expect(response.success).toBe(true);
 
     const result = response.result as Record<string, unknown>;
@@ -2909,10 +2915,7 @@ describe('list_listener_configs, resolve_listener_options, control_listener, and
   });
 
   async function lcHandshake(): Promise<EncryptedChannel> {
-    const initiator = new HandshakeInitiator(
-      lcClientKeys,
-      extractPublicKeys(lcServerKeys),
-    );
+    const initiator = new HandshakeInitiator(lcClientKeys, extractPublicKeys(lcServerKeys));
     const initMsg = initiator.createInit();
     const initResp = await fetch(`${lcServerUrl}/handshake/init`, {
       method: 'POST',
@@ -3143,7 +3146,12 @@ describe('list_listener_configs, resolve_listener_options, control_listener, and
     expect(withListener.ingestorType).toBe('webhook');
     expect(withListener.hasTestIngestor).toBe(true);
     expect(withListener.hasListenerConfig).toBe(true);
-    expect(withListener.listenerParamKeys).toEqual(['boardId', 'nestedField', 'eventFilter', 'bufferSize']);
+    expect(withListener.listenerParamKeys).toEqual([
+      'boardId',
+      'nestedField',
+      'eventFilter',
+      'bufferSize',
+    ]);
 
     // Connection without listener
     const noListener = routes.find((r) => r.alias === 'no-listener')!;

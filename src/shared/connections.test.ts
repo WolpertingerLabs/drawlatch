@@ -901,10 +901,16 @@ describe('connection template JSON structure validation', () => {
 
       const ti = route.testIngestor!;
       expect(ti.description).toBeTruthy();
-      expect(['websocket_auth', 'webhook_verify', 'poll_once', 'http_request']).toContain(ti.strategy);
+      expect(['websocket_auth', 'webhook_verify', 'poll_once', 'http_request']).toContain(
+        ti.strategy,
+      );
 
       // http_request and websocket_auth strategies must have a request
-      if (ti.strategy === 'http_request' || ti.strategy === 'websocket_auth' || ti.strategy === 'poll_once') {
+      if (
+        ti.strategy === 'http_request' ||
+        ti.strategy === 'websocket_auth' ||
+        ti.strategy === 'poll_once'
+      ) {
         expect(ti.request).toBeDefined();
         expect(ti.request!.url).toBeTruthy();
       }
@@ -932,7 +938,15 @@ describe('connection template JSON structure validation', () => {
       for (const field of lc.fields) {
         expect(field.key).toBeTruthy();
         expect(field.label).toBeTruthy();
-        expect(['text', 'number', 'boolean', 'select', 'multiselect', 'secret', 'text[]']).toContain(field.type);
+        expect([
+          'text',
+          'number',
+          'boolean',
+          'select',
+          'multiselect',
+          'secret',
+          'text[]',
+        ]).toContain(field.type);
 
         // Select/multiselect fields should have options
         if (field.type === 'select' || field.type === 'multiselect') {
@@ -1182,7 +1196,14 @@ describe('listConnectionTemplates — category field (unit)', () => {
 describe('listConnectionTemplates — category field (integration)', () => {
   it('should have a valid category for all bundled templates', () => {
     const templates = listConnectionTemplates();
-    const validCategories = ['ai', 'developer-tools', 'gaming', 'messaging', 'productivity', 'social-media'];
+    const validCategories = [
+      'ai',
+      'developer-tools',
+      'gaming',
+      'messaging',
+      'productivity',
+      'social-media',
+    ];
 
     for (const t of templates) {
       expect(validCategories).toContain(t.category);

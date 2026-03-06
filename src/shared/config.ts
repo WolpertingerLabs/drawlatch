@@ -17,14 +17,19 @@ import path from 'node:path';
 
 import { loadConnection } from './connections.js';
 import type { IngestorConfig } from '../remote/ingestors/types.js';
-import type { TestConnectionConfig, TestIngestorConfig, ListenerConfigSchema } from './listener-config.js';
+import type {
+  TestConnectionConfig,
+  TestIngestorConfig,
+  ListenerConfigSchema,
+} from './listener-config.js';
 
 // Re-export listener config types so consumers can import from config.ts
-export type { TestConnectionConfig, TestIngestorConfig, ListenerConfigSchema } from './listener-config.js';
 export type {
-  ListenerConfigField,
-  ListenerConfigOption,
+  TestConnectionConfig,
+  TestIngestorConfig,
+  ListenerConfigSchema,
 } from './listener-config.js';
+export type { ListenerConfigField, ListenerConfigOption } from './listener-config.js';
 
 /** Resolve the base config directory at call time (not import time).
  *  Defaults to ~/.drawlatch in the user's home directory.

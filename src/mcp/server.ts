@@ -18,7 +18,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadProxyConfig, getProxyConfigPath } from '../shared/config.js';
-import { loadKeyBundle, loadPublicKeys, EncryptedChannel, extractPublicKeys, fingerprint } from '../shared/crypto/index.js';
+import {
+  loadKeyBundle,
+  loadPublicKeys,
+  EncryptedChannel,
+  extractPublicKeys,
+  fingerprint,
+} from '../shared/crypto/index.js';
 import { existsSync } from 'node:fs';
 import {
   HandshakeInitiator,
@@ -36,9 +42,7 @@ let remoteUrl: string;
 async function establishChannel(): Promise<EncryptedChannel> {
   // Pre-flight validation
   if (!existsSync(getProxyConfigPath())) {
-    throw new Error(
-      `No proxy config found at ${getProxyConfigPath()}. Run: drawlatch init`,
-    );
+    throw new Error(`No proxy config found at ${getProxyConfigPath()}. Run: drawlatch init`);
   }
 
   const config = loadProxyConfig();
@@ -103,7 +107,7 @@ async function establishChannel(): Promise<EncryptedChannel> {
         `Remote server is not running at ${remoteUrl}. Start it with: drawlatch start`,
       );
     }
-    if (err instanceof DOMException && err.name === 'AbortError' || msg.includes('timed out')) {
+    if ((err instanceof DOMException && err.name === 'AbortError') || msg.includes('timed out')) {
       throw new Error(
         `Remote server at ${remoteUrl} is not responding (timed out after ${config.connectTimeout}ms)`,
       );
@@ -116,7 +120,9 @@ async function establishChannel(): Promise<EncryptedChannel> {
     const localFp = fingerprint(extractPublicKeys(ownKeys));
     if (initResp.status === 401 || initResp.status === 403) {
       console.error(`[mcp-proxy] Handshake rejected by server. Your key fingerprint: ${localFp}`);
-      console.error('[mcp-proxy] Ensure this fingerprint matches an authorized peer on the remote server.');
+      console.error(
+        '[mcp-proxy] Ensure this fingerprint matches an authorized peer on the remote server.',
+      );
       throw new Error(
         `Handshake rejected (${initResp.status}). Your fingerprint: ${localFp}. Check that public keys are correctly exchanged. See: drawlatch init`,
       );
@@ -194,7 +200,7 @@ async function sendEncryptedRequest(
         `Remote server is not running at ${remoteUrl}. Start it with: drawlatch start`,
       );
     }
-    if (err instanceof DOMException && err.name === 'AbortError' || msg.includes('timed out')) {
+    if ((err instanceof DOMException && err.name === 'AbortError') || msg.includes('timed out')) {
       throw new Error(
         `Remote server at ${remoteUrl} is not responding (timed out after ${config.requestTimeout}ms)`,
       );
@@ -255,14 +261,10 @@ server.tool(
     files: z
       .array(
         z.object({
-          field: z
-            .string()
-            .describe('Form field name (e.g., "files[0]", "file", "attachment")'),
+          field: z.string().describe('Form field name (e.g., "files[0]", "file", "attachment")'),
           path: z.string().describe('Absolute path to the file on the local filesystem'),
           filename: z.string().describe('Filename to use in the upload'),
-          contentType: z
-            .string()
-            .describe('MIME type (e.g., "image/png", "application/pdf")'),
+          contentType: z.string().describe('MIME type (e.g., "image/png", "application/pdf")'),
         }),
       )
       .optional()
@@ -388,7 +390,9 @@ server.tool(
     instance_id: z
       .string()
       .optional()
-      .describe('Instance ID for multi-instance listeners (e.g., "project-board"). Omit for all instances.'),
+      .describe(
+        'Instance ID for multi-instance listeners (e.g., "project-board"). Omit for all instances.',
+      ),
   },
   async ({ connection, after_id, instance_id }) => {
     try {
@@ -553,7 +557,10 @@ server.tool(
   },
   async ({ connection, paramKey }) => {
     try {
-      const result = await sendEncryptedRequest('resolve_listener_options', { connection, paramKey });
+      const result = await sendEncryptedRequest('resolve_listener_options', {
+        connection,
+        paramKey,
+      });
       return {
         content: [
           {
@@ -590,7 +597,11 @@ server.tool(
   },
   async ({ connection, action, instance_id }) => {
     try {
-      const result = await sendEncryptedRequest('control_listener', { connection, action, instance_id });
+      const result = await sendEncryptedRequest('control_listener', {
+        connection,
+        action,
+        instance_id,
+      });
       return {
         content: [
           {
@@ -652,7 +663,7 @@ server.tool(
 // eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
 server.tool(
   'set_listener_params',
-  "Add or edit listener parameter overrides for a connection. Merges params into existing config. Set create_instance to true to create a new multi-instance listener.",
+  'Add or edit listener parameter overrides for a connection. Merges params into existing config. Set create_instance to true to create a new multi-instance listener.',
   {
     connection: z.string().describe('Connection alias (e.g., "trello")'),
     instance_id: z
