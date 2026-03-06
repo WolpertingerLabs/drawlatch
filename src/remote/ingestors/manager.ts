@@ -53,7 +53,11 @@ import './poll/poll-ingestor.js';
 const DEFAULT_INSTANCE_ID = '_default';
 
 /** Build a composite ingestor map key. */
-function makeKey(caller: string, connection: string, instance: string = DEFAULT_INSTANCE_ID): string {
+function makeKey(
+  caller: string,
+  connection: string,
+  instance: string = DEFAULT_INSTANCE_ID,
+): string {
   return `${caller}:${connection}:${instance}`;
 }
 
@@ -115,7 +119,9 @@ export class IngestorManager {
           // Multi-instance: spawn one ingestor per instanceId
           for (const [instanceId, instanceOverrides] of Object.entries(instances)) {
             if (instanceOverrides.disabled) {
-              log.info(`Skipping disabled instance ${callerAlias}:${connectionAlias}:${instanceId}`);
+              log.info(
+                `Skipping disabled instance ${callerAlias}:${connectionAlias}:${instanceId}`,
+              );
               continue;
             }
 
@@ -232,7 +238,12 @@ export class IngestorManager {
    * Get events for a specific caller and connection, optionally filtered by instance.
    * When instanceId is omitted, aggregates events from all instances of that connection.
    */
-  getEvents(callerAlias: string, connectionAlias: string, afterId = -1, instanceId?: string): IngestedEvent[] {
+  getEvents(
+    callerAlias: string,
+    connectionAlias: string,
+    afterId = -1,
+    instanceId?: string,
+  ): IngestedEvent[] {
     if (instanceId) {
       // Specific instance
       const key = makeKey(callerAlias, connectionAlias, instanceId);
@@ -318,12 +329,20 @@ export class IngestorManager {
   ): Promise<LifecycleResult | LifecycleResult[]> {
     const callerConfig = this.config.callers[callerAlias] as CallerConfig | undefined;
     if (!callerConfig) {
-      return { success: false, connection: connectionAlias, error: `Unknown caller: ${callerAlias}` };
+      return {
+        success: false,
+        connection: connectionAlias,
+        error: `Unknown caller: ${callerAlias}`,
+      };
     }
 
     const connectionIndex = callerConfig.connections.indexOf(connectionAlias);
     if (connectionIndex === -1) {
-      return { success: false, connection: connectionAlias, error: `Caller does not have connection: ${connectionAlias}` };
+      return {
+        success: false,
+        connection: connectionAlias,
+        error: `Caller does not have connection: ${connectionAlias}`,
+      };
     }
 
     const rawRoutes = resolveCallerRoutes(this.config, callerAlias);
@@ -333,12 +352,22 @@ export class IngestorManager {
     const resolvedRoute = resolvedRoutes[connectionIndex];
 
     if (!rawRoute.ingestor) {
-      return { success: false, connection: connectionAlias, error: 'This connection does not have an ingestor.' };
+      return {
+        success: false,
+        connection: connectionAlias,
+        error: 'This connection does not have an ingestor.',
+      };
     }
 
     // If a specific instanceId is given, start just that one
     if (instanceId) {
-      return this.startOneInstance(callerAlias, connectionAlias, instanceId, rawRoute, resolvedRoute);
+      return this.startOneInstance(
+        callerAlias,
+        connectionAlias,
+        instanceId,
+        rawRoute,
+        resolvedRoute,
+      );
     }
 
     // If listenerInstances is defined, start all instances
@@ -347,7 +376,15 @@ export class IngestorManager {
       const results: LifecycleResult[] = [];
       for (const [instId, instOverrides] of Object.entries(instances)) {
         if (instOverrides.disabled) continue;
-        results.push(await this.startOneInstance(callerAlias, connectionAlias, instId, rawRoute, resolvedRoute));
+        results.push(
+          await this.startOneInstance(
+            callerAlias,
+            connectionAlias,
+            instId,
+            rawRoute,
+            resolvedRoute,
+          ),
+        );
       }
       return results;
     }
@@ -370,7 +407,11 @@ export class IngestorManager {
     const existing = this.ingestors.get(key);
     if (existing) {
       const status = existing.getStatus();
-      if (status.state === 'connected' || status.state === 'starting' || status.state === 'reconnecting') {
+      if (
+        status.state === 'connected' ||
+        status.state === 'starting' ||
+        status.state === 'reconnecting'
+      ) {
         return { success: true, connection: connectionAlias, instanceId, state: status.state };
       }
       // Remove stopped instance to recreate
@@ -409,7 +450,12 @@ export class IngestorManager {
     );
 
     if (!ingestor) {
-      return { success: false, connection: connectionAlias, instanceId, error: 'Failed to create ingestor.' };
+      return {
+        success: false,
+        connection: connectionAlias,
+        instanceId,
+        error: 'Failed to create ingestor.',
+      };
     }
 
     this.ingestors.set(key, ingestor);
@@ -417,7 +463,12 @@ export class IngestorManager {
 
     try {
       await ingestor.start();
-      return { success: true, connection: connectionAlias, instanceId, state: ingestor.getStatus().state };
+      return {
+        success: true,
+        connection: connectionAlias,
+        instanceId,
+        state: ingestor.getStatus().state,
+      };
     } catch (err) {
       log.error(`Failed to start ${key}:`, err);
       return {
@@ -446,10 +497,14 @@ export class IngestorManager {
 
     // Stop all instances for this connection
     const prefix = `${callerAlias}:${connectionAlias}:`;
-    const keysToStop = Array.from(this.ingestors.keys()).filter(k => k.startsWith(prefix));
+    const keysToStop = Array.from(this.ingestors.keys()).filter((k) => k.startsWith(prefix));
 
     if (keysToStop.length === 0) {
-      return { success: false, connection: connectionAlias, error: 'No ingestor running for this connection.' };
+      return {
+        success: false,
+        connection: connectionAlias,
+        error: 'No ingestor running for this connection.',
+      };
     }
 
     if (keysToStop.length === 1) {
@@ -478,7 +533,12 @@ export class IngestorManager {
     const ingestor = this.ingestors.get(key);
 
     if (!ingestor) {
-      return { success: false, connection: connectionAlias, instanceId, error: 'No ingestor running for this connection.' };
+      return {
+        success: false,
+        connection: connectionAlias,
+        instanceId,
+        error: 'No ingestor running for this connection.',
+      };
     }
 
     log.info(`Stopping ${key}`);
@@ -596,7 +656,7 @@ export class IngestorManager {
     params: Record<string, unknown>,
     fields: ListenerConfigField[],
   ): void {
-    const fieldsByKey = new Map(fields.map(f => [f.key, f]));
+    const fieldsByKey = new Map(fields.map((f) => [f.key, f]));
 
     for (const [paramKey, paramValue] of Object.entries(params)) {
       const field = fieldsByKey.get(paramKey);

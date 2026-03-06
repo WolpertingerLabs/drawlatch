@@ -530,16 +530,12 @@ describe('Trello webhook factory registration', () => {
 
 describe('TrelloWebhookIngestor — getModelId and board filtering', () => {
   it('should return boardId from getModelId when _boardId is set', async () => {
-    const ingestor = new TrelloWebhookIngestor(
-      'trello',
-      { TRELLO_API_SECRET: 'secret' },
-      {
-        path: 'trello',
-        protocol: 'trello',
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        _boardId: 'board-xyz-789',
-      } as any,
-    );
+    const ingestor = new TrelloWebhookIngestor('trello', { TRELLO_API_SECRET: 'secret' }, {
+      path: 'trello',
+      protocol: 'trello',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      _boardId: 'board-xyz-789',
+    } as any);
 
     // getModelId is protected, but we can verify the behavior through
     // getStatus — start the ingestor and check it works correctly
@@ -569,16 +565,12 @@ describe('TrelloWebhookIngestor — getModelId and board filtering', () => {
     const targetBoardId = 'board-target-123';
     const otherBoardId = 'board-other-456';
 
-    const ingestor = new TrelloWebhookIngestor(
-      'trello',
-      {},
-      {
-        path: 'trello',
-        protocol: 'trello',
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        _boardId: targetBoardId,
-      } as any,
-    );
+    const ingestor = new TrelloWebhookIngestor('trello', {}, {
+      path: 'trello',
+      protocol: 'trello',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      _boardId: targetBoardId,
+    } as any);
 
     // Matching board → accepted
     const matchPayload = JSON.stringify({
@@ -653,10 +645,7 @@ describe('TrelloWebhookIngestor — getModelId and board filtering', () => {
     const content = body + resolvedUrl;
     const sig = crypto.createHmac('sha1', 'secret').update(content).digest('base64');
 
-    const result = ingestor.handleWebhook(
-      { 'x-trello-webhook': sig },
-      Buffer.from(body),
-    );
+    const result = ingestor.handleWebhook({ 'x-trello-webhook': sig }, Buffer.from(body));
 
     expect(result.accepted).toBe(true);
   });

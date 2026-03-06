@@ -38,7 +38,10 @@ class TestWebhookIngestor extends WebhookIngestor {
     return 'test_event';
   }
 
-  protected extractEventData(_headers: Record<string, string | string[] | undefined>, body: unknown): unknown {
+  protected extractEventData(
+    _headers: Record<string, string | string[] | undefined>,
+    body: unknown,
+  ): unknown {
     return body;
   }
 
@@ -429,11 +432,7 @@ describe('WebhookIngestor — lifecycle integration', () => {
     });
 
     it('should leave callbackUrl undefined when not configured', () => {
-      const ingestor = new TestWebhookIngestor(
-        'test-conn',
-        {},
-        { path: 'test' },
-      );
+      const ingestor = new TestWebhookIngestor('test-conn', {}, { path: 'test' });
 
       expect(ingestor.getResolvedCallbackUrl()).toBeUndefined();
     });
@@ -453,22 +452,14 @@ describe('WebhookIngestor — lifecycle integration', () => {
 
   describe('getModelId()', () => {
     it('should return undefined by default', () => {
-      const ingestor = new TestWebhookIngestor(
-        'test-conn',
-        {},
-        { path: 'test' },
-      );
+      const ingestor = new TestWebhookIngestor('test-conn', {}, { path: 'test' });
 
       // testModelId is undefined by default
       expect(ingestor.getResolvedCallbackUrl()).toBeUndefined();
     });
 
     it('should return custom value when overridden', () => {
-      const ingestor = new TestWebhookIngestor(
-        'test-conn',
-        {},
-        { path: 'test' },
-      );
+      const ingestor = new TestWebhookIngestor('test-conn', {}, { path: 'test' });
       ingestor.testModelId = 'custom-model-id';
 
       // The getModelId is called internally by lifecycle manager

@@ -236,7 +236,9 @@ export class HandshakeResponder {
       const fpStr = Array.from(initiatorFp.subarray(0, 16))
         .map((b: number) => b.toString(16).padStart(2, '0'))
         .join(':');
-      console.error(`[handshake] Rejected: no authorized peer matches signing key fingerprint ${fpStr}`);
+      console.error(
+        `[handshake] Rejected: no authorized peer matches signing key fingerprint ${fpStr}`,
+      );
       console.error('[handshake] Authorized peer fingerprints:');
       for (const ak of this.authorizedKeys) {
         console.error(`[handshake]   ${fingerprint(ak)}`);

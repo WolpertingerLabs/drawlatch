@@ -412,10 +412,19 @@ export class DiscordGatewayIngestor extends BaseIngestor {
 
 // ── Self-registration ────────────────────────────────────────────────────
 
-registerIngestorFactory('websocket:discord', (connectionAlias, config, secrets, bufferSize, instanceId) => {
-  if (!config.websocket) {
-    log.error(`Missing websocket config for ${connectionAlias}`);
-    return null;
-  }
-  return new DiscordGatewayIngestor(connectionAlias, secrets, config.websocket, bufferSize, instanceId);
-});
+registerIngestorFactory(
+  'websocket:discord',
+  (connectionAlias, config, secrets, bufferSize, instanceId) => {
+    if (!config.websocket) {
+      log.error(`Missing websocket config for ${connectionAlias}`);
+      return null;
+    }
+    return new DiscordGatewayIngestor(
+      connectionAlias,
+      secrets,
+      config.websocket,
+      bufferSize,
+      instanceId,
+    );
+  },
+);
