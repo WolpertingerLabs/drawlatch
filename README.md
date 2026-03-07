@@ -1,88 +1,54 @@
 # Drawlatch
 
-> **Alpha Software:** This project is in alpha. Expect breaking changes between updates.
+> **Alpha Software:** Expect breaking changes between updates.
 
-A config-driven MCP (Model Context Protocol) proxy that lets Claude Code make authenticated HTTP requests to external APIs. Supports 22 pre-built API connections with endpoint allowlisting, per-caller access control, and real-time event ingestion — all configured through a single JSON file.
+Drawlatch is a config-driven proxy that gives AI agents authenticated access to external APIs. Define your connections and secrets in a single config file — agents get structured, allowlisted access to 22 pre-built APIs without ever seeing your credentials.
 
-Drawlatch can run in two modes:
+**Using [Callboard](https://github.com/WolpertingerLabs/callboard)?** Drawlatch is built in — Callboard manages connections, secrets, and agent identities through its UI. You don't need to set up drawlatch separately.
 
-- **Remote mode** — local proxy + remote server, with end-to-end encryption. Secrets never leave the remote server.
-- **Local mode** — imported as a library and called in-process (no server, no encryption). Secrets are on the same machine, but you get the same config-driven route resolution, endpoint allowlisting, and ingestor support.
+## Key Features
+
+- **22 pre-built connections** — GitHub, Slack, Discord, Stripe, Notion, Linear, OpenAI, and [more](CONNECTIONS.md)
+- **Endpoint allowlisting** — agents can only reach explicitly configured URL patterns
+- **Per-caller access control** — each agent identity sees only its assigned connections
+- **Real-time event ingestion** — WebSocket, webhook, and polling listeners for incoming events ([details](INGESTORS.md))
+- **Two operating modes** — remote (secrets on a separate server with E2EE) or local (in-process library)
 
 ## How It Works
 
-### Remote Mode (Two-Component)
+Drawlatch runs in two modes depending on your trust model:
 
-In remote mode, the system has two components:
+### Remote Mode — Secrets Never Leave the Server
 
-1. **Local MCP Proxy** — runs on your machine as a Claude Code MCP server (stdio transport). It holds **no secrets**. It encrypts requests and forwards them to the remote server.
-2. **Remote Secure Server** — holds all secrets (API keys, tokens, etc.) and only communicates through encrypted channels after mutual authentication. It injects secrets into outgoing HTTP requests on the proxy's behalf.
-
-```
-┌──────────────┐     Encrypted Channel     ┌──────────────────┐     Authenticated     ┌──────────────┐
-│  Claude Code │ ◄──── stdio ────► MCP     │◄── HTTP + E2EE ──►│  Remote Server       │────  HTTPS ───►│  External API │
-│              │                   Proxy    │                   │  (holds secrets)     │               │               │
-└──────────────┘                            └──────────────────┘                       └──────────────┘
-                    No secrets here                                Injects API keys,
-                                                                  tokens, headers
-```
-
-The crypto layer uses **Ed25519** signatures for authentication and **X25519 ECDH** for key exchange, deriving **AES-256-GCM** session keys — all built on Node.js native `crypto` with zero external crypto dependencies.
-
-### Local Mode (In-Process Library)
-
-In local mode, there is no separate server, no network port, and no encryption. Your application imports Drawlatch's core functions directly and calls them in-process:
+The local MCP proxy holds no secrets. It encrypts requests and forwards them to a remote server that injects credentials and makes the actual API calls.
 
 ```
-┌──────────────────────────────────────────┐     Authenticated     ┌──────────────┐
-│  Your Application                        │────  HTTPS ───────────►│  External API │
-│  ┌──────────┐   in-process   ┌────────┐ │                        │               │
-│  │  Agent   │◄──  call  ────►│ drawl. │ │  Reads secrets from    └──────────────┘
-│  │          │                │ routes │ │  local env / config
+┌──────────────┐                          ┌──────────────────┐                    ┌──────────────┐
+│  Claude Code  │◄── stdio ──► MCP Proxy  │◄── HTTP + E2EE ──►  Remote Server    │── HTTPS ────►│  External API │
+│              │              (no secrets) │                   │  (holds secrets)  │              │               │
+└──────────────┘                          └──────────────────┘                    └──────────────┘
+```
+
+The crypto layer uses Ed25519 signatures for mutual authentication and X25519 ECDH to derive AES-256-GCM session keys — all built on Node.js native `crypto` with zero external dependencies.
+
+### Local Mode — In-Process Library
+
+No server, no encryption. Your application imports drawlatch directly and calls the same `executeProxyRequest()` function the remote server uses. Secrets come from `process.env` on the same machine.
+
+```
+┌──────────────────────────────────────────┐                    ┌──────────────┐
+│  Your Application                        │── HTTPS ──────────►│  External API │
+│  ┌──────────┐   in-process   ┌────────┐ │                    │               │
+│  │  Agent   │◄── call ──────►│ drawl. │ │                    └──────────────┘
 │  └──────────┘                └────────┘ │
 └──────────────────────────────────────────┘
-         Secrets are on the same machine
 ```
 
-**What you get in local mode:** The same config-driven route resolution, endpoint allowlisting, per-caller access control, connection templates, ingestor support (WebSocket, webhook, polling), and the exact same `executeProxyRequest()` function the remote server uses — no behavioral drift.
+You still get config-driven route resolution, endpoint allowlisting, per-caller access control, and ingestor support — just without cryptographic secret isolation.
 
-**What you don't get:** Secret isolation from the agent. When running locally, secrets live in `process.env` on the same machine. The value proposition shifts from cryptographic secret hiding to **convenience and structured access** — a single config file managing many API connections with consistent patterns.
-
-> **When to use which mode:** Use remote mode when you need to hide secrets from the machine running the agent (e.g., shared CI servers, untrusted environments). Use local mode when running on your own machine and you want the convenience of config-driven API management without the overhead of running a separate server.
+> **When to use which:** Remote mode when secrets must be hidden from the agent's machine (shared servers, CI, untrusted environments). Local mode when running on your own machine and you want convenience without a separate server.
 
 ## Quick Start
-
-### Option 1: Install as a Claude Code Plugin (Recommended)
-
-This repo is structured as a **Claude Code plugin** with a marketplace. Install it directly:
-
-```shell
-# Add the marketplace (from a local clone)
-/plugin marketplace add ./path/to/drawlatch
-
-# Install the plugin
-/plugin install drawlatch@drawlatch
-```
-
-Or load it directly during development:
-
-```shell
-claude --plugin-dir ./path/to/drawlatch
-```
-
-The plugin's MCP server starts automatically when enabled. The `secure_request` and `list_routes` tools become available immediately. The proxy uses `~/.drawlatch/` by default — see [Advanced Configuration](#advanced-configuration) to use a custom path.
-
-### Option 2: Auto-Discovery (opening this repo directly)
-
-This repo includes a `.mcp.json` file at the root, so Claude Code **automatically discovers** the MCP proxy server when you open the project. On first launch, Claude Code will prompt you to approve the server — accept, and the `secure_request` and `list_routes` tools become available immediately.
-
-You need a working setup first (run `drawlatch init` + `drawlatch start`). See [Setup](#setup) below. The proxy uses `~/.drawlatch/` by default — see [Advanced Configuration](#advanced-configuration) to use a custom path.
-
-> **Note:** Auto-discovery uses the `dist/mcp/server.js` entrypoint. The `dist/` directory is built automatically when you run `npm install` (via the `prepare` script). If you need to rebuild manually, run `npm run build`.
-
-## Setup
-
-### Quick Start (Recommended)
 
 Get from zero to working in three commands:
 
@@ -108,123 +74,184 @@ drawlatch status    # Check server is running
 drawlatch config    # View configuration and secret status
 ```
 
-That's it. The `init` command generates keys, creates configs, exchanges public keys, and scaffolds the `.env` file. All steps are idempotent — safe to re-run.
+The `init` command generates keys, creates configs, exchanges public keys, and scaffolds the `.env` file. All steps are idempotent — safe to re-run.
 
-For custom setups (different aliases, multiple callers, different machines), see the [Manual Setup](#manual-setup) section below.
+### Connect to Claude Code
+
+**Option 1: Claude Code Plugin (Recommended)**
+
+```shell
+# Install the plugin
+/plugin install drawlatch@drawlatch
+```
+
+The plugin's MCP server starts automatically. The proxy uses `~/.drawlatch/` by default — see [Advanced Configuration](#advanced-configuration) to use a custom path.
+
+**Option 2: Auto-Discovery**
+
+This repo includes a `.mcp.json` file, so Claude Code automatically discovers the MCP proxy when you open the project. Approve the server when prompted.
+
+**Option 3: Manual Registration**
+
+```bash
+claude mcp add drawlatch \
+  -e MCP_CONFIG_DIR=~/.drawlatch \
+  -- node /path/to/drawlatch/dist/mcp/server.js
+```
+
+> **Note:** Auto-discovery and manual registration use `dist/mcp/server.js`. The `dist/` directory is built automatically via `npm install` (prepare script). Rebuild manually with `npm run build` if needed.
 
 ### Manual Setup
 
-#### Prerequisites
+For custom setups (different aliases, multiple callers, different machines), you can configure everything manually instead of using `drawlatch init`.
+
+**1. Generate keys:**
 
 ```bash
-git clone <repo-url>
-cd drawlatch
-npm install
-npm run build
+drawlatch generate-keys local my-laptop
+drawlatch generate-keys remote
 ```
 
-#### Directory Structure
+**2. Exchange public keys** — copy `*.pub.pem` files into the appropriate `keys/peers/` subdirectories. See [Key Exchange](#key-exchange) for details.
 
-All config and key files live inside `~/.drawlatch/` in the user's home directory by default. Override with `MCP_CONFIG_DIR` for custom deployments (see [Advanced Configuration](#advanced-configuration)).
-
-```
-~/.drawlatch/
-├── proxy.config.json                          # Local proxy config
-├── remote.config.json                         # Remote server config
-└── keys/
-    ├── local/                                 # MCP proxy keypairs (one per alias)
-    │   └── my-laptop/                         # Alias-named subdirectory
-    │       ├── signing.pub.pem                # Ed25519 public key (share this)
-    │       ├── signing.key.pem                # Ed25519 private key (keep secret)
-    │       ├── exchange.pub.pem               # X25519 public key (share this)
-    │       └── exchange.key.pem               # X25519 private key (keep secret)
-    ├── remote/                                # Remote server keypair
-    │   ├── signing.pub.pem
-    │   ├── signing.key.pem
-    │   ├── exchange.pub.pem
-    │   └── exchange.key.pem
-    └── peers/
-        ├── alice/                             # One subdirectory per caller
-        │   ├── signing.pub.pem               # Caller's public signing key
-        │   └── exchange.pub.pem              # Caller's public exchange key
-        ├── bob/                               # Another caller
-        │   ├── signing.pub.pem
-        │   └── exchange.pub.pem
-        └── remote-server/                     # Remote server's public keys (for proxy)
-            ├── signing.pub.pem
-            └── exchange.pub.pem
-```
-
-#### Step 1: Generate Keys
-
-Generate keypairs for both the local proxy and the remote server:
+**3. Create configs** — copy the example files and edit:
 
 ```bash
-# Generate local MCP proxy keypair (with alias)
-npm run generate-keys -- local my-laptop
-
-# Or use the default alias
-npm run generate-keys -- local
-
-# Generate remote server keypair
-npm run generate-keys -- remote
-```
-
-Each command creates four PEM files (Ed25519 signing + X25519 exchange, public + private) in the appropriate directory under `~/.drawlatch/keys/`. Local keys are stored under `keys/local/<alias>/` — the alias defaults to `"default"` if omitted.
-
-> **Multiple identities:** Generate multiple local keypairs using different aliases (e.g., `my-laptop`, `ci-server`). Set `MCP_KEY_ALIAS` per agent at spawn time or use `localKeyAlias` in `proxy.config.json` to select which identity the proxy uses. The alias directory name should match the caller alias in the remote server's config.
-
-You can also generate keys to a custom directory:
-
-```bash
-npm run generate-keys -- --dir /path/to/custom/keys
-```
-
-Or inspect the fingerprint of an existing keypair:
-
-```bash
-npm run generate-keys -- show ~/.drawlatch/keys/local/my-laptop
-```
-
-#### Step 2: Exchange Public Keys
-
-The local proxy and remote server need each other's public keys for mutual authentication. Copy the **public** key files (`.pub.pem` only — never share private keys):
-
-**From local to remote** — copy the proxy's public keys into a caller directory on the remote server. Since local keys are now stored per-alias, the alias directory name naturally matches the peer directory:
-
-```bash
-mkdir -p ~/.drawlatch/keys/peers/my-laptop
-
-cp ~/.drawlatch/keys/local/my-laptop/signing.pub.pem \
-   ~/.drawlatch/keys/peers/my-laptop/signing.pub.pem
-
-cp ~/.drawlatch/keys/local/my-laptop/exchange.pub.pem \
-   ~/.drawlatch/keys/peers/my-laptop/exchange.pub.pem
-```
-
-**From remote to local** — copy the remote server's public keys into the proxy's peer directory:
-
-```bash
-mkdir -p ~/.drawlatch/keys/peers/remote-server
-
-cp ~/.drawlatch/keys/remote/signing.pub.pem \
-   ~/.drawlatch/keys/peers/remote-server/signing.pub.pem
-
-cp ~/.drawlatch/keys/remote/exchange.pub.pem \
-   ~/.drawlatch/keys/peers/remote-server/exchange.pub.pem
-```
-
-> **Tip:** If the proxy and remote server are on different machines, securely transfer only the `*.pub.pem` files (e.g., via `scp`). Each caller gets its own subdirectory under the peers directory — the directory name becomes the caller's alias used in the remote config and audit logs.
-
-#### Step 3: Create the Local Proxy Config
-
-Copy the example and edit the paths to match your setup:
-
-```bash
+cp remote.config.example.json ~/.drawlatch/remote.config.json
 cp proxy.config.example.json ~/.drawlatch/proxy.config.json
 ```
 
-Edit `~/.drawlatch/proxy.config.json`:
+**4. Create a `.env` file** with your API secrets:
+
+```bash
+cat > ~/.drawlatch/.env << 'EOF'
+# GITHUB_TOKEN=ghp_your_token_here
+# DISCORD_BOT_TOKEN=your_bot_token_here
+EOF
+```
+
+**5. Start the server:**
+
+```bash
+drawlatch start
+drawlatch doctor    # Validate full setup
+```
+
+## MCP Tools
+
+Once connected, agents get these tools:
+
+| Tool | Description |
+|------|-------------|
+| `secure_request` | Make authenticated HTTP requests. Route-level headers (auth tokens, API keys) are injected automatically — the agent never sees secret values. Supports JSON and multipart/form-data file uploads. |
+| `list_routes` | Discover available APIs with metadata, docs links, allowed endpoints, and available secret placeholders. |
+| `poll_events` | Retrieve buffered events from ingestors (Discord messages, GitHub webhooks, etc.) with cursor-based pagination. |
+| `ingestor_status` | Get connection state, buffer sizes, event counts, and errors for all active ingestors. |
+| `test_connection` | Verify API credentials with a pre-configured read-only request. |
+| `control_listener` | Start, stop, or restart an event listener. |
+| `list_listener_configs` | Get configurable fields for event listeners. |
+| `set_listener_params` | Configure listener parameters (filters, buffer sizes, etc.). |
+| `get_listener_params` | Read current listener parameter overrides. |
+| `resolve_listener_options` | Fetch dynamic options for listener config fields (e.g., list of Trello boards). |
+| `list_listener_instances` | List instances of a multi-instance listener. |
+| `delete_listener_instance` | Remove a multi-instance listener instance. |
+| `test_ingestor` | Test event listener configuration and credentials. |
+
+## Configuration Reference
+
+### Remote Server Config (`remote.config.json`)
+
+```json
+{
+  "host": "0.0.0.0",
+  "port": 9999,
+  "localKeysDir": "~/.drawlatch/keys/remote",
+  "connectors": [],
+  "callers": {},
+  "rateLimitPerMinute": 60
+}
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `host` | Network interface to bind | `127.0.0.1` |
+| `port` | Listen port | `9999` |
+| `localKeysDir` | Path to server's own keypair | `~/.drawlatch/keys/remote` |
+| `connectors` | Custom connector definitions (see below) | `[]` |
+| `callers` | Per-caller access control (see below) | `{}` |
+| `rateLimitPerMinute` | Max requests per minute per session | `60` |
+
+### Callers
+
+Each caller is identified by their public key and declares which connections they can access:
+
+```json
+{
+  "callers": {
+    "alice": {
+      "name": "Alice (senior engineer)",
+      "peerKeyDir": "~/.drawlatch/keys/peers/alice",
+      "connections": ["github", "stripe", "internal-api"],
+      "env": {
+        "GITHUB_TOKEN": "${ALICE_GITHUB_TOKEN}"
+      }
+    },
+    "ci-server": {
+      "name": "GitHub Actions CI",
+      "peerKeyDir": "~/.drawlatch/keys/peers/ci-server",
+      "connections": ["github"]
+    }
+  }
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `peerKeyDir` | Yes | Path to this caller's public key files |
+| `connections` | Yes | Array of connection names (built-in or custom connector aliases) |
+| `name` | No | Human-readable name for audit logs |
+| `env` | No | Per-caller env var overrides — redirect secret resolution per caller |
+| `ingestorOverrides` | No | Per-caller ingestor config overrides ([details](INGESTORS.md#caller-level-ingestor-overrides)) |
+
+The `env` map lets multiple callers share the same connection with different credentials:
+- Keys are the env var names connectors reference (e.g., `GITHUB_TOKEN`)
+- Values are `"${REAL_ENV_VAR}"` (redirect) or literal strings (direct injection)
+- Checked before `process.env` during secret resolution
+
+### Custom Connectors
+
+Define reusable route templates for APIs not covered by built-in connections:
+
+```json
+{
+  "connectors": [
+    {
+      "alias": "internal-api",
+      "name": "Internal Admin API",
+      "allowedEndpoints": ["https://admin.internal.com/**"],
+      "headers": { "Authorization": "Bearer ${ADMIN_KEY}" },
+      "secrets": { "ADMIN_KEY": "${INTERNAL_ADMIN_KEY}" }
+    }
+  ]
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `alias` | Yes | Unique name for referencing from caller `connections` lists |
+| `allowedEndpoints` | Yes | Glob patterns for allowed URLs |
+| `name` | No | Human-readable name |
+| `description` | No | Short description |
+| `docsUrl` | No | URL to API documentation |
+| `headers` | No | Headers to auto-inject (`${VAR}` placeholders resolved from `secrets`) |
+| `secrets` | No | Key-value pairs — literal strings or `${ENV_VAR}` references |
+| `resolveSecretsInBody` | No | Resolve `${VAR}` in request bodies (default: `false`) |
+
+Custom connectors with an `alias` matching a built-in connection name take precedence.
+
+### Proxy Config (`proxy.config.json`)
+
+Used by the local MCP proxy to connect to the remote server:
 
 ```json
 {
@@ -236,501 +263,256 @@ Edit `~/.drawlatch/proxy.config.json`:
 }
 ```
 
-| Field                 | Description                                                                                     | Default                               |
-| --------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `remoteUrl`           | URL of the remote secure server                                                                 | `http://localhost:9999`               |
-| `localKeyAlias`       | Key alias — resolved to `keys/local/<alias>/`. Overridden by `MCP_KEY_ALIAS` env var at runtime | _(none)_                              |
-| `localKeysDir`        | Absolute path to the proxy's own keypair directory. Ignored when `localKeyAlias` is set         | `~/.drawlatch/keys/local/default`       |
-| `remotePublicKeysDir` | Absolute path to the remote server's public keys                                                | `~/.drawlatch/keys/peers/remote-server` |
-| `connectTimeout`      | Handshake timeout in milliseconds                                                               | `10000` (10s)                         |
-| `requestTimeout`      | Request timeout in milliseconds                                                                 | `30000` (30s)                         |
+| Field | Description | Default |
+|-------|-------------|---------|
+| `remoteUrl` | URL of the remote server | `http://localhost:9999` |
+| `localKeyAlias` | Key alias — resolved to `keys/local/<alias>/` | _(none)_ |
+| `localKeysDir` | Explicit path to proxy's keypair (ignored when `localKeyAlias` is set) | `~/.drawlatch/keys/local/default` |
+| `remotePublicKeysDir` | Path to remote server's public keys | `~/.drawlatch/keys/peers/remote-server` |
+| `connectTimeout` | Handshake timeout (ms) | `10000` |
+| `requestTimeout` | Request timeout (ms) | `30000` |
 
-**Alias resolution priority:**
-
-1. `MCP_KEY_ALIAS` env var (highest — set per agent at spawn time)
-2. `localKeyAlias` in `proxy.config.json`
-3. `localKeysDir` in `proxy.config.json` (explicit full path for custom deployments)
-4. Default: `keys/local/default`
-
-#### Step 4: Create the Remote Server Config
-
-Copy the example and edit it to match your setup:
-
-```bash
-cp remote.config.example.json ~/.drawlatch/remote.config.json
-```
-
-Edit `~/.drawlatch/remote.config.json`. This is where you define your callers, their connections, custom connectors, and secrets.
-
-The config is **caller-centric** — each caller is identified by their public key and explicitly declares which connections they can access.
-
-#### Example: Single caller with a built-in connection
-
-```json
-{
-  "host": "0.0.0.0",
-  "port": 9999,
-  "localKeysDir": "~/.drawlatch/keys/remote",
-  "callers": {
-    "my-laptop": {
-      "name": "Personal Laptop",
-      "peerKeyDir": "~/.drawlatch/keys/peers/my-laptop",
-      "connections": ["github"]
-    }
-  },
-  "rateLimitPerMinute": 60
-}
-```
-
-Set the `GITHUB_TOKEN` environment variable on the remote server and the built-in `github` connection template handles everything else — endpoint patterns, auth headers, docs URLs, and OpenAPI specs.
-
-#### Example: Multiple callers with different access levels
-
-```json
-{
-  "host": "0.0.0.0",
-  "port": 9999,
-  "localKeysDir": "~/.drawlatch/keys/remote",
-  "connectors": [
-    {
-      "alias": "internal-api",
-      "name": "Internal Admin API",
-      "headers": { "Authorization": "Bearer ${ADMIN_KEY}" },
-      "secrets": { "ADMIN_KEY": "${INTERNAL_ADMIN_KEY}" },
-      "allowedEndpoints": ["https://admin.internal.com/**"]
-    }
-  ],
-  "callers": {
-    "alice": {
-      "name": "Alice (senior engineer)",
-      "peerKeyDir": "/keys/peers/alice",
-      "connections": ["github", "stripe", "internal-api"]
-    },
-    "ci-server": {
-      "name": "GitHub Actions CI",
-      "peerKeyDir": "/keys/peers/ci-server",
-      "connections": ["github"]
-    }
-  },
-  "rateLimitPerMinute": 60
-}
-```
-
-Alice gets access to GitHub, Stripe, and the internal API. The CI server only gets GitHub. Each caller is isolated — they only see the routes for their declared connections.
-
-#### Example: Per-caller env overrides (shared connector, different credentials)
-
-When multiple callers use the same connection but need different credentials, use the `env` field to redirect environment variable resolution per caller:
-
-```json
-{
-  "host": "0.0.0.0",
-  "port": 9999,
-  "localKeysDir": "/keys/server",
-  "callers": {
-    "alice": {
-      "name": "Alice",
-      "peerKeyDir": "/keys/peers/alice",
-      "connections": ["github"],
-      "env": {
-        "GITHUB_TOKEN": "${ALICE_GITHUB_TOKEN}"
-      }
-    },
-    "bob": {
-      "name": "Bob",
-      "peerKeyDir": "/keys/peers/bob",
-      "connections": ["github", "stripe"],
-      "env": {
-        "GITHUB_TOKEN": "${BOB_GITHUB_TOKEN}",
-        "STRIPE_SECRET_KEY": "sk_test_bob_dev_key"
-      }
-    }
-  },
-  "rateLimitPerMinute": 60
-}
-```
-
-The `env` map works as follows:
-
-- **Keys** are the env var names that connectors reference (e.g., `GITHUB_TOKEN`)
-- **Values** are either `"${REAL_ENV_VAR}"` (redirect to a different env var) or a literal string (direct injection)
-- When resolving secrets, the caller's `env` is checked **before** `process.env`
-
-In this example, both Alice and Bob use the same built-in `github` connection, but Alice's requests use `process.env.ALICE_GITHUB_TOKEN` while Bob's use `process.env.BOB_GITHUB_TOKEN`. Bob also gets a hardcoded Stripe test key without needing an env var.
-
-#### Remote Config Reference
-
-| Field                | Description                                                                                                                                  | Default                  |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| `host`               | Network interface to bind to. Use `0.0.0.0` for all interfaces or `127.0.0.1` for local only                                                 | `127.0.0.1`              |
-| `port`               | Port to listen on                                                                                                                            | `9999`                   |
-| `localKeysDir`       | Absolute path to the remote server's own keypair                                                                                             | `~/.drawlatch/keys/remote` |
-| `connectors`         | Array of custom connector definitions, each with an `alias` for referencing from callers (see [Connector Definition](#connector-definition)) | `[]`                     |
-| `callers`            | Per-caller access control. Keys are caller aliases used in audit logs (see [Caller Definition](#caller-definition))                          | `{}`                     |
-| `rateLimitPerMinute` | Max requests per minute per session                                                                                                          | `60`                     |
-
-#### Connector Definition
-
-Custom connectors define reusable route templates referenced by `alias` from caller connection lists. They follow the same structure as routes:
-
-| Field                  | Required | Description                                                                                                              |
-| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `alias`                | Yes      | Unique name for referencing this connector from caller `connections` lists                                               |
-| `allowedEndpoints`     | Yes      | Array of glob patterns for allowed URLs (e.g., `https://api.example.com/**`)                                             |
-| `name`                 | No       | Human-readable name (e.g., `"Internal Admin API"`)                                                                       |
-| `description`          | No       | Short description of what the connector provides                                                                         |
-| `docsUrl`              | No       | URL to API documentation                                                                                                 |
-| `openApiUrl`           | No       | URL to OpenAPI/Swagger spec                                                                                              |
-| `headers`              | No       | Headers to auto-inject. Values may contain `${VAR}` placeholders resolved from `secrets`                                 |
-| `secrets`              | No       | Key-value pairs. Values can be literal strings or `${ENV_VAR}` references resolved from environment variables at startup |
-| `resolveSecretsInBody` | No       | Whether to resolve `${VAR}` placeholders in request bodies. Default: `false`                                             |
-
-#### Caller Definition
-
-| Field               | Required | Description                                                                                                                                       |
-| ------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `peerKeyDir`        | Yes      | Path to this caller's public key files (`signing.pub.pem` + `exchange.pub.pem`)                                                                   |
-| `connections`       | Yes      | Array of connection names — references built-in templates (e.g., `"github"`) or custom connector aliases                                          |
-| `name`              | No       | Human-readable name for audit logs                                                                                                                |
-| `env`               | No       | Per-caller environment variable overrides (see [env overrides example](#example-per-caller-env-overrides-shared-connector-different-credentials)) |
-| `ingestorOverrides` | No       | Per-caller ingestor config overrides keyed by connection alias. Override event filters, buffer sizes, intents, or disable ingestors entirely. See **[INGESTORS.md](INGESTORS.md#caller-level-ingestor-overrides)** for full reference |
-
-#### How Secrets Work
-
-Secret values in the `secrets` map are resolved at session establishment time (per-caller):
-
-- **Literal values** — used as-is: `"API_TOKEN": "sk_live_abc123"`
-- **Environment variable references** — resolved from the server's environment: `"API_TOKEN": "${API_TOKEN}"`
-- **Per-caller overrides** — when a caller has an `env` entry for a variable name, that value is used instead of `process.env`
-
-Header values can reference secrets using `${VAR}` placeholders:
-
-```json
-"headers": {
-  "Authorization": "Bearer ${API_TOKEN}"
-}
-```
-
-The placeholder `${API_TOKEN}` is resolved against the route's resolved `secrets` map. This means the actual secret value is never exposed to the local proxy or Claude Code — it only exists on the remote server.
-
-#### Connections (Pre-built Route Templates)
-
-Instead of manually configuring connectors for popular APIs, you can use **connections** — pre-built route templates that ship with the package (`github`, `stripe`, `openai`, etc.). Reference them by name in a caller's `connections` list:
-
-```json
-{
-  "callers": {
-    "my-laptop": {
-      "peerKeyDir": "/keys/peers/my-laptop",
-      "connections": ["github", "stripe"]
-    }
-  }
-}
-```
-
-Set the required environment variables (e.g., `GITHUB_TOKEN`, `STRIPE_SECRET_KEY`) and the connection templates handle endpoint patterns, auth headers, docs URLs, and OpenAPI specs automatically. Custom connectors with a matching `alias` take precedence over built-in templates.
-
-See **[CONNECTIONS.md](CONNECTIONS.md)** for the full list of available connections, required environment variables, and usage examples.
-
-#### Step 5: Create an Environment File
-
-Create a `.env` file in your config directory with your API secrets:
-
-```bash
-cat > ~/.drawlatch/.env << 'EOF'
-# Uncomment and set tokens for your enabled connections
-# GITHUB_TOKEN=ghp_your_token_here
-# DISCORD_BOT_TOKEN=your_bot_token_here
-# STRIPE_SECRET_KEY=sk_your_key_here
-EOF
-```
-
-The remote server reads this file at startup. Use `drawlatch config` to check which secrets are set.
-
-#### Step 6: Start the Servers
-
-**Start the remote server:**
-
-```bash
-# Using the drawlatch CLI (recommended — runs as a background daemon)
-drawlatch start
-
-# Or for development (with hot reload via tsx)
-npm run dev:remote
-
-# Or production without the daemon (requires `npm run build` first)
-npm run start:remote
-```
-
-Verify it's running:
-
-```bash
-drawlatch status    # Check PID, uptime, health
-drawlatch doctor    # Validate full setup
-```
-
-**Connect the local MCP proxy to Claude Code:**
-
-The repo includes a `.mcp.json` at the root, so Claude Code auto-discovers the proxy when you open the project directory. Just approve the server when prompted — no manual registration needed. The proxy uses `~/.drawlatch/` by default.
-
-**Alternative: manual registration**
-
-If you prefer not to use auto-discovery, register the MCP server directly:
-
-```bash
-claude mcp add secure-proxy \
-  --transport stdio --scope local \
-  -- node /absolute/path/to/drawlatch/dist/mcp/server.js
-```
-
-After connecting (either via auto-discovery or manual registration), the proxy will automatically perform the encrypted handshake with the remote server on first use.
-
-#### Step 7: Webhook Endpoints (Optional)
-
-If any of your connections use webhook ingestors (e.g., GitHub, Stripe, Trello), the remote server automatically exposes `POST /webhooks/:path` routes on the same port. External services send webhook POSTs to these endpoints, and the server verifies signatures, buffers events in per-caller ring buffers, and makes them available via `poll_events`.
-
-**Setup:**
-
-1. The remote server must be **publicly accessible** for webhook delivery (or behind a tunnel like [ngrok](https://ngrok.com/) or [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/))
-2. Point the external service's webhook URL to `https://<your-server>/webhooks/<path>` (e.g., `https://example.com/webhooks/github`)
-3. Set the webhook signing secret as an environment variable on the remote server (e.g., `GITHUB_WEBHOOK_SECRET`, `STRIPE_WEBHOOK_SECRET`)
-
-The webhook path is configured in each connection template's `ingestor.webhook.path` field. See **[INGESTORS.md](INGESTORS.md)** for full details on webhook, WebSocket, and poll ingestors.
+Key alias resolution order: `MCP_KEY_ALIAS` env var > `localKeyAlias` > `localKeysDir` > `keys/local/default`.
 
 ### Advanced Configuration
 
 #### `MCP_CONFIG_DIR`
 
-By default, all config and key files live in `~/.drawlatch/`. You can override this by setting the `MCP_CONFIG_DIR` environment variable before launching the proxy or server:
+By default, all config and key files live in `~/.drawlatch/`. Override with:
 
 ```bash
 export MCP_CONFIG_DIR=/custom/path/to/config
 ```
 
-This is useful for non-standard deployments, CI environments, or running multiple independent setups on the same machine.
+Useful for CI environments or running multiple independent setups on the same machine.
 
-#### Multiple Agents (Multi-Identity)
+## Connections
 
-When multiple agents share the same machine, each needs its own key identity. Generate a keypair per agent:
+22 pre-built connection templates ship with drawlatch. Reference them by name in a caller's `connections` list:
 
-```bash
-npm run generate-keys -- local alice
-npm run generate-keys -- local bob
+| Connection | API | Required Env Var(s) |
+|------------|-----|---------------------|
+| `anthropic` | Anthropic Claude API | `ANTHROPIC_API_KEY` |
+| `bluesky` | Bluesky (AT Protocol) | `BLUESKY_ACCESS_TOKEN` |
+| `devin` | Devin AI API | `DEVIN_API_KEY` |
+| `discord-bot` | Discord Bot API | `DISCORD_BOT_TOKEN` |
+| `discord-oauth` | Discord OAuth2 API | `DISCORD_OAUTH_TOKEN` |
+| `github` | GitHub REST API | `GITHUB_TOKEN` |
+| `google` | Google Workspace APIs | `GOOGLE_API_TOKEN` |
+| `google-ai` | Google AI (Gemini) | `GOOGLE_AI_API_KEY` |
+| `hex` | Hex API | `HEX_TOKEN` |
+| `lichess` | Lichess API | `LICHESS_API_TOKEN` |
+| `linear` | Linear GraphQL API | `LINEAR_API_KEY` |
+| `mastodon` | Mastodon API | `MASTODON_ACCESS_TOKEN` |
+| `notion` | Notion API | `NOTION_API_KEY` |
+| `openai` | OpenAI API | `OPENAI_API_KEY` |
+| `openrouter` | OpenRouter API | `OPENROUTER_API_KEY` |
+| `reddit` | Reddit API | `REDDIT_ACCESS_TOKEN` |
+| `slack` | Slack Web API | `SLACK_BOT_TOKEN` |
+| `stripe` | Stripe Payments API | `STRIPE_SECRET_KEY` |
+| `telegram` | Telegram Bot API | `TELEGRAM_BOT_TOKEN` |
+| `trello` | Trello API | `TRELLO_API_KEY`, `TRELLO_TOKEN` |
+| `twitch` | Twitch Helix API | `TWITCH_ACCESS_TOKEN`, `TWITCH_CLIENT_ID` |
+| `x` | X (Twitter) API v2 | `X_BEARER_TOKEN` |
+
+See **[CONNECTIONS.md](CONNECTIONS.md)** for auth details, optional env vars, and usage notes per connection.
+
+## Event Ingestion
+
+Drawlatch can collect real-time events from external services and buffer them for agents to poll. Three ingestor types are supported:
+
+| Type | How It Works | Connections |
+|------|-------------|-------------|
+| **WebSocket** | Persistent connections to event gateways | Discord Gateway, Slack Socket Mode |
+| **Webhook** | HTTP receivers with signature verification | GitHub, Stripe, Trello |
+| **Poll** | Interval-based HTTP requests | Notion, Linear, Reddit, X, Bluesky, Mastodon, Telegram, Twitch |
+
+Events are stored in per-caller ring buffers (default 200, max 1000) with monotonic IDs for cursor-based pagination. Agents retrieve events via `poll_events` and check status via `ingestor_status`.
+
+For webhook ingestors, the remote server must be publicly accessible (or behind a tunnel). Use `drawlatch start --tunnel` to automatically start a Cloudflare tunnel.
+
+See **[INGESTORS.md](INGESTORS.md)** for full configuration reference.
+
+## Key Exchange
+
+Remote mode requires mutual authentication via Ed25519/X25519 keypairs. Each identity gets four PEM files (signing + exchange, public + private). The `drawlatch init` command handles this automatically for single-machine setups.
+
+For multi-machine setups, exchange public keys manually:
+
+**Directory structure:**
+
+```
+~/.drawlatch/keys/
+├── local/my-laptop/       # MCP proxy keypair
+├── remote/                # Remote server keypair
+└── peers/
+    ├── my-laptop/         # Proxy's public keys (on the server)
+    └── remote-server/     # Server's public keys (on the proxy)
 ```
 
-Each agent's MCP server config specifies its alias via the `MCP_KEY_ALIAS` env var:
+**Exchange public keys** (`.pub.pem` only — never share private keys):
+
+```bash
+# Proxy's public keys → server's peers directory
+cp keys/local/my-laptop/signing.pub.pem   keys/peers/my-laptop/signing.pub.pem
+cp keys/local/my-laptop/exchange.pub.pem  keys/peers/my-laptop/exchange.pub.pem
+
+# Server's public keys → proxy's peers directory
+cp keys/remote/signing.pub.pem   keys/peers/remote-server/signing.pub.pem
+cp keys/remote/exchange.pub.pem  keys/peers/remote-server/exchange.pub.pem
+```
+
+If the proxy and server are on different machines, transfer only `*.pub.pem` files via `scp` or similar.
+
+### Multiple Agent Identities
+
+Generate a keypair per agent and set `MCP_KEY_ALIAS` at spawn time:
+
+```bash
+drawlatch generate-keys local alice
+drawlatch generate-keys local bob
+```
 
 ```json
 {
   "mcpServers": {
-    "secure-proxy": {
+    "drawlatch": {
       "command": "node",
       "args": ["dist/mcp/server.js"],
-      "env": {
-        "MCP_CONFIG_DIR": "~/.drawlatch",
-        "MCP_KEY_ALIAS": "alice"
-      }
+      "env": { "MCP_CONFIG_DIR": "~/.drawlatch", "MCP_KEY_ALIAS": "alice" }
     }
   }
 }
 ```
 
-The proxy auto-resolves `MCP_KEY_ALIAS=alice` to `keys/local/alice/`. On the remote server, register each agent as a separate caller with matching alias directories under `keys/peers/`.
+Register each agent as a separate caller on the remote server with matching peer key directories.
 
-## MCP Tools
-
-Once connected, Claude Code gets access to four tools:
-
-### `secure_request`
-
-Make an authenticated HTTP request through the proxy. Route-level headers (e.g., `Authorization`) are injected automatically — the agent never sees the secret values.
+## CLI Reference
 
 ```
-method: GET | POST | PUT | PATCH | DELETE
-url: Full URL (may contain ${VAR} placeholders)
-headers: Optional additional headers
-body: Optional request body
+drawlatch [command] [options]
+
+Commands:
+  init               Set up drawlatch (keys, config, .env) in one step
+  start              Start the remote server (background daemon)
+  stop               Stop the remote server
+  restart            Restart the remote server
+  status             Show server status (PID, port, uptime, health, sessions)
+  logs               View server logs
+  config             Show effective configuration and secret status
+  doctor             Validate setup and diagnose issues
+  generate-keys      Generate Ed25519 + X25519 keypairs
+
+Options:
+  -h, --help         Show help
+  -v, --version      Show version
+
+Init options:
+  --connections <list>  Comma-separated connections to enable (e.g., github,slack)
+  --alias <name>        Caller alias (default: "default")
+
+Start options:
+  -f, --foreground   Run in foreground
+  -t, --tunnel       Start a Cloudflare tunnel for webhooks
+  --port <number>    Override configured port
+  --host <address>   Override configured host
+
+Logs options:
+  -n, --lines <num>  Number of lines (default: 50)
+  --follow           Tail the log output
+
+Generate-keys subcommands:
+  local [alias]      Generate local proxy keypair (default alias: "default")
+  remote             Generate remote server keypair
+  show <path>        Show fingerprint of existing keypair
+  --dir <path>       Generate to custom directory
 ```
-
-### `list_routes`
-
-List all available routes for the current caller. Returns metadata (name, description, docs link), allowed endpoint patterns, available secret placeholder names (not values), and auto-injected header names. Different callers may see different routes based on their `connections` configuration.
-
-### `poll_events`
-
-Poll for new events from ingestors (Discord messages, GitHub webhooks, Notion updates, etc.). Returns events received since the given cursor.
-
-```
-connection: Optional — filter by connection alias (e.g., "discord-bot"), omit for all
-after_id: Optional — cursor; returns events with id > after_id
-```
-
-Pass `after_id` from the last event you received to get only new events. Omit to get all buffered events. See **[INGESTORS.md](INGESTORS.md)** for details on configuring event sources.
-
-### `ingestor_status`
-
-Get the status of all active ingestors for the current caller. Returns connection state, buffer sizes, event counts, and any errors. Takes no parameters.
 
 ## Library Usage (Local Mode)
 
-Drawlatch can be imported as a library for in-process use — no separate server, no encryption overhead. The `package.json` exports map provides clean entry points:
-
-```typescript
-// Core request execution (same function the remote server uses)
-import { executeProxyRequest } from "drawlatch/remote/server";
-
-// Config loading and route resolution
-import {
-  loadRemoteConfig,
-  resolveCallerRoutes,
-  resolveRoutes,
-  resolveSecrets,
-} from "drawlatch/shared/config";
-
-// Ingestor management (WebSocket, webhook, poll)
-import { IngestorManager } from "drawlatch/remote/ingestors";
-
-// Crypto primitives (if building custom transport)
-import { loadKeyBundle, loadPublicKeys, EncryptedChannel } from "drawlatch/shared/crypto";
-```
-
-### Available Exports
-
-| Export Path                  | Description                                                        |
-| ---------------------------- | ------------------------------------------------------------------ |
-| `drawlatch`                  | MCP proxy server (stdio transport) — the default entry point       |
-| `drawlatch/remote/server`    | Remote server functions including `executeProxyRequest()`          |
-| `drawlatch/remote/ingestors` | `IngestorManager` and all ingestor types                           |
-| `drawlatch/shared/config`    | Config loading, caller/route resolution, secret resolution         |
-| `drawlatch/shared/connections`| Connection template loading                                       |
-| `drawlatch/shared/crypto`    | Key generation, encrypted channel, key serialization               |
-| `drawlatch/shared/protocol`  | Handshake protocol, message types                                  |
-
-### Example: In-Process Proxy
+Import drawlatch directly for in-process use — no server, no encryption:
 
 ```typescript
 import { loadRemoteConfig, resolveCallerRoutes, resolveRoutes, resolveSecrets } from "drawlatch/shared/config";
 import { executeProxyRequest } from "drawlatch/remote/server";
 
-// Load config and resolve routes for a specific caller
 const config = loadRemoteConfig();
 const callerRoutes = resolveCallerRoutes(config, "my-laptop");
 const callerEnv = resolveSecrets(config.callers["my-laptop"]?.env ?? {});
 const routes = resolveRoutes(callerRoutes, callerEnv);
 
-// Make a request — same function the remote server uses
 const result = await executeProxyRequest(
   { method: "GET", url: "https://api.github.com/user" },
   routes,
 );
 ```
 
-> **Note:** In local mode, secrets are resolved from `process.env` on the same machine. The encryption layer is not used. See [How It Works → Local Mode](#local-mode-in-process-library) for the security tradeoff.
+### Available Exports
 
-## Development
-
-```bash
-# Run tests
-npm test
-
-# Run tests in watch mode
-npm run test:watch
-
-# Run tests with coverage
-npm run test:coverage
-
-# Lint
-npm run lint
-npm run lint:fix
-
-# Format
-npm run format
-npm run format:check
-```
-
-## Architecture
-
-### Plugin Structure
-
-This repo is structured as a Claude Code plugin:
-
-```
-drawlatch/
-├── .claude-plugin/              # Plugin metadata
-│   ├── plugin.json              # Plugin manifest (name, version, description)
-│   └── marketplace.json         # Marketplace catalog for distribution
-├── .mcp.json                    # MCP server config (used by plugin system + auto-discovery)
-├── dist/                        # Compiled JavaScript (built via `npm run build` or `prepare`)
-│   └── mcp/server.js            # MCP proxy entrypoint
-└── src/                         # TypeScript source
-```
-
-### Source Code
-
-```
-src/
-├── cli/                        # Key generation CLI
-│   └── generate-keys.ts        # Ed25519 + X25519 keypair generation
-├── connections/                 # Pre-built route templates (JSON)
-│   ├── github.json             # GitHub REST API
-│   ├── stripe.json             # Stripe Payments API
-│   └── ...                     # 22 templates total
-├── mcp/
-│   └── server.ts               # Local MCP proxy server (stdio transport)
-├── remote/
-│   ├── server.ts               # Remote secure server (Express HTTP)
-│   ├── server.test.ts          # Unit tests
-│   ├── server.e2e.test.ts      # End-to-end tests
-│   └── ingestors/              # Real-time event ingestion system
-│       ├── base-ingestor.ts    # Abstract base class (state machine, ring buffer)
-│       ├── ring-buffer.ts      # Generic bounded circular buffer
-│       ├── manager.ts          # Lifecycle management, per-caller routing
-│       ├── registry.ts         # Factory registry for ingestor types
-│       ├── types.ts            # Shared types and config interfaces
-│       ├── discord/            # Discord Gateway WebSocket (v10)
-│       ├── slack/              # Slack Socket Mode WebSocket
-│       ├── webhook/            # Webhook receivers (GitHub, Stripe, Trello)
-│       └── poll/               # Interval-based HTTP polling (Notion, Linear, etc.)
-└── shared/
-    ├── config.ts               # Config loading/saving, caller & route resolution
-    ├── connections.ts           # Connection template loading
-    ├── logger.ts               # Structured logging
-    ├── crypto/
-    │   ├── keys.ts             # Ed25519 + X25519 key generation/serialization
-    │   ├── channel.ts          # AES-256-GCM encrypted channel
-    │   └── index.ts            # Re-exports
-    └── protocol/
-        ├── handshake.ts        # Mutual auth (Noise NK-inspired)
-        ├── messages.ts         # Application-layer message types
-        └── index.ts            # Re-exports
-```
+| Export Path | Description |
+|-------------|-------------|
+| `drawlatch` | MCP proxy server (stdio transport) |
+| `drawlatch/remote/server` | `executeProxyRequest()` and server functions |
+| `drawlatch/remote/ingestors` | `IngestorManager` and ingestor types |
+| `drawlatch/shared/config` | Config loading, route/secret resolution |
+| `drawlatch/shared/connections` | Connection template loading |
+| `drawlatch/shared/env-utils` | Environment variable and secret utilities |
+| `drawlatch/shared/crypto` | Key generation, encrypted channel |
+| `drawlatch/shared/protocol` | Handshake protocol, message types |
 
 ## Security Model
 
 ### Both Modes
 
-These protections apply regardless of whether you use remote or local mode:
-
-- **Per-caller access control** — each caller only sees and can use the connections explicitly assigned to them
-- **Per-caller credential isolation** — callers sharing the same connector can have different credentials via `env` overrides
-- **Endpoint allowlisting** — requests are only proxied to explicitly configured URL patterns
-- **Rate limiting** — configurable per-session request rate limiting (default: 60/min)
-- **Audit logging** — all operations are logged with caller identity, session ID, and timestamps
+- **Endpoint allowlisting** — requests only proxied to explicitly configured URL patterns
+- **Per-caller access control** — each caller only sees their assigned connections
+- **Per-caller credential isolation** — same connector, different credentials via `env` overrides
+- **Rate limiting** — configurable per-session (default: 60/min)
+- **Audit logging** — all operations logged with caller identity, session ID, timestamps
 
 ### Remote Mode Only
 
-These additional protections apply when running the two-component remote architecture:
+- **Zero secrets on the client** — the MCP proxy never sees API keys or tokens
+- **Mutual authentication** — Ed25519 signatures before any data exchange
+- **End-to-end encryption** — AES-256-GCM with X25519 ECDH session keys
+- **Replay protection** — monotonic counters on all encrypted messages
+- **Session isolation** — unique session keys per handshake, 30-minute TTL
+- **File permissions** — private keys `0600`, key directories `0700`
 
-- **Zero secrets on the client** — the local MCP proxy never sees API keys or tokens
-- **Mutual authentication** — both sides prove their identity using Ed25519 signatures before any data is exchanged
-- **End-to-end encryption** — all requests/responses are encrypted with AES-256-GCM session keys derived via X25519 ECDH
-- **Replay protection** — monotonic counters prevent replay attacks
-- **Session isolation** — each handshake produces unique session keys with a 30-minute TTL
-- **File permissions** — private keys are saved with `0600`, directories with `0700`
+## Development
 
-### Local Mode Caveat
+```bash
+npm test                  # Run tests
+npm run test:watch        # Watch mode
+npm run test:coverage     # Coverage report
+npm run lint              # Lint
+npm run format            # Format
 
-When using Drawlatch as an in-process library (local mode), secrets are resolved from `process.env` on the same machine as the agent. The encryption and mutual authentication layers are not used. The security value in local mode comes from **structured access control** (endpoint allowlisting, per-caller route isolation) rather than cryptographic secret isolation.
+npm run dev:remote        # Remote server with hot reload
+npm run dev:mcp           # MCP proxy with hot reload
+```
+
+### Source Structure
+
+```
+src/
+├── cli/                     # Key generation CLI
+├── connections/             # 22 pre-built route templates (JSON)
+├── mcp/server.ts            # Local MCP proxy (stdio transport)
+├── remote/
+│   ├── server.ts            # Remote secure server (Express)
+│   └── ingestors/           # Event ingestion system
+│       ├── discord/         # Discord Gateway WebSocket
+│       ├── slack/           # Slack Socket Mode WebSocket
+│       ├── webhook/         # GitHub, Stripe, Trello webhooks
+│       └── poll/            # Interval-based HTTP polling
+└── shared/
+    ├── config.ts            # Config loading, route resolution
+    ├── connections.ts       # Connection template loading
+    ├── env-utils.ts         # Environment variable utilities
+    ├── crypto/              # Ed25519/X25519 keys, AES-256-GCM channel
+    └── protocol/            # Handshake, message types
+```
 
 ## License
 
