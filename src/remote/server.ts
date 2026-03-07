@@ -16,6 +16,7 @@
 import dotenv from 'dotenv';
 import express from 'express';
 import fs from 'node:fs';
+import path from 'node:path';
 
 import {
   loadRemoteConfig,
@@ -44,6 +45,21 @@ import {
   type ProxyRequest,
   type ProxyResponse,
 } from '../shared/protocol/index.js';
+import {
+  decryptSyncPayload,
+  encryptSyncPayload,
+  validateSyncRequest,
+  isSyncSessionActive,
+  type SyncSession,
+  type SyncRequest,
+  type SyncResponse,
+} from '../shared/protocol/sync.js';
+import {
+  importPeerPublicKeys,
+  exportPublicKeys,
+  peerFingerprint,
+} from '../shared/crypto/key-manager.js';
+import { getPeerKeysDir } from '../shared/config.js';
 import { IngestorManager } from './ingestors/index.js';
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller, setCallerSecrets } from '../shared/env-utils.js';
@@ -107,6 +123,9 @@ const sessions = new Map<string, Session>();
 const pendingHandshakes = new Map<string, PendingHandshake>();
 
 let rateLimitPerMinute = 60;
+
+/** Active sync session (at most one at a time). */
+let activeSyncSession: SyncSession | null = null;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -1317,6 +1336,11 @@ export function createApp(options: CreateAppOptions = {}) {
   // Raw buffer for encrypted request endpoint (50 MB to accommodate base64-encoded file uploads)
   app.use('/request', express.raw({ type: 'application/octet-stream', limit: '50mb' }));
 
+  // Plain text for sync endpoint (AES-encrypted base64 body)
+  app.use('/sync', express.text({ type: 'text/plain', limit: '64kb' }));
+  // JSON for sync management endpoints
+  app.use('/sync/listen', express.json());
+
   // Raw buffer for webhook endpoints (needed for signature verification)
   app.use('/webhooks', express.raw({ type: 'application/json', limit: '1mb' }));
 
@@ -1550,6 +1574,155 @@ export function createApp(options: CreateAppOptions = {}) {
         res.status(500).send('Session error');
       }
     }
+  });
+
+  // ── Sync: key exchange endpoints ───────────────────────────────────────
+
+  // Internal management: open a sync session (called by drawlatch CLI)
+  app.post('/sync/listen', (req, res) => {
+    const { inviteCode, confirmCode, encryptionKey, ttlMs } = req.body;
+
+    if (!inviteCode || !encryptionKey) {
+      res.status(400).json({ error: 'Missing inviteCode or encryptionKey' });
+      return;
+    }
+
+    if (activeSyncSession && isSyncSessionActive(activeSyncSession)) {
+      res.status(409).json({ error: 'A sync session is already active' });
+      return;
+    }
+
+    activeSyncSession = {
+      inviteCode,
+      confirmCode: confirmCode ?? null,
+      encryptionKey,
+      createdAt: Date.now(),
+      ttlMs: ttlMs ?? 5 * 60 * 1000,
+      completed: false,
+    };
+
+    console.log('[sync] Sync session opened, waiting for callboard...');
+    res.json({ ok: true });
+  });
+
+  // Internal management: check sync session status (polled by CLI)
+  app.get('/sync/status', (_req, res) => {
+    if (!activeSyncSession) {
+      res.json({ active: false, completed: false });
+      return;
+    }
+
+    const active = isSyncSessionActive(activeSyncSession);
+    res.json({
+      active,
+      completed: activeSyncSession.completed,
+      ...(activeSyncSession.result && {
+        callerAlias: activeSyncSession.result.callerAlias,
+        fingerprint: activeSyncSession.result.fingerprint,
+      }),
+    });
+  });
+
+  // External: called by callboard to exchange keys (encrypted body)
+  app.post('/sync', (req, res) => {
+    // Refuse all sync calls unless actively listening
+    if (!activeSyncSession || !isSyncSessionActive(activeSyncSession)) {
+      res.status(404).json({ error: 'NO_ACTIVE_SESSION' });
+      return;
+    }
+
+    const session = activeSyncSession;
+
+    // Decrypt the request body
+    let decrypted: unknown;
+    try {
+      decrypted = decryptSyncPayload(req.body as string, session.encryptionKey);
+    } catch {
+      res.status(400).json({ error: 'DECRYPTION_FAILED' });
+      return;
+    }
+
+    // Validate payload shape
+    const validationError = validateSyncRequest(decrypted);
+    if (validationError) {
+      res.status(400).json({ error: 'INVALID_PAYLOAD', detail: validationError });
+      return;
+    }
+
+    const syncReq = decrypted as SyncRequest;
+
+    // Validate invite code
+    if (syncReq.inviteCode !== session.inviteCode) {
+      res.status(403).json({ error: 'CODE_MISMATCH' });
+      return;
+    }
+
+    // Validate confirm code (must be set by CLI before callboard calls)
+    if (!session.confirmCode) {
+      res.status(403).json({ error: 'CODE_MISMATCH', detail: 'Confirm code not yet entered' });
+      return;
+    }
+    if (syncReq.confirmCode !== session.confirmCode) {
+      res.status(403).json({ error: 'CODE_MISMATCH' });
+      return;
+    }
+
+    // Check expiry
+    if (Date.now() - session.createdAt > session.ttlMs) {
+      activeSyncSession = null;
+      res.status(410).json({ error: 'SESSION_EXPIRED' });
+      return;
+    }
+
+    // Save callboard's public keys as a peer
+    const callerAlias = syncReq.callerAlias;
+    try {
+      importPeerPublicKeys(callerAlias, syncReq.publicKeys);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(400).json({ error: 'INVALID_PAYLOAD', detail: `Invalid public keys: ${msg}` });
+      return;
+    }
+
+    // Register caller in config if not already present
+    const peerKeyDir = path.join(getPeerKeysDir(), callerAlias);
+    if (!(callerAlias in config.callers)) {
+      config.callers[callerAlias] = {
+        peerKeyDir,
+        connections: [],
+      };
+      saveRemoteConfig(config);
+      console.log(`[sync] Registered new caller "${callerAlias}" (0 connections — configure manually)`);
+    } else {
+      console.log(`[sync] Caller "${callerAlias}" already exists, updated peer keys`);
+    }
+
+    // Reload authorized peers so the new caller can connect immediately
+    const newPeer = loadCallerPeers({ [callerAlias]: config.callers[callerAlias] });
+    for (const p of newPeer) {
+      if (!authorizedPeers.find((existing) => existing.alias === p.alias)) {
+        authorizedPeers.push(p);
+      }
+    }
+
+    // Build response with remote server's public keys
+    const remotePublicKeys = exportPublicKeys('remote');
+    const fp = peerFingerprint(callerAlias);
+
+    const syncResponse: SyncResponse = {
+      remotePublicKeys,
+      callerAlias,
+      fingerprint: fp,
+    };
+
+    // Mark session as completed
+    session.completed = true;
+    session.result = { callerAlias, fingerprint: fp };
+
+    console.log(`[sync] Key exchange complete with "${callerAlias}" (fingerprint: ${fp})`);
+
+    const encryptedResponse = encryptSyncPayload(syncResponse, session.encryptionKey);
+    res.type('text/plain').send(encryptedResponse);
   });
 
   // ── Health check (unencrypted, no secrets exposed) ─────────────────────

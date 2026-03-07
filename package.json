@@ -43,6 +43,10 @@
       "types": "./dist/shared/env-utils.d.ts",
       "import": "./dist/shared/env-utils.js"
     },
+    "./shared/crypto/key-manager": {
+      "types": "./dist/shared/crypto/key-manager.d.ts",
+      "import": "./dist/shared/crypto/key-manager.js"
+    },
     "./remote/server": {
       "types": "./dist/remote/server.d.ts",
       "import": "./dist/remote/server.js"
