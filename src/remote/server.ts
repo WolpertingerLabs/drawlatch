@@ -25,6 +25,7 @@ import {
   resolveSecrets,
   resolvePlaceholders,
   getEnvFilePath,
+  getRemoteConfigPath,
   type RemoteServerConfig,
   type CallerConfig,
   type IngestorOverrides,
@@ -44,6 +45,8 @@ import {
   type ProxyResponse,
 } from '../shared/protocol/index.js';
 import { IngestorManager } from './ingestors/index.js';
+import { listConnectionTemplates } from '../shared/connections.js';
+import { isSecretSetForCaller, setCallerSecrets } from '../shared/env-utils.js';
 
 // ── Environment loading ─────────────────────────────────────────────────────
 
@@ -126,6 +129,14 @@ function loadCallerPeers(callers: Record<string, CallerConfig>): AuthorizedPeer[
       console.error(`[remote] Failed to load peer ${alias}:`, err);
     }
   }
+
+  if (peers.length === 0 && Object.keys(callers).length > 0) {
+    console.error(
+      '[remote] WARNING: No authorized peers loaded. No clients will be able to connect.',
+    );
+    console.error('[remote] Check peer key directories in remote.config.json.');
+  }
+
   return peers;
 }
 
@@ -353,9 +364,7 @@ export async function executeProxyRequest(
   } else {
     // ── Standard JSON/string body ──
     if (typeof body === 'string') {
-      fetchBody = matched.resolveSecretsInBody
-        ? resolvePlaceholders(body, matched.secrets)
-        : body;
+      fetchBody = matched.resolveSecretsInBody ? resolvePlaceholders(body, matched.secrets) : body;
     } else if (body !== null && body !== undefined) {
       const serialized = JSON.stringify(body);
       fetchBody = matched.resolveSecretsInBody
@@ -410,7 +419,7 @@ type ToolHandler = (
   input: Record<string, unknown>,
   routes: ResolvedRoute[],
   context: ToolContext,
-) => Promise<unknown>;
+) => Promise<unknown> | object;
 
 const toolHandlers: Record<string, ToolHandler> = {
   /**
@@ -1113,6 +1122,176 @@ const toolHandlers: Record<string, ToolHandler> = {
 
     return { success: true, connection, instance_id };
   },
+
+  // ── Config management tools ─────────────────────────────────────────────
+
+  /**
+   * List all available connection templates with caller-specific status.
+   * Returns template metadata, which ones the caller has enabled,
+   * and which secrets are configured.
+   */
+  list_connection_templates: (
+    _input: Record<string, unknown>,
+    _routes: ResolvedRoute[],
+    context: ToolContext,
+  ) => {
+    const config = loadRemoteConfig();
+    const caller = config.callers[context.callerAlias];
+    const enabledSet = new Set(caller.connections);
+
+    const templates = listConnectionTemplates();
+
+    return templates.map((t) => {
+      const callerEnv = caller.env;
+      const requiredSecretsSet: Record<string, boolean> = {};
+      for (const s of t.requiredSecrets) {
+        requiredSecretsSet[s] = isSecretSetForCaller(s, context.callerAlias, callerEnv);
+      }
+      const optionalSecretsSet: Record<string, boolean> = {};
+      for (const s of t.optionalSecrets) {
+        optionalSecretsSet[s] = isSecretSetForCaller(s, context.callerAlias, callerEnv);
+      }
+
+      return {
+        alias: t.alias,
+        name: t.name,
+        ...(t.description !== undefined && { description: t.description }),
+        ...(t.docsUrl !== undefined && { docsUrl: t.docsUrl }),
+        ...(t.openApiUrl !== undefined && { openApiUrl: t.openApiUrl }),
+        stability: t.stability,
+        category: t.category,
+        requiredSecrets: t.requiredSecrets,
+        optionalSecrets: t.optionalSecrets,
+        hasIngestor: t.hasIngestor,
+        ...(t.ingestorType !== undefined && { ingestorType: t.ingestorType }),
+        allowedEndpoints: t.allowedEndpoints,
+        enabled: enabledSet.has(t.alias),
+        requiredSecretsSet,
+        optionalSecretsSet,
+      };
+    });
+  },
+
+  /**
+   * Enable or disable a connection for the authenticated caller.
+   */
+  set_connection_enabled: async (
+    input: Record<string, unknown>,
+    _routes: ResolvedRoute[],
+    context: ToolContext,
+  ) => {
+    const connection = input.connection as string;
+    const enabled = input.enabled as boolean;
+
+    if (!connection || typeof enabled !== 'boolean') {
+      throw new Error('Required: connection (string) and enabled (boolean)');
+    }
+
+    const config = loadRemoteConfig();
+    const caller = config.callers[context.callerAlias];
+
+    // Verify the connection template exists (built-in or custom connector)
+    const connectorAliases = new Set((config.connectors ?? []).map((c) => c.alias).filter(Boolean));
+    const templateAliases = new Set(listConnectionTemplates().map((t) => t.alias));
+    if (!connectorAliases.has(connection) && !templateAliases.has(connection)) {
+      throw new Error(`Unknown connection: ${connection}`);
+    }
+
+    const connectionSet = new Set(caller.connections);
+
+    if (enabled) {
+      connectionSet.add(connection);
+    } else {
+      connectionSet.delete(connection);
+
+      // Stop any running ingestors for this connection
+      const ingestorManager = context.ingestorManager;
+      try {
+        await ingestorManager.stopOne(context.callerAlias, connection);
+      } catch {
+        // Ingestor may not be running — that's fine
+      }
+    }
+
+    caller.connections = [...connectionSet];
+    saveRemoteConfig(config);
+
+    // Re-resolve routes for this caller and update the session
+    // (new routes will take effect on next request naturally via config reload)
+
+    return { success: true, connection, enabled };
+  },
+
+  /**
+   * Set or delete secrets for the authenticated caller.
+   * Uses prefixed env vars to prevent cross-caller collisions.
+   */
+  set_secrets: (
+    input: Record<string, unknown>,
+    _routes: ResolvedRoute[],
+    context: ToolContext,
+  ) => {
+    const secrets = input.secrets as Record<string, string> | undefined;
+
+    if (!secrets || typeof secrets !== 'object') {
+      throw new Error('Required: secrets (Record<string, string>)');
+    }
+
+    const config = loadRemoteConfig();
+
+    const { config: updatedConfig, status } = setCallerSecrets(
+      secrets,
+      context.callerAlias,
+      config,
+    );
+
+    saveRemoteConfig(updatedConfig);
+
+    return { success: true, secretsSet: status };
+  },
+
+  /**
+   * Check which secrets are set for the authenticated caller (never returns values).
+   */
+  get_secret_status: (
+    input: Record<string, unknown>,
+    _routes: ResolvedRoute[],
+    context: ToolContext,
+  ) => {
+    const connection = input.connection as string;
+
+    if (!connection) {
+      throw new Error('Required: connection (string)');
+    }
+
+    // Find the connection template
+    const templates = listConnectionTemplates();
+    const template = templates.find((t) => t.alias === connection);
+    if (!template) {
+      throw new Error(`Unknown connection: ${connection}`);
+    }
+
+    const config = loadRemoteConfig();
+    const caller = config.callers[context.callerAlias];
+    const callerEnv = caller.env;
+
+    const requiredSecretsSet: Record<string, boolean> = {};
+    for (const s of template.requiredSecrets) {
+      requiredSecretsSet[s] = isSecretSetForCaller(s, context.callerAlias, callerEnv);
+    }
+
+    const optionalSecretsSet: Record<string, boolean> = {};
+    for (const s of template.optionalSecrets) {
+      optionalSecretsSet[s] = isSecretSetForCaller(s, context.callerAlias, callerEnv);
+    }
+
+    return {
+      success: true,
+      connection,
+      requiredSecretsSet,
+      optionalSecretsSet,
+    };
+  },
 };
 
 // ── Express app ────────────────────────────────────────────────────────────
@@ -1160,6 +1339,34 @@ export function createApp(options: CreateAppOptions = {}) {
   }
   console.log(`[remote] ${authorizedPeers.length} authorized peer(s)`);
   console.log(`[remote] Rate limit: ${rateLimitPerMinute} req/min per session`);
+
+  // Boot-time connection health table: check required secrets for each caller's connections
+  const templates = listConnectionTemplates();
+  const templateMap = new Map(templates.map((t) => [t.alias, t]));
+
+  for (const [callerAlias, caller] of Object.entries(config.callers)) {
+    const secretIssues: string[] = [];
+
+    for (const connName of caller.connections) {
+      const tpl = templateMap.get(connName);
+      if (!tpl) continue; // custom connector, skip
+
+      for (const secret of tpl.requiredSecrets) {
+        const isSet = isSecretSetForCaller(secret, callerAlias, caller.env);
+        if (!isSet) {
+          secretIssues.push(`    ${connName.padEnd(16)} ${secret.padEnd(28)} [NOT SET]`);
+        }
+      }
+    }
+
+    if (secretIssues.length > 0) {
+      console.log(`[remote] Connection secrets for "${callerAlias}":`);
+      for (const issue of secretIssues) {
+        console.log(issue);
+      }
+      console.log(`[remote] Set missing secrets in ${getEnvFilePath()}`);
+    }
+  }
 
   // ── Handshake init ─────────────────────────────────────────────────────
 
@@ -1417,7 +1624,27 @@ export function createApp(options: CreateAppOptions = {}) {
 // ── Start ──────────────────────────────────────────────────────────────────
 
 export function main(): void {
+  // Pre-flight validation: check for common setup issues before starting
+  const remoteConfigPath = getRemoteConfigPath();
+  if (!fs.existsSync(remoteConfigPath)) {
+    console.error(`[remote] Error: No remote config found at ${remoteConfigPath}`);
+    console.error('[remote] Run: drawlatch init');
+    process.exit(1);
+  }
+
   const config = loadRemoteConfig();
+
+  if (!fs.existsSync(config.localKeysDir)) {
+    console.error(`[remote] Error: Remote server keys not found at ${config.localKeysDir}`);
+    console.error('[remote] Run: drawlatch generate-keys remote');
+    process.exit(1);
+  }
+
+  if (Object.keys(config.callers).length === 0) {
+    console.error('[remote] Warning: No callers configured. No clients will be able to connect.');
+    console.error('[remote] Add callers to remote.config.json or run: drawlatch init');
+  }
+
   const port = process.env.DRAWLATCH_PORT ? parseInt(process.env.DRAWLATCH_PORT, 10) : config.port;
   const host = process.env.DRAWLATCH_HOST ?? config.host;
   const useTunnel = process.env.DRAWLATCH_TUNNEL === '1';

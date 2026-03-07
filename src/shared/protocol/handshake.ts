@@ -35,6 +35,7 @@ import {
   type KeyBundle,
   type PublicKeyBundle,
   deriveSessionKeys,
+  fingerprint,
   EncryptedChannel,
   type SessionKeys,
 } from '../crypto/index.js';
@@ -227,6 +228,21 @@ export class HandshakeResponder {
     });
 
     if (!authorized) {
+      // Log fingerprints for diagnosis
+      const initiatorFp = crypto
+        .createHash('sha256')
+        .update(initiatorSigningKey.export({ type: 'spki', format: 'der' }))
+        .digest();
+      const fpStr = Array.from(initiatorFp.subarray(0, 16))
+        .map((b: number) => b.toString(16).padStart(2, '0'))
+        .join(':');
+      console.error(
+        `[handshake] Rejected: no authorized peer matches signing key fingerprint ${fpStr}`,
+      );
+      console.error('[handshake] Authorized peer fingerprints:');
+      for (const ak of this.authorizedKeys) {
+        console.error(`[handshake]   ${fingerprint(ak)}`);
+      }
       throw new Error('Handshake failed: initiator not authorized');
     }
 

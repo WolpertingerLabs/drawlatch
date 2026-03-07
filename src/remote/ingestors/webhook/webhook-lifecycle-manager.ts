@@ -30,7 +30,7 @@ function resolveDeep(value: unknown, secrets: Record<string, string>): unknown {
     return resolvePlaceholders(value, secrets);
   }
   if (Array.isArray(value)) {
-    return value.map(item => resolveDeep(item, secrets));
+    return value.map((item) => resolveDeep(item, secrets));
   }
   if (value !== null && typeof value === 'object') {
     const result: Record<string, unknown> = {};
@@ -80,10 +80,7 @@ export class WebhookLifecycleManager {
    * Graceful degradation: if `list` fails, attempts direct `register`.
    * All errors are caught and returned in the state object.
    */
-  async ensureRegistered(
-    callbackUrl: string,
-    modelId?: string,
-  ): Promise<WebhookRegistrationState> {
+  async ensureRegistered(callbackUrl: string, modelId?: string): Promise<WebhookRegistrationState> {
     const now = new Date().toISOString();
 
     try {
@@ -103,7 +100,7 @@ export class WebhookLifecycleManager {
         const listConfig = this.config.list;
 
         // Find a webhook matching our callback URL (and model ID if applicable)
-        const matching = existingWebhooks.find(wh => {
+        const matching = existingWebhooks.find((wh) => {
           const rawUrl = wh[listConfig.callbackUrlField];
           const whCallbackUrl = typeof rawUrl === 'string' ? rawUrl : '';
           const urlMatch = whCallbackUrl === callbackUrl;
@@ -124,7 +121,7 @@ export class WebhookLifecycleManager {
 
         // Clean up stale webhooks (matching model but wrong callback URL)
         if (modelId && listConfig.modelIdField && this.config.unregister) {
-          const stale = existingWebhooks.filter(wh => {
+          const stale = existingWebhooks.filter((wh) => {
             const rawModelId = wh[listConfig.modelIdField!];
             const whModelId = typeof rawModelId === 'string' ? rawModelId : '';
             const rawUrl = wh[listConfig.callbackUrlField];
@@ -228,10 +225,7 @@ export class WebhookLifecycleManager {
   }
 
   /** Register a new webhook with the external service. */
-  private async register(
-    callbackUrl: string,
-    modelId?: string,
-  ): Promise<WebhookRegistrationState> {
+  private async register(callbackUrl: string, modelId?: string): Promise<WebhookRegistrationState> {
     const now = new Date().toISOString();
     const registerConfig = this.config.register!;
 

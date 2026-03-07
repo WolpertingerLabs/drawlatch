@@ -50,73 +50,48 @@ You still get config-driven route resolution, endpoint allowlisting, per-caller 
 
 ## Quick Start
 
-### Install
+Get from zero to working in three commands:
 
 ```bash
+# Install globally
 npm install -g @wolpertingerlabs/drawlatch
+
+# Set up keys, config, and .env in one step
+drawlatch init --connections github
+
+# Set your API token (edit the file or run this)
+echo "GITHUB_TOKEN=ghp_your_token_here" >> ~/.drawlatch/.env
+
+# Start the remote server
+drawlatch start
 ```
 
-Or clone and build from source:
+Verify your setup:
 
 ```bash
-git clone https://github.com/WolpertingerLabs/drawlatch.git
-cd drawlatch
-npm install
+drawlatch doctor    # Validate full setup
+drawlatch status    # Check server is running
+drawlatch config    # View configuration and secret status
 ```
 
-### Configure
+The `init` command generates keys, creates configs, exchanges public keys, and scaffolds the `.env` file. All steps are idempotent — safe to re-run.
 
-All config lives in `~/.drawlatch/` by default (override with `MCP_CONFIG_DIR`).
+### Connect to Claude Code
 
-**1. Create the remote server config:**
+**Option 1: Claude Code Plugin (Recommended)**
 
-```bash
-cp remote.config.example.json ~/.drawlatch/remote.config.json
+```shell
+# Install the plugin
+/plugin install drawlatch@drawlatch
 ```
 
-At minimum, define your callers and their connections:
+The plugin's MCP server starts automatically. The proxy uses `~/.drawlatch/` by default — see [Advanced Configuration](#advanced-configuration) to use a custom path.
 
-```json
-{
-  "port": 9999,
-  "callers": {
-    "my-laptop": {
-      "peerKeyDir": "~/.drawlatch/keys/peers/my-laptop",
-      "connections": ["github", "slack"]
-    }
-  }
-}
-```
+**Option 2: Auto-Discovery**
 
-**2. Set your API secrets** in the environment (via `.env`, shell export, or your deployment platform):
+This repo includes a `.mcp.json` file, so Claude Code automatically discovers the MCP proxy when you open the project. Approve the server when prompted.
 
-```bash
-GITHUB_TOKEN=ghp_your_token_here
-SLACK_BOT_TOKEN=xoxb-your-token-here
-```
-
-**3. Generate keys** (remote mode only):
-
-```bash
-drawlatch generate-keys local my-laptop
-drawlatch generate-keys remote
-```
-
-Then exchange public keys between the proxy and server — copy `*.pub.pem` files into the appropriate `keys/peers/` subdirectories. See [Key Exchange](#key-exchange) for details.
-
-### Run
-
-**Start the remote server:**
-
-```bash
-drawlatch start                    # background daemon
-drawlatch start -f                 # foreground
-drawlatch start --tunnel           # with Cloudflare tunnel for webhooks
-```
-
-**Connect the MCP proxy to Claude Code:**
-
-The repo includes `.mcp.json` for auto-discovery. Or register manually:
+**Option 3: Manual Registration**
 
 ```bash
 claude mcp add drawlatch \
@@ -124,10 +99,42 @@ claude mcp add drawlatch \
   -- node /path/to/drawlatch/dist/mcp/server.js
 ```
 
-You can also install drawlatch as a Claude Code plugin:
+> **Note:** Auto-discovery and manual registration use `dist/mcp/server.js`. The `dist/` directory is built automatically via `npm install` (prepare script). Rebuild manually with `npm run build` if needed.
+
+### Manual Setup
+
+For custom setups (different aliases, multiple callers, different machines), you can configure everything manually instead of using `drawlatch init`.
+
+**1. Generate keys:**
 
 ```bash
-claude plugin install drawlatch
+drawlatch generate-keys local my-laptop
+drawlatch generate-keys remote
+```
+
+**2. Exchange public keys** — copy `*.pub.pem` files into the appropriate `keys/peers/` subdirectories. See [Key Exchange](#key-exchange) for details.
+
+**3. Create configs** — copy the example files and edit:
+
+```bash
+cp remote.config.example.json ~/.drawlatch/remote.config.json
+cp proxy.config.example.json ~/.drawlatch/proxy.config.json
+```
+
+**4. Create a `.env` file** with your API secrets:
+
+```bash
+cat > ~/.drawlatch/.env << 'EOF'
+# GITHUB_TOKEN=ghp_your_token_here
+# DISCORD_BOT_TOKEN=your_bot_token_here
+EOF
+```
+
+**5. Start the server:**
+
+```bash
+drawlatch start
+drawlatch doctor    # Validate full setup
 ```
 
 ## MCP Tools
@@ -267,6 +274,18 @@ Used by the local MCP proxy to connect to the remote server:
 
 Key alias resolution order: `MCP_KEY_ALIAS` env var > `localKeyAlias` > `localKeysDir` > `keys/local/default`.
 
+### Advanced Configuration
+
+#### `MCP_CONFIG_DIR`
+
+By default, all config and key files live in `~/.drawlatch/`. Override with:
+
+```bash
+export MCP_CONFIG_DIR=/custom/path/to/config
+```
+
+Useful for CI environments or running multiple independent setups on the same machine.
+
 ## Connections
 
 22 pre-built connection templates ship with drawlatch. Reference them by name in a caller's `connections` list:
@@ -316,7 +335,9 @@ See **[INGESTORS.md](INGESTORS.md)** for full configuration reference.
 
 ## Key Exchange
 
-Remote mode requires mutual authentication via Ed25519/X25519 keypairs. Each identity gets four PEM files (signing + exchange, public + private).
+Remote mode requires mutual authentication via Ed25519/X25519 keypairs. Each identity gets four PEM files (signing + exchange, public + private). The `drawlatch init` command handles this automatically for single-machine setups.
+
+For multi-machine setups, exchange public keys manually:
 
 **Directory structure:**
 
@@ -372,17 +393,23 @@ Register each agent as a separate caller on the remote server with matching peer
 drawlatch [command] [options]
 
 Commands:
+  init               Set up drawlatch (keys, config, .env) in one step
   start              Start the remote server (background daemon)
   stop               Stop the remote server
   restart            Restart the remote server
   status             Show server status (PID, port, uptime, health, sessions)
   logs               View server logs
-  config             Show effective configuration
+  config             Show effective configuration and secret status
+  doctor             Validate setup and diagnose issues
   generate-keys      Generate Ed25519 + X25519 keypairs
 
 Options:
   -h, --help         Show help
   -v, --version      Show version
+
+Init options:
+  --connections <list>  Comma-separated connections to enable (e.g., github,slack)
+  --alias <name>        Caller alias (default: "default")
 
 Start options:
   -f, --foreground   Run in foreground
@@ -429,6 +456,7 @@ const result = await executeProxyRequest(
 | `drawlatch/remote/ingestors` | `IngestorManager` and ingestor types |
 | `drawlatch/shared/config` | Config loading, route/secret resolution |
 | `drawlatch/shared/connections` | Connection template loading |
+| `drawlatch/shared/env-utils` | Environment variable and secret utilities |
 | `drawlatch/shared/crypto` | Key generation, encrypted channel |
 | `drawlatch/shared/protocol` | Handshake protocol, message types |
 
@@ -481,6 +509,7 @@ src/
 └── shared/
     ├── config.ts            # Config loading, route resolution
     ├── connections.ts       # Connection template loading
+    ├── env-utils.ts         # Environment variable utilities
     ├── crypto/              # Ed25519/X25519 keys, AES-256-GCM channel
     └── protocol/            # Handshake, message types
 ```

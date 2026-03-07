@@ -17,8 +17,15 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { loadProxyConfig } from '../shared/config.js';
-import { loadKeyBundle, loadPublicKeys, EncryptedChannel } from '../shared/crypto/index.js';
+import { loadProxyConfig, getProxyConfigPath } from '../shared/config.js';
+import {
+  loadKeyBundle,
+  loadPublicKeys,
+  EncryptedChannel,
+  extractPublicKeys,
+  fingerprint,
+} from '../shared/crypto/index.js';
+import { existsSync } from 'node:fs';
 import {
   HandshakeInitiator,
   type ProxyRequest,
@@ -33,6 +40,11 @@ let remoteUrl: string;
 // ── Handshake ──────────────────────────────────────────────────────────────
 
 async function establishChannel(): Promise<EncryptedChannel> {
+  // Pre-flight validation
+  if (!existsSync(getProxyConfigPath())) {
+    throw new Error(`No proxy config found at ${getProxyConfigPath()}. Run: drawlatch init`);
+  }
+
   const config = loadProxyConfig();
   remoteUrl = config.remoteUrl;
 
@@ -45,22 +57,76 @@ async function establishChannel(): Promise<EncryptedChannel> {
   }
   console.error(`[mcp-proxy] Local keys dir: ${config.localKeysDir}`);
 
-  const ownKeys = loadKeyBundle(config.localKeysDir);
-  const remotePub = loadPublicKeys(config.remotePublicKeysDir);
+  // Validate key paths before attempting to load
+  if (!existsSync(config.localKeysDir)) {
+    const alias = envAlias ?? config.localKeyAlias ?? 'default';
+    throw new Error(
+      `Local proxy keys not found at ${config.localKeysDir}. Run: drawlatch generate-keys local ${alias}`,
+    );
+  }
+  if (!existsSync(config.remotePublicKeysDir)) {
+    throw new Error(
+      `Remote server public keys not found at ${config.remotePublicKeysDir}. Run: drawlatch init (or copy keys manually)`,
+    );
+  }
+
+  let ownKeys, remotePub;
+  try {
+    ownKeys = loadKeyBundle(config.localKeysDir);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to load local proxy keys from ${config.localKeysDir}: ${msg}. Run: drawlatch generate-keys local`,
+    );
+  }
+  try {
+    remotePub = loadPublicKeys(config.remotePublicKeysDir);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to load remote server public keys from ${config.remotePublicKeysDir}: ${msg}. Run: drawlatch init`,
+    );
+  }
 
   const initiator = new HandshakeInitiator(ownKeys, remotePub);
 
   // Step 1: Send HandshakeInit
   const initMsg = initiator.createInit();
-  const initResp = await fetch(`${remoteUrl}/handshake/init`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(initMsg),
-    signal: AbortSignal.timeout(config.connectTimeout),
-  });
+  let initResp: Response;
+  try {
+    initResp = await fetch(`${remoteUrl}/handshake/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(initMsg),
+      signal: AbortSignal.timeout(config.connectTimeout),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('ECONNREFUSED')) {
+      throw new Error(
+        `Remote server is not running at ${remoteUrl}. Start it with: drawlatch start`,
+      );
+    }
+    if ((err instanceof DOMException && err.name === 'AbortError') || msg.includes('timed out')) {
+      throw new Error(
+        `Remote server at ${remoteUrl} is not responding (timed out after ${config.connectTimeout}ms)`,
+      );
+    }
+    throw new Error(`Failed to connect to remote server at ${remoteUrl}: ${msg}`);
+  }
 
   if (!initResp.ok) {
     const errText = await initResp.text();
+    const localFp = fingerprint(extractPublicKeys(ownKeys));
+    if (initResp.status === 401 || initResp.status === 403) {
+      console.error(`[mcp-proxy] Handshake rejected by server. Your key fingerprint: ${localFp}`);
+      console.error(
+        '[mcp-proxy] Ensure this fingerprint matches an authorized peer on the remote server.',
+      );
+      throw new Error(
+        `Handshake rejected (${initResp.status}). Your fingerprint: ${localFp}. Check that public keys are correctly exchanged. See: drawlatch init`,
+      );
+    }
     throw new Error(`Handshake init failed: ${initResp.status} ${errText}`);
   }
 
@@ -115,22 +181,45 @@ async function sendEncryptedRequest(
   // Encrypt the entire request
   const encrypted = ch.encryptJSON(request);
 
-  const resp = await fetch(`${remoteUrl}/request`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      'X-Session-Id': ch.sessionId,
-    },
-    body: new Uint8Array(encrypted),
-    signal: AbortSignal.timeout(config.requestTimeout),
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(`${remoteUrl}/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Session-Id': ch.sessionId,
+      },
+      body: new Uint8Array(encrypted),
+      signal: AbortSignal.timeout(config.requestTimeout),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('ECONNREFUSED')) {
+      channel = null;
+      throw new Error(
+        `Remote server is not running at ${remoteUrl}. Start it with: drawlatch start`,
+      );
+    }
+    if ((err instanceof DOMException && err.name === 'AbortError') || msg.includes('timed out')) {
+      throw new Error(
+        `Remote server at ${remoteUrl} is not responding (timed out after ${config.requestTimeout}ms)`,
+      );
+    }
+    channel = null;
+    throw new Error(`Failed to reach remote server at ${remoteUrl}: ${msg}`);
+  }
 
   if (!resp.ok) {
     // If session expired, re-establish
     if (resp.status === 401) {
       console.error('[mcp-proxy] Session expired, re-establishing...');
       channel = null;
-      return sendEncryptedRequest(toolName, toolInput);
+      try {
+        return await sendEncryptedRequest(toolName, toolInput);
+      } catch (reEstErr) {
+        const msg = reEstErr instanceof Error ? reEstErr.message : String(reEstErr);
+        throw new Error(`Session re-establishment failed: ${msg}`);
+      }
     }
     throw new Error(`Request failed: ${resp.status} ${await resp.text()}`);
   }
@@ -172,14 +261,10 @@ server.tool(
     files: z
       .array(
         z.object({
-          field: z
-            .string()
-            .describe('Form field name (e.g., "files[0]", "file", "attachment")'),
+          field: z.string().describe('Form field name (e.g., "files[0]", "file", "attachment")'),
           path: z.string().describe('Absolute path to the file on the local filesystem'),
           filename: z.string().describe('Filename to use in the upload'),
-          contentType: z
-            .string()
-            .describe('MIME type (e.g., "image/png", "application/pdf")'),
+          contentType: z.string().describe('MIME type (e.g., "image/png", "application/pdf")'),
         }),
       )
       .optional()
@@ -305,7 +390,9 @@ server.tool(
     instance_id: z
       .string()
       .optional()
-      .describe('Instance ID for multi-instance listeners (e.g., "project-board"). Omit for all instances.'),
+      .describe(
+        'Instance ID for multi-instance listeners (e.g., "project-board"). Omit for all instances.',
+      ),
   },
   async ({ connection, after_id, instance_id }) => {
     try {
@@ -470,7 +557,10 @@ server.tool(
   },
   async ({ connection, paramKey }) => {
     try {
-      const result = await sendEncryptedRequest('resolve_listener_options', { connection, paramKey });
+      const result = await sendEncryptedRequest('resolve_listener_options', {
+        connection,
+        paramKey,
+      });
       return {
         content: [
           {
@@ -507,7 +597,11 @@ server.tool(
   },
   async ({ connection, action, instance_id }) => {
     try {
-      const result = await sendEncryptedRequest('control_listener', { connection, action, instance_id });
+      const result = await sendEncryptedRequest('control_listener', {
+        connection,
+        action,
+        instance_id,
+      });
       return {
         content: [
           {
@@ -569,7 +663,7 @@ server.tool(
 // eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
 server.tool(
   'set_listener_params',
-  "Add or edit listener parameter overrides for a connection. Merges params into existing config. Set create_instance to true to create a new multi-instance listener.",
+  'Add or edit listener parameter overrides for a connection. Merges params into existing config. Set create_instance to true to create a new multi-instance listener.',
   {
     connection: z.string().describe('Connection alias (e.g., "trello")'),
     instance_id: z
@@ -680,12 +774,159 @@ server.tool(
   },
 );
 
+/**
+ * List all available connection templates with caller-specific status.
+ * Returns which connections are enabled and which secrets are configured.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'list_connection_templates',
+  'List all available connection templates (built-in + custom). Returns template metadata, which connections are enabled for this caller, and which secrets are configured (boolean only, never values).',
+  { _: z.string().optional().describe('unused') },
+  async () => {
+    try {
+      const result = await sendEncryptedRequest('list_connection_templates', {});
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
+ * Enable or disable a connection for the authenticated caller.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'set_connection_enabled',
+  'Enable or disable a connection for the authenticated caller. When disabling, any running ingestors for the connection are stopped.',
+  {
+    connection: z.string().describe('Connection alias (e.g., "github", "discord-bot")'),
+    enabled: z.boolean().describe('Whether to enable (true) or disable (false) the connection'),
+  },
+  async ({ connection, enabled }) => {
+    try {
+      const result = await sendEncryptedRequest('set_connection_enabled', { connection, enabled });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
+ * Set or delete secrets for the authenticated caller.
+ * Uses prefixed env vars for caller isolation. Never returns secret values.
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'set_secrets',
+  'Set or delete secrets for the authenticated caller. Pass secret name → value pairs. Use empty string to delete a secret. Returns boolean status per secret (never values).',
+  {
+    secrets: z
+      .record(z.string(), z.string())
+      .describe('Secret name → value pairs. Empty string deletes the secret.'),
+  },
+  async ({ secrets }) => {
+    try {
+      const result = await sendEncryptedRequest('set_secrets', { secrets });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+/**
+ * Check which secrets are set for the authenticated caller (never returns values).
+ */
+// eslint-disable-next-line @typescript-eslint/no-deprecated -- registerTool is not available in this SDK version
+server.tool(
+  'get_secret_status',
+  'Check which secrets are configured for a connection. Returns boolean status for each required and optional secret (never returns values).',
+  {
+    connection: z.string().describe('Connection alias to check secrets for (e.g., "github")'),
+  },
+  async ({ connection }) => {
+    try {
+      const result = await sendEncryptedRequest('get_secret_status', { connection });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
 // ── Start ──────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('[mcp-proxy] MCP Secure Proxy server started (stdio transport)');
+
+  // Non-blocking health check: advise user if the remote server is not reachable
+  try {
+    const config = loadProxyConfig();
+    const resp = await fetch(`${config.remoteUrl}/health`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (resp.ok) {
+      console.error(`[mcp-proxy] Remote server reachable at ${config.remoteUrl}`);
+    } else {
+      console.error(
+        `[mcp-proxy] WARNING: Remote server at ${config.remoteUrl} returned ${resp.status}. Check server health.`,
+      );
+    }
+  } catch {
+    const config = loadProxyConfig();
+    console.error(
+      `[mcp-proxy] WARNING: Remote server at ${config.remoteUrl} is not reachable. Start it with: drawlatch start`,
+    );
+  }
 }
 
 main().catch((err: unknown) => {

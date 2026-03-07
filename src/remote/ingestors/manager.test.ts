@@ -609,7 +609,13 @@ describe('IngestorManager.applyInstanceParams', () => {
     const secrets: Record<string, string> = {};
     const params = { channelId: 'C12345' };
     const fields: ListenerConfigField[] = [
-      { key: 'channelId', label: 'Channel', type: 'text', instanceKey: true, overrideKey: 'CHANNEL_ID' },
+      {
+        key: 'channelId',
+        label: 'Channel',
+        type: 'text',
+        instanceKey: true,
+        overrideKey: 'CHANNEL_ID',
+      },
     ];
 
     IngestorManager.applyInstanceParams(config, secrets, params, fields);
@@ -638,7 +644,10 @@ describe('IngestorManager.applyInstanceParams', () => {
   });
 
   it('should not inject overrideKey for non-string param values', () => {
-    const config: IngestorConfig = { type: 'poll', poll: { url: 'https://example.com', intervalMs: 60000 } };
+    const config: IngestorConfig = {
+      type: 'poll',
+      poll: { url: 'https://example.com', intervalMs: 60000 },
+    };
     const secrets: Record<string, string> = {};
     const params = { count: 42 };
     const fields: ListenerConfigField[] = [
@@ -676,7 +685,13 @@ describe('IngestorManager — multi-instance webhook lifecycle', () => {
           name: 'GitHub Webhook Listener',
           supportsMultiInstance: true,
           fields: [
-            { key: 'repoFilter', label: 'Repo Filter', type: 'text[]', instanceKey: true, group: 'Filtering' },
+            {
+              key: 'repoFilter',
+              label: 'Repo Filter',
+              type: 'text[]',
+              instanceKey: true,
+              group: 'Filtering',
+            },
             { key: 'eventFilter', label: 'Events', type: 'multiselect', group: 'Filtering' },
             { key: 'bufferSize', label: 'Buffer Size', type: 'number', group: 'Advanced' },
           ],
@@ -727,7 +742,12 @@ describe('IngestorManager — multi-instance webhook lifecycle', () => {
 
     const result = await manager.startOne('test-caller', 'github', 'frontend-repo');
     expect(result).not.toBeInstanceOf(Array);
-    const singleResult = result as { success: boolean; connection: string; instanceId?: string; state?: string };
+    const singleResult = result as {
+      success: boolean;
+      connection: string;
+      instanceId?: string;
+      state?: string;
+    };
     expect(singleResult.success).toBe(true);
     expect(singleResult.instanceId).toBe('frontend-repo');
 
