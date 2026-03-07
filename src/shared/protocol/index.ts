@@ -14,3 +14,25 @@ export {
   type PongMessage,
   type AppMessage,
 } from './messages.js';
+
+export {
+  type SyncRequest,
+  type SyncResponse,
+  type SyncSession,
+  type SyncErrorCode,
+  generateSyncCode,
+  generateSyncEncryptionKey,
+  encryptSyncPayload,
+  decryptSyncPayload,
+  validateSyncRequest,
+  isSyncSessionActive,
+  DEFAULT_SYNC_TTL_MS,
+} from './sync.js';
+
+export {
+  type KeyExchangeInit,
+  type SyncResult,
+  type StartKeyExchangeOpts,
+  SyncClientError,
+  startKeyExchange,
+} from './sync-client.js';
