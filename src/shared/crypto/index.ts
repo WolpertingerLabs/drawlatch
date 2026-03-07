@@ -21,3 +21,18 @@ export {
   deriveSessionKeys,
   EncryptedChannel,
 } from './channel.js';
+
+export {
+  type CreateCallerResult,
+  createCaller,
+  exportPublicKeys,
+  importPeerPublicKeys,
+  exportPeerPublicKeys,
+  saveRemotePublicKeys,
+  listCallers,
+  listPeers,
+  callerExists,
+  peerExists,
+  callerFingerprint,
+  peerFingerprint,
+} from './key-manager.js';
