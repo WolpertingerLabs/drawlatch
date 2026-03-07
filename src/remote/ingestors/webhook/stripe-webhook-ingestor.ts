@@ -108,10 +108,19 @@ export class StripeWebhookIngestor extends WebhookIngestor {
 
 // ── Self-registration ────────────────────────────────────────────────────
 
-registerIngestorFactory('webhook:stripe', (connectionAlias, config, secrets, bufferSize, instanceId) => {
-  if (!config.webhook) {
-    log.error(`Missing webhook config for ${connectionAlias}`);
-    return null;
-  }
-  return new StripeWebhookIngestor(connectionAlias, secrets, config.webhook, bufferSize, instanceId);
-});
+registerIngestorFactory(
+  'webhook:stripe',
+  (connectionAlias, config, secrets, bufferSize, instanceId) => {
+    if (!config.webhook) {
+      log.error(`Missing webhook config for ${connectionAlias}`);
+      return null;
+    }
+    return new StripeWebhookIngestor(
+      connectionAlias,
+      secrets,
+      config.webhook,
+      bufferSize,
+      instanceId,
+    );
+  },
+);

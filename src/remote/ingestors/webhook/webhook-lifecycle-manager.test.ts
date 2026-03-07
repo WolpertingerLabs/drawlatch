@@ -187,9 +187,7 @@ describe('WebhookLifecycleManager', () => {
       // List returns empty
       fetchSpy.mockResolvedValueOnce(mockFetchResponse([]));
       // Register fails
-      fetchSpy.mockResolvedValueOnce(
-        mockFetchResponse({ error: 'Bad request' }, 400),
-      );
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({ error: 'Bad request' }, 400));
 
       const manager = new WebhookLifecycleManager(makeConfig(), TEST_SECRETS);
       const result = await manager.ensureRegistered(CALLBACK_URL, BOARD_ID);
@@ -327,9 +325,7 @@ describe('WebhookLifecycleManager', () => {
       await manager.ensureRegistered(CALLBACK_URL);
 
       const call = fetchSpy.mock.calls[0];
-      expect(call[0]).toBe(
-        'https://api.trello.com/1/tokens/test-token/webhooks?key=test-api-key',
-      );
+      expect(call[0]).toBe('https://api.trello.com/1/tokens/test-token/webhooks?key=test-api-key');
     });
 
     it('should resolve ${VAR} placeholders in register body', async () => {
@@ -373,9 +369,7 @@ describe('WebhookLifecycleManager', () => {
       fetchSpy.mockResolvedValueOnce(
         mockFetchResponse({
           data: {
-            webhooks: [
-              { id: WEBHOOK_ID, url: CALLBACK_URL },
-            ],
+            webhooks: [{ id: WEBHOOK_ID, url: CALLBACK_URL }],
           },
         }),
       );
@@ -399,13 +393,9 @@ describe('WebhookLifecycleManager', () => {
       });
 
       // List returns non-array at responsePath → listWebhooks throws
-      fetchSpy.mockResolvedValueOnce(
-        mockFetchResponse({ data: { webhooks: 'not an array' } }),
-      );
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({ data: { webhooks: 'not an array' } }));
       // Falls through to register, which also fails
-      fetchSpy.mockResolvedValueOnce(
-        mockFetchResponse({ error: 'Bad request' }, 400),
-      );
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({ error: 'Bad request' }, 400));
 
       const manager = new WebhookLifecycleManager(config, TEST_SECRETS);
       const result = await manager.ensureRegistered(CALLBACK_URL);

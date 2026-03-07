@@ -28,8 +28,23 @@ const SERVER_ENTRY = join(PKG_ROOT, "dist/remote/server.js");
 const GENERATE_KEYS_ENTRY = join(PKG_ROOT, "dist/cli/generate-keys.js");
 
 // Import config helpers from compiled drawlatch code
-const { getConfigDir, getEnvFilePath, loadRemoteConfig } = await import(
+const { getConfigDir, getEnvFilePath, getKeysDir, getLocalKeysDir, getRemoteKeysDir, getPeerKeysDir, getProxyConfigPath, getRemoteConfigPath, loadRemoteConfig } = await import(
   join(PKG_ROOT, "dist/shared/config.js")
+);
+
+// Import crypto helpers for init command
+const { generateKeyBundle, saveKeyBundle, extractPublicKeys, fingerprint, loadKeyBundle, loadPublicKeys } = await import(
+  join(PKG_ROOT, "dist/shared/crypto/index.js")
+);
+
+// Import connection template helpers
+const { listConnectionTemplates, listAvailableConnections } = await import(
+  join(PKG_ROOT, "dist/shared/connections.js")
+);
+
+// Import env utils
+const { isSecretSetForCaller, loadEnvFile: loadEnvFileVars } = await import(
+  join(PKG_ROOT, "dist/shared/env-utils.js")
 );
 
 const CONFIG_DIR = getConfigDir();
@@ -63,6 +78,9 @@ try {
       lines: { type: "string", short: "n", default: "50" },
       follow: { type: "boolean", default: false },
       path: { type: "boolean", default: false },
+      connections: { type: "string" },
+      alias: { type: "string" },
+      full: { type: "boolean", default: false },
     },
     strict: false,
     allowPositionals: true,
@@ -85,6 +103,13 @@ if (values.help && !subcommand) {
 switch (subcommand) {
   case null:
     await cmdDefault();
+    break;
+  case "init":
+    if (values.help) {
+      printInitHelp();
+    } else {
+      await cmdInit();
+    }
     break;
   case "start":
     if (values.help) {
@@ -135,6 +160,13 @@ switch (subcommand) {
       await cmdGenerateKeys();
     }
     break;
+  case "doctor":
+    if (values.help) {
+      printDoctorHelp();
+    } else {
+      await cmdDoctor();
+    }
+    break;
   case "help":
     printHelp();
     break;
@@ -153,6 +185,185 @@ async function cmdDefault() {
   } else {
     console.log("Drawlatch remote server is not running.\n");
     printHelp();
+  }
+}
+
+async function cmdInit() {
+  const alias = values.alias || "default";
+  const connectionsList = values.connections
+    ? values.connections.split(",").map((c) => c.trim()).filter(Boolean)
+    : [];
+
+  // Validate requested connections exist
+  if (connectionsList.length > 0) {
+    const available = listAvailableConnections();
+    const availableSet = new Set(available);
+    const invalid = connectionsList.filter((c) => !availableSet.has(c));
+    if (invalid.length > 0) {
+      console.error(`Unknown connection(s): ${invalid.join(", ")}`);
+      console.error(`Available: ${available.join(", ")}`);
+      process.exit(1);
+    }
+  }
+
+  console.log(`\nDrawlatch Setup`);
+  console.log(`===============\n`);
+
+  const steps = [];
+
+  // Step 1: Ensure config directory
+  ensureConfigDir();
+  steps.push(`Config directory: ${CONFIG_DIR}`);
+
+  // Step 2: Generate remote server keypair
+  const remoteKeysDir = getRemoteKeysDir();
+  if (existsSync(join(remoteKeysDir, "signing.key.pem"))) {
+    const existing = loadKeyBundle(remoteKeysDir);
+    const fp = fingerprint(extractPublicKeys(existing));
+    steps.push(`Remote server keys: already exist (${fp})`);
+  } else {
+    const bundle = generateKeyBundle();
+    saveKeyBundle(bundle, remoteKeysDir);
+    const fp = fingerprint(extractPublicKeys(bundle));
+    steps.push(`Remote server keys: CREATED (${fp})`);
+  }
+
+  // Step 3: Generate local proxy keypair
+  const localKeysDir = join(getLocalKeysDir(), alias);
+  if (existsSync(join(localKeysDir, "signing.key.pem"))) {
+    const existing = loadKeyBundle(localKeysDir);
+    const fp = fingerprint(extractPublicKeys(existing));
+    steps.push(`Local proxy keys (${alias}): already exist (${fp})`);
+  } else {
+    const bundle = generateKeyBundle();
+    saveKeyBundle(bundle, localKeysDir);
+    const fp = fingerprint(extractPublicKeys(bundle));
+    steps.push(`Local proxy keys (${alias}): CREATED (${fp})`);
+  }
+
+  // Step 4: Copy public keys into peer directories
+  const localPeerDir = join(getPeerKeysDir(), alias);
+  mkdirSync(localPeerDir, { recursive: true, mode: 0o700 });
+  copyPublicKey(localKeysDir, localPeerDir, "signing.pub.pem");
+  copyPublicKey(localKeysDir, localPeerDir, "exchange.pub.pem");
+  steps.push(`Peer keys for "${alias}": ${localPeerDir}`);
+
+  const remotePeerDir = join(getPeerKeysDir(), "remote-server");
+  mkdirSync(remotePeerDir, { recursive: true, mode: 0o700 });
+  copyPublicKey(remoteKeysDir, remotePeerDir, "signing.pub.pem");
+  copyPublicKey(remoteKeysDir, remotePeerDir, "exchange.pub.pem");
+  steps.push(`Peer keys for remote server: ${remotePeerDir}`);
+
+  // Determine portable path prefix for config files.
+  // If using the default ~/.drawlatch config dir, use tilde for portability.
+  // If using a custom MCP_CONFIG_DIR, use the absolute path.
+  const isDefaultDir = !process.env.MCP_CONFIG_DIR;
+  const configPrefix = isDefaultDir ? "~/.drawlatch" : CONFIG_DIR;
+
+  // Step 5: Scaffold proxy.config.json
+  const proxyConfigPath = getProxyConfigPath();
+  if (existsSync(proxyConfigPath)) {
+    steps.push(`Proxy config: already exists`);
+  } else {
+    const proxyConfig = {
+      remoteUrl: "http://127.0.0.1:9999",
+      localKeyAlias: alias,
+      remotePublicKeysDir: `${configPrefix}/keys/peers/remote-server`,
+      connectTimeout: 10000,
+      requestTimeout: 300000,
+    };
+    writeFileSync(proxyConfigPath, JSON.stringify(proxyConfig, null, 2) + "\n", { mode: 0o600 });
+    steps.push(`Proxy config: CREATED`);
+  }
+
+  // Step 6: Scaffold remote.config.json
+  const remoteConfigPath = getRemoteConfigPath();
+  if (existsSync(remoteConfigPath)) {
+    steps.push(`Remote config: already exists`);
+  } else {
+    const remoteConfig = {
+      host: "0.0.0.0",
+      port: 9999,
+      localKeysDir: `${configPrefix}/keys/remote`,
+      rateLimitPerMinute: 60,
+      callers: {
+        [alias]: {
+          name: alias === "default" ? "Default Caller" : alias,
+          peerKeyDir: `${configPrefix}/keys/peers/${alias}`,
+          connections: connectionsList,
+        },
+      },
+    };
+    writeFileSync(remoteConfigPath, JSON.stringify(remoteConfig, null, 2) + "\n", { mode: 0o600 });
+    steps.push(`Remote config: CREATED (caller "${alias}" with ${connectionsList.length} connection(s))`);
+  }
+
+  // Step 7: Scaffold .env file
+  if (existsSync(ENV_FILE)) {
+    steps.push(`.env file: already exists`);
+  } else {
+    const envLines = [
+      "# Drawlatch environment secrets",
+      "# Uncomment and set tokens for your enabled connections",
+      "",
+    ];
+
+    // Get secret info for requested connections (or all if none specified)
+    const templates = listConnectionTemplates();
+    const relevantTemplates = connectionsList.length > 0
+      ? templates.filter((t) => connectionsList.includes(t.alias))
+      : templates.filter((t) => ["github", "slack", "discord-bot", "openai", "anthropic"].includes(t.alias));
+
+    for (const t of relevantTemplates) {
+      envLines.push(`# ${t.name}`);
+      for (const s of t.requiredSecrets) {
+        envLines.push(`# ${s}=`);
+      }
+      for (const s of t.optionalSecrets) {
+        envLines.push(`# ${s}=`);
+      }
+      envLines.push("");
+    }
+
+    writeFileSync(ENV_FILE, envLines.join("\n") + "\n", { mode: 0o600 });
+    steps.push(`.env file: CREATED`);
+  }
+
+  // Print summary
+  for (const step of steps) {
+    console.log(`  ${step}`);
+  }
+
+  console.log(`\nSetup complete! Next steps:\n`);
+
+  if (connectionsList.length > 0) {
+    const templates = listConnectionTemplates();
+    const enabledTemplates = templates.filter((t) => connectionsList.includes(t.alias));
+    const allSecrets = enabledTemplates.flatMap((t) => t.requiredSecrets);
+    if (allSecrets.length > 0) {
+      console.log(`  1. Set your API secrets in ${ENV_FILE}:`);
+      for (const s of [...new Set(allSecrets)]) {
+        console.log(`       ${s}=your_token_here`);
+      }
+      console.log();
+    }
+  } else {
+    console.log(`  1. Edit ${remoteConfigPath} to add connections (e.g., "github", "slack")`);
+    console.log(`     Then set the required secrets in ${ENV_FILE}\n`);
+  }
+
+  console.log(`  2. Start the remote server:`);
+  console.log(`       drawlatch start\n`);
+  console.log(`  3. Verify your setup:`);
+  console.log(`       drawlatch doctor\n`);
+}
+
+function copyPublicKey(srcDir, destDir, filename) {
+  const src = join(srcDir, filename);
+  const dest = join(destDir, filename);
+  if (existsSync(src)) {
+    const content = readFileSync(src);
+    writeFileSync(dest, content, { mode: 0o644 });
   }
 }
 
@@ -380,12 +591,49 @@ function cmdConfig() {
   console.log(`  Rate limit:         ${config.rateLimitPerMinute} req/min`);
   console.log(`  Local keys dir:     ${config.localKeysDir}`);
 
+  // Show key fingerprints if keys exist
+  const remoteKeysPath = getRemoteKeysDir();
+  if (existsSync(join(remoteKeysPath, "signing.key.pem"))) {
+    try {
+      const remoteKeys = loadKeyBundle(remoteKeysPath);
+      console.log(`  Remote key fp:      ${fingerprint(extractPublicKeys(remoteKeys))}`);
+    } catch { /* skip */ }
+  }
+
   const callerEntries = Object.entries(config.callers || {});
   console.log(`  Callers:            ${callerEntries.length}`);
+
+  // Build template map for secret status checking
+  const templates = listConnectionTemplates();
+  const templateMap = new Map(templates.map((t) => [t.alias, t]));
+
+  // Load .env vars into process.env so isSecretSetForCaller works.
+  // Force-set to override empty shell env vars.
+  const envVars = loadEnvFileVars();
+  for (const [k, v] of Object.entries(envVars)) {
+    process.env[k] = v;
+  }
+
   for (const [alias, caller] of callerEntries) {
     console.log(
       `    ${alias}: ${caller.connections ? caller.connections.length : 0} connection(s)`,
     );
+    for (const connName of caller.connections || []) {
+      const tpl = templateMap.get(connName);
+      if (!tpl) {
+        console.log(`      ${connName} (custom connector)`);
+        continue;
+      }
+      const secretStatuses = tpl.requiredSecrets.map((s) => {
+        const set = isSecretSetForCaller(s, alias, caller.env);
+        return `${s}: ${set ? "SET" : "NOT SET"}`;
+      });
+      if (secretStatuses.length > 0) {
+        console.log(`      ${connName}: ${secretStatuses.join(", ")}`);
+      } else {
+        console.log(`      ${connName}: (no secrets required)`);
+      }
+    }
   }
 
   console.log(
@@ -411,6 +659,164 @@ async function cmdGenerateKeys() {
 
   await new Promise((res) => child.on("close", res));
   process.exit(child.exitCode ?? 0);
+}
+
+function resolveTilde(p) {
+  if (p.startsWith("~/") || p === "~") {
+    return join(process.env.HOME || "/", p.slice(1));
+  }
+  return p;
+}
+
+async function cmdDoctor() {
+  console.log(`\nDrawlatch Setup Check`);
+  console.log(`=====================\n`);
+
+  let passed = 0;
+  let failed = 0;
+
+  function check(label, ok, fix) {
+    const padded = label.padEnd(50);
+    if (ok) {
+      console.log(`  ${padded} PASS`);
+      passed++;
+    } else {
+      console.log(`  ${padded} FAIL`);
+      if (fix) console.log(`    -> ${fix}`);
+      failed++;
+    }
+    return ok;
+  }
+
+  // Load .env for secret checks
+  const envVars = loadEnvFileVars();
+  for (const [k, v] of Object.entries(envVars)) {
+    process.env[k] = v;
+  }
+
+  // 1. Config directory
+  check("Config directory", existsSync(CONFIG_DIR), "Run: drawlatch init");
+
+  // 2. Remote config
+  const remoteConfigPath = getRemoteConfigPath();
+  const hasRemoteConfig = existsSync(remoteConfigPath);
+  check("Remote config (remote.config.json)", hasRemoteConfig, "Run: drawlatch init");
+
+  // 3. Proxy config
+  const proxyConfigPath = getProxyConfigPath();
+  const hasProxyConfig = existsSync(proxyConfigPath);
+  check("Proxy config (proxy.config.json)", hasProxyConfig, "Run: drawlatch init");
+
+  // 4. Remote server keys
+  const remoteKeysPath = getRemoteKeysDir();
+  const hasRemoteKeys = existsSync(join(remoteKeysPath, "signing.key.pem")) &&
+                        existsSync(join(remoteKeysPath, "exchange.key.pem")) &&
+                        existsSync(join(remoteKeysPath, "signing.pub.pem")) &&
+                        existsSync(join(remoteKeysPath, "exchange.pub.pem"));
+  check("Remote server keys (keys/remote/)", hasRemoteKeys, "Run: drawlatch generate-keys remote");
+
+  if (hasRemoteKeys) {
+    try {
+      const rk = loadKeyBundle(remoteKeysPath);
+      console.log(`    Fingerprint: ${fingerprint(extractPublicKeys(rk))}`);
+    } catch { /* skip */ }
+  }
+
+  // 5. Local proxy keys — need to figure out which alias
+  let localAlias = "default";
+  if (hasProxyConfig) {
+    try {
+      const { loadProxyConfig } = await import(join(PKG_ROOT, "dist/shared/config.js"));
+      const proxyConfig = loadProxyConfig();
+      localAlias = process.env.MCP_KEY_ALIAS?.trim() || proxyConfig.localKeyAlias || "default";
+    } catch { /* skip */ }
+  }
+
+  const localKeysPath = join(getLocalKeysDir(), localAlias);
+  const hasLocalKeys = existsSync(join(localKeysPath, "signing.key.pem")) &&
+                       existsSync(join(localKeysPath, "exchange.key.pem")) &&
+                       existsSync(join(localKeysPath, "signing.pub.pem")) &&
+                       existsSync(join(localKeysPath, "exchange.pub.pem"));
+  check(`Local proxy keys (keys/local/${localAlias}/)`, hasLocalKeys, `Run: drawlatch generate-keys local ${localAlias}`);
+
+  if (hasLocalKeys) {
+    try {
+      const lk = loadKeyBundle(localKeysPath);
+      console.log(`    Fingerprint: ${fingerprint(extractPublicKeys(lk))}`);
+    } catch { /* skip */ }
+  }
+
+  // 6. Peer keys for callers
+  if (hasRemoteConfig) {
+    try {
+      const config = loadRemoteConfig();
+      for (const [alias, caller] of Object.entries(config.callers)) {
+        const peerDir = resolveTilde(caller.peerKeyDir);
+        const hasPeerKeys = existsSync(join(peerDir, "signing.pub.pem")) &&
+                            existsSync(join(peerDir, "exchange.pub.pem"));
+        check(`Peer keys for "${alias}"`, hasPeerKeys, `Copy public keys to ${caller.peerKeyDir}`);
+
+        if (hasPeerKeys) {
+          try {
+            const pk = loadPublicKeys(peerDir);
+            console.log(`    Fingerprint: ${fingerprint(pk)}`);
+          } catch { /* skip */ }
+        }
+      }
+    } catch { /* skip */ }
+  }
+
+  // 7. Peer keys for remote server (proxy side)
+  const remotePeerDir = join(getPeerKeysDir(), "remote-server");
+  const hasRemotePeerKeys = existsSync(join(remotePeerDir, "signing.pub.pem")) &&
+                            existsSync(join(remotePeerDir, "exchange.pub.pem"));
+  check("Peer keys for remote server", hasRemotePeerKeys, "Run: drawlatch init");
+
+  // 8. .env file
+  check("Environment file (.env)", existsSync(ENV_FILE), "Run: drawlatch init");
+
+  // 9. Required secrets for each caller's connections
+  if (hasRemoteConfig) {
+    try {
+      const config = loadRemoteConfig();
+      const templates = listConnectionTemplates();
+      const templateMap = new Map(templates.map((t) => [t.alias, t]));
+
+      for (const [callerAlias, caller] of Object.entries(config.callers)) {
+        for (const connName of caller.connections) {
+          const tpl = templateMap.get(connName);
+          if (!tpl) continue;
+          for (const secret of tpl.requiredSecrets) {
+            const isSet = isSecretSetForCaller(secret, callerAlias, caller.env);
+            check(`  ${callerAlias}/${connName}: ${secret}`, isSet, `Set ${secret} in ${ENV_FILE}`);
+          }
+        }
+      }
+    } catch { /* skip */ }
+  }
+
+  // 10. Remote server health check
+  if (hasRemoteConfig) {
+    try {
+      const config = loadRemoteConfig();
+      const healthy = await healthCheck(config.host, config.port);
+      check(`Remote server health (${config.host}:${config.port})`, healthy, "Run: drawlatch start");
+    } catch {
+      check("Remote server health", false, "Run: drawlatch start");
+    }
+  }
+
+  // Summary
+  const total = passed + failed;
+  console.log(`\nResult: ${passed}/${total} checks passed`);
+  if (failed > 0) {
+    console.log(`Fix the ${failed} failing check(s) above and re-run: drawlatch doctor`);
+  } else {
+    console.log(`All checks passed! Your setup is ready.`);
+  }
+  console.log();
+
+  process.exit(failed > 0 ? 1 : 0);
 }
 
 // ── PID utilities ─────────────────────────────────────────────────
@@ -558,12 +964,14 @@ drawlatch v${VERSION}
 Usage: drawlatch [command] [options]
 
 Commands:
+  init               Set up drawlatch (keys, config, .env) in one step
   start              Start the remote server (background by default)
   stop               Stop the background remote server
   restart            Restart the background remote server
   status             Show server status (PID, port, uptime, health, sessions)
   logs               View and follow remote server logs
   config             Show effective configuration
+  doctor             Validate setup and diagnose issues
   generate-keys      Generate Ed25519 + X25519 keypairs
 
 Options:
@@ -573,15 +981,15 @@ Options:
 Running 'drawlatch' with no arguments shows status (if running) or this help.
 
 Examples:
-  drawlatch                            Show status or help
+  drawlatch init                       Set up everything with defaults
+  drawlatch init --connections github   Set up with GitHub connection
+  drawlatch init --alias mybot         Set up with custom caller alias
   drawlatch start                      Start remote server in background
   drawlatch start -f                   Start remote server in foreground
   drawlatch start -f --tunnel          Start with a public tunnel for webhooks
-  drawlatch start --port 8080          Start on a custom port
+  drawlatch doctor                     Validate full setup
   drawlatch status                     Check if server is running
   drawlatch logs -n 100                View last 100 log lines
-  drawlatch generate-keys remote       Generate remote server keypair
-  drawlatch generate-keys local mybot  Generate local keypair for alias "mybot"
 `);
 }
 
@@ -685,6 +1093,47 @@ Options:
 
 Reads ~/.drawlatch/remote.config.json and displays the effective
 server configuration including callers and connections.
+`);
+}
+
+function printInitHelp() {
+  console.log(`
+drawlatch init
+
+Set up drawlatch for first-time use. Generates keys, creates config
+files, exchanges public keys, and scaffolds a .env template.
+
+Usage: drawlatch init [options]
+
+Options:
+  --connections <list>  Comma-separated connections to enable (e.g., github,slack)
+  --alias <name>        Name for the local identity (default: "default")
+  -h, --help            Show this help message
+
+All steps are idempotent — safe to re-run without overwriting existing files.
+
+Examples:
+  drawlatch init                          Set up with defaults
+  drawlatch init --connections github     Set up with GitHub enabled
+  drawlatch init --alias laptop           Use "laptop" as the caller alias
+  drawlatch init --alias ci --connections github,slack
+`);
+}
+
+function printDoctorHelp() {
+  console.log(`
+drawlatch doctor
+
+Validate your drawlatch setup and diagnose common issues.
+
+Usage: drawlatch doctor [options]
+
+Options:
+  --full         Include a live handshake test (requires server running)
+  -h, --help     Show this help message
+
+Checks config files, keys, peer directories, secrets, and server health.
+Each failure includes the exact command to fix it.
 `);
 }
 

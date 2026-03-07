@@ -345,10 +345,19 @@ export class SlackSocketModeIngestor extends BaseIngestor {
 
 // ── Self-registration ────────────────────────────────────────────────────
 
-registerIngestorFactory('websocket:slack', (connectionAlias, config, secrets, bufferSize, instanceId) => {
-  if (!config.websocket) {
-    log.error(`Missing websocket config for ${connectionAlias}`);
-    return null;
-  }
-  return new SlackSocketModeIngestor(connectionAlias, secrets, config.websocket, bufferSize, instanceId);
-});
+registerIngestorFactory(
+  'websocket:slack',
+  (connectionAlias, config, secrets, bufferSize, instanceId) => {
+    if (!config.websocket) {
+      log.error(`Missing websocket config for ${connectionAlias}`);
+      return null;
+    }
+    return new SlackSocketModeIngestor(
+      connectionAlias,
+      secrets,
+      config.websocket,
+      bufferSize,
+      instanceId,
+    );
+  },
+);

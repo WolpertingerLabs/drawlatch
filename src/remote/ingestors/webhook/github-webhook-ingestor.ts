@@ -140,10 +140,19 @@ export class GitHubWebhookIngestor extends WebhookIngestor {
 
 // ── Self-registration ────────────────────────────────────────────────────
 
-registerIngestorFactory('webhook:generic', (connectionAlias, config, secrets, bufferSize, instanceId) => {
-  if (!config.webhook) {
-    log.error(`Missing webhook config for ${connectionAlias}`);
-    return null;
-  }
-  return new GitHubWebhookIngestor(connectionAlias, secrets, config.webhook, bufferSize, instanceId);
-});
+registerIngestorFactory(
+  'webhook:generic',
+  (connectionAlias, config, secrets, bufferSize, instanceId) => {
+    if (!config.webhook) {
+      log.error(`Missing webhook config for ${connectionAlias}`);
+      return null;
+    }
+    return new GitHubWebhookIngestor(
+      connectionAlias,
+      secrets,
+      config.webhook,
+      bufferSize,
+      instanceId,
+    );
+  },
+);
