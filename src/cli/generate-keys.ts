@@ -3,13 +3,13 @@
  * Key generation CLI.
  *
  * Generates Ed25519 (signing) + X25519 (key exchange) keypairs for either
- * the local MCP proxy or the remote server, and saves them with correct
+ * a caller identity or the server, and saves them with correct
  * file permissions (0600 for private keys, 0644 for public keys).
  *
  * Usage:
- *   npx tsx src/cli/generate-keys.ts local    # Generate MCP proxy keys
- *   npx tsx src/cli/generate-keys.ts remote   # Generate remote server keys
- *   npx tsx src/cli/generate-keys.ts --dir /path/to/keys  # Custom directory
+ *   npx tsx src/cli/generate-keys.ts caller [alias]  # Generate caller keys
+ *   npx tsx src/cli/generate-keys.ts server           # Generate server keys
+ *   npx tsx src/cli/generate-keys.ts --dir /path       # Custom directory
  */
 
 import {
@@ -19,7 +19,7 @@ import {
   fingerprint,
   extractPublicKeys,
 } from '../shared/crypto/index.js';
-import { getLocalKeysDir, getRemoteKeysDir, getConfigDir } from '../shared/config.js';
+import { getCallerKeysDir, getServerKeysDir, getConfigDir } from '../shared/config.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -28,12 +28,13 @@ function usage(): void {
 Drawlatch key generation
 
 Usage:
-  generate-keys local [alias]   Generate MCP proxy (local) keypair
-                                Alias defaults to "default" if omitted.
-                                Keys are stored in keys/local/<alias>/
-  generate-keys remote          Generate remote server keypair
-  generate-keys --dir <path>    Generate keypair in a custom directory
-  generate-keys show <path>     Show fingerprint of an existing keypair
+  generate-keys caller [alias]   Generate caller keypair
+                                  Alias defaults to "default" if omitted.
+                                  Keys are stored in keys/callers/<alias>/
+  generate-keys server            Generate server keypair
+                                  Keys are stored in keys/server/
+  generate-keys --dir <path>      Generate keypair in a custom directory
+  generate-keys show <path>       Show fingerprint of an existing keypair
 
 Keys are saved as PEM files:
   <dir>/signing.pub.pem       Ed25519 public key (safe to share)
@@ -90,30 +91,34 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
 // Ensure base config directory exists
 fs.mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
 
-if (args[0] === 'local') {
+if (args[0] === 'caller' || args[0] === 'local') {
+  if (args[0] === 'local') {
+    console.error('Note: "local" is deprecated, use "caller" instead.');
+  }
   const alias = args[1] && !args[1].startsWith('-') ? args[1] : 'default';
-  const localKeysDir = getLocalKeysDir();
-  const targetDir = path.join(localKeysDir, alias);
+  const callersDir = getCallerKeysDir();
+  const targetDir = path.join(callersDir, alias);
 
-  // Check for legacy flat key layout (PEM files directly in keys/local/)
-  const legacyKeyPath = path.join(localKeysDir, 'signing.key.pem');
+  // Check for legacy flat key layout (PEM files directly in keys/callers/)
+  const legacyKeyPath = path.join(callersDir, 'signing.key.pem');
   if (fs.existsSync(legacyKeyPath)) {
     console.error(
-      `\n⚠️  Legacy key layout detected: PEM files found directly in ${localKeysDir}\n` +
-        `   Local keys are now stored per-alias: keys/local/<alias>/\n` +
+      `\n⚠️  Legacy key layout detected: PEM files found directly in ${callersDir}\n` +
+        `   Caller keys are now stored per-alias: keys/callers/<alias>/\n` +
         `   To migrate, move your existing keys:\n\n` +
         `     mkdir -p ${targetDir}\n` +
-        `     mv ${localKeysDir}/signing.* ${targetDir}/\n` +
-        `     mv ${localKeysDir}/exchange.* ${targetDir}/\n\n` +
-        `   Then update localKeysDir in your proxy.config.json to point to:\n` +
-        `     ${targetDir}\n`,
+        `     mv ${callersDir}/signing.* ${targetDir}/\n` +
+        `     mv ${callersDir}/exchange.* ${targetDir}/\n`,
     );
     process.exit(1);
   }
 
-  generateAndSave(targetDir, `MCP proxy (local) — alias "${alias}"`);
-} else if (args[0] === 'remote') {
-  generateAndSave(getRemoteKeysDir(), 'remote server');
+  generateAndSave(targetDir, `caller — alias "${alias}"`);
+} else if (args[0] === 'server' || args[0] === 'remote') {
+  if (args[0] === 'remote') {
+    console.error('Note: "remote" is deprecated, use "server" instead.');
+  }
+  generateAndSave(getServerKeysDir(), 'server');
 } else if (args[0] === '--dir' && args[1]) {
   generateAndSave(args[1], 'custom');
 } else if (args[0] === 'show' && args[1]) {
