@@ -4,6 +4,10 @@
  * Provides CRUD operations over the drawlatch key directory structure
  * so that callboard (and other consumers) can manage keys programmatically
  * without touching the filesystem directly.
+ *
+ * Key layout:
+ *   keys/callers/<alias>/  — Caller keypairs (one per alias)
+ *   keys/server/           — Server keypair (single, flat)
  */
 
 import fs from 'node:fs';
@@ -20,7 +24,7 @@ import {
   fingerprint,
   type SerializedPublicKeys,
 } from './keys.js';
-import { getLocalKeysDir, getPeerKeysDir, getRemoteKeysDir, getConfigDir } from '../config.js';
+import { getCallerKeysDir, getServerKeysDir, getConfigDir } from '../config.js';
 
 export interface CreateCallerResult {
   publicKeys: SerializedPublicKeys;
@@ -36,28 +40,23 @@ function resolveConfigDir(opts?: KeyManagerOpts): string {
   return getConfigDir();
 }
 
-function localKeysDir(opts?: KeyManagerOpts): string {
-  if (opts?.configDir) return path.join(opts.configDir, 'keys', 'local');
-  return getLocalKeysDir();
+function callerKeysDir(opts?: KeyManagerOpts): string {
+  if (opts?.configDir) return path.join(opts.configDir, 'keys', 'callers');
+  return getCallerKeysDir();
 }
 
-function remoteKeysDir(opts?: KeyManagerOpts): string {
-  if (opts?.configDir) return path.join(opts.configDir, 'keys', 'remote');
-  return getRemoteKeysDir();
-}
-
-function peerKeysDir(opts?: KeyManagerOpts): string {
-  if (opts?.configDir) return path.join(opts.configDir, 'keys', 'peers');
-  return getPeerKeysDir();
+function serverKeysDir(opts?: KeyManagerOpts): string {
+  if (opts?.configDir) return path.join(opts.configDir, 'keys', 'server');
+  return getServerKeysDir();
 }
 
 /**
  * Create a new caller identity (Ed25519 + X25519 keypairs).
- * Saves under `keys/local/<alias>/`.
+ * Saves under `keys/callers/<alias>/`.
  * Throws if the alias already exists.
  */
 export function createCaller(alias: string, opts?: KeyManagerOpts): CreateCallerResult {
-  const dir = path.join(localKeysDir(opts), alias);
+  const dir = path.join(callerKeysDir(opts), alias);
   if (fs.existsSync(path.join(dir, 'signing.key.pem'))) {
     throw new Error(`Caller "${alias}" already exists at ${dir}`);
   }
@@ -74,35 +73,35 @@ export function createCaller(alias: string, opts?: KeyManagerOpts): CreateCaller
 }
 
 /**
- * Export public keys for a local identity or the remote server.
- *
- * - type 'local': reads from `keys/local/<alias>/` (alias defaults to 'default')
- * - type 'remote': reads from `keys/remote/`
+ * Export public keys for a caller identity.
+ * Reads from `keys/callers/<alias>/`.
  */
-export function exportPublicKeys(
-  type: 'local' | 'remote',
-  alias?: string,
-  opts?: KeyManagerOpts,
-): SerializedPublicKeys {
-  let dir: string;
-  if (type === 'local') {
-    dir = path.join(localKeysDir(opts), alias ?? 'default');
-  } else {
-    dir = remoteKeysDir(opts);
-  }
+export function exportCallerPublicKeys(alias: string, opts?: KeyManagerOpts): SerializedPublicKeys {
+  const dir = path.join(callerKeysDir(opts), alias);
   const pub = loadPublicKeys(dir);
   return serializePublicKeys(pub);
 }
 
 /**
- * Import a peer's public keys. Saves under `keys/peers/<alias>/`.
+ * Export public keys for the server.
+ * Reads from `keys/server/`.
  */
-export function importPeerPublicKeys(
+export function exportServerPublicKeys(opts?: KeyManagerOpts): SerializedPublicKeys {
+  const dir = serverKeysDir(opts);
+  const pub = loadPublicKeys(dir);
+  return serializePublicKeys(pub);
+}
+
+/**
+ * Import a caller's public keys. Saves under `keys/callers/<alias>/`.
+ * Used by the server to store received caller public keys (e.g., via sync).
+ */
+export function importCallerPublicKeys(
   alias: string,
   keys: SerializedPublicKeys,
   opts?: KeyManagerOpts,
 ): void {
-  const dir = path.join(peerKeysDir(opts), alias);
+  const dir = path.join(callerKeysDir(opts), alias);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 
   // Validate the keys are parseable before writing
@@ -113,76 +112,85 @@ export function importPeerPublicKeys(
 }
 
 /**
- * Export a peer's previously-imported public keys.
+ * Save server public keys. Writes to `keys/server/`.
+ * Used by callboard to store the remote server's public keys (e.g., via sync).
  */
-export function exportPeerPublicKeys(alias: string, opts?: KeyManagerOpts): SerializedPublicKeys {
-  const dir = path.join(peerKeysDir(opts), alias);
-  const pub = loadPublicKeys(dir);
-  return serializePublicKeys(pub);
+export function saveServerPublicKeys(keys: SerializedPublicKeys, opts?: KeyManagerOpts): void {
+  const dir = serverKeysDir(opts);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+  // Validate the keys are parseable before writing
+  deserializePublicKeys(keys);
+
+  fs.writeFileSync(path.join(dir, 'signing.pub.pem'), keys.signing, { mode: 0o644 });
+  fs.writeFileSync(path.join(dir, 'exchange.pub.pem'), keys.exchange, { mode: 0o644 });
 }
 
 /**
- * Save public keys from a remote server (shorthand for `importPeerPublicKeys('remote-server', ...)`).
- */
-export function saveRemotePublicKeys(
-  keys: SerializedPublicKeys,
-  opts?: KeyManagerOpts,
-): void {
-  importPeerPublicKeys('remote-server', keys, opts);
-}
-
-/**
- * List all local caller aliases.
+ * List all caller aliases (scans `keys/callers/`).
  */
 export function listCallers(opts?: KeyManagerOpts): string[] {
-  const dir = localKeysDir(opts);
+  const dir = callerKeysDir(opts);
   if (!fs.existsSync(dir)) return [];
   return fs
     .readdirSync(dir, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && fs.existsSync(path.join(dir, d.name, 'signing.key.pem')))
+    .filter(
+      (d) =>
+        d.isDirectory() &&
+        (fs.existsSync(path.join(dir, d.name, 'signing.key.pem')) ||
+          fs.existsSync(path.join(dir, d.name, 'signing.pub.pem'))),
+    )
     .map((d) => d.name);
 }
 
 /**
- * List all imported peer aliases.
- */
-export function listPeers(opts?: KeyManagerOpts): string[] {
-  const dir = peerKeysDir(opts);
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && fs.existsSync(path.join(dir, d.name, 'signing.pub.pem')))
-    .map((d) => d.name);
-}
-
-/**
- * Check if a local caller identity exists.
+ * Check if a caller identity exists (has at least public keys).
  */
 export function callerExists(alias: string, opts?: KeyManagerOpts): boolean {
-  return fs.existsSync(path.join(localKeysDir(opts), alias, 'signing.key.pem'));
+  const dir = path.join(callerKeysDir(opts), alias);
+  return (
+    fs.existsSync(path.join(dir, 'signing.key.pem')) ||
+    fs.existsSync(path.join(dir, 'signing.pub.pem'))
+  );
 }
 
 /**
- * Check if a peer's keys have been imported.
+ * Check if server keys exist.
  */
-export function peerExists(alias: string, opts?: KeyManagerOpts): boolean {
-  return fs.existsSync(path.join(peerKeysDir(opts), alias, 'signing.pub.pem'));
+export function serverExists(opts?: KeyManagerOpts): boolean {
+  const dir = serverKeysDir(opts);
+  return (
+    fs.existsSync(path.join(dir, 'signing.key.pem')) ||
+    fs.existsSync(path.join(dir, 'signing.pub.pem'))
+  );
 }
 
 /**
- * Get the fingerprint of a local caller's keys.
+ * Get the fingerprint of a caller's keys.
  */
 export function callerFingerprint(alias: string, opts?: KeyManagerOpts): string {
-  const dir = path.join(localKeysDir(opts), alias);
-  const bundle = loadKeyBundle(dir);
-  return fingerprint(extractPublicKeys(bundle));
+  const dir = path.join(callerKeysDir(opts), alias);
+  // Try full bundle first (has private keys), fall back to public-only
+  try {
+    const bundle = loadKeyBundle(dir);
+    return fingerprint(extractPublicKeys(bundle));
+  } catch {
+    const pub = loadPublicKeys(dir);
+    return fingerprint(pub);
+  }
 }
 
 /**
- * Get the fingerprint of a peer's imported public keys.
+ * Get the fingerprint of the server's keys.
  */
-export function peerFingerprint(alias: string, opts?: KeyManagerOpts): string {
-  const dir = path.join(peerKeysDir(opts), alias);
-  const pub = loadPublicKeys(dir);
-  return fingerprint(pub);
+export function serverFingerprint(opts?: KeyManagerOpts): string {
+  const dir = serverKeysDir(opts);
+  // Try full bundle first (has private keys), fall back to public-only
+  try {
+    const bundle = loadKeyBundle(dir);
+    return fingerprint(extractPublicKeys(bundle));
+  } catch {
+    const pub = loadPublicKeys(dir);
+    return fingerprint(pub);
+  }
 }

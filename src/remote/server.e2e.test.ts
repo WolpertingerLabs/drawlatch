@@ -58,7 +58,6 @@ beforeAll(async () => {
   const config: RemoteServerConfig = {
     host: '127.0.0.1',
     port: 0, // not used — we listen on a random port
-    localKeysDir: '',
     connectors: [
       {
         alias: 'test-route',
@@ -67,7 +66,7 @@ beforeAll(async () => {
       },
     ],
     callers: {
-      'test-client': { peerKeyDir: '', connections: ['test-route'] },
+      'test-client': { connections: ['test-route'] },
     },
     rateLimitPerMinute: 60,
   };
@@ -353,7 +352,7 @@ describe('Rate limiting', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 0,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'rate-test',
@@ -362,7 +361,7 @@ describe('Rate limiting', () => {
         },
       ],
       callers: {
-        'test-client': { peerKeyDir: '', connections: ['rate-test'] },
+        'test-client': { connections: ['rate-test'] },
       },
       rateLimitPerMinute: 3, // Very low limit for testing
     };
@@ -507,7 +506,7 @@ describe('http_request tool', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 0,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'http-test',
@@ -516,7 +515,7 @@ describe('http_request tool', () => {
         },
       ],
       callers: {
-        'test-client': { peerKeyDir: '', connections: ['http-test'] },
+        'test-client': { connections: ['http-test'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -733,7 +732,7 @@ describe('http_request with resolveSecretsInBody enabled', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 0,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'body-test',
@@ -743,7 +742,7 @@ describe('http_request with resolveSecretsInBody enabled', () => {
         },
       ],
       callers: {
-        'test-client': { peerKeyDir: '', connections: ['body-test'] },
+        'test-client': { connections: ['body-test'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -897,7 +896,7 @@ describe('Route isolation', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 0,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'route-a',
@@ -913,7 +912,7 @@ describe('Route isolation', () => {
         },
       ],
       callers: {
-        'test-client': { peerKeyDir: '', connections: ['route-a', 'route-b'] },
+        'test-client': { connections: ['route-a', 'route-b'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -1107,7 +1106,7 @@ describe('Route metadata in list_routes', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 0,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'github',
@@ -1135,7 +1134,7 @@ describe('Route metadata in list_routes', () => {
         },
       ],
       callers: {
-        'test-client': { peerKeyDir: '', connections: ['github', 'stripe', 'internal'] },
+        'test-client': { connections: ['github', 'stripe', 'internal'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -1287,35 +1286,41 @@ describe('Handshake finish edge cases', () => {
 // ── loadAuthorizedPeers (disk-based) ───────────────────────────────────────
 
 describe('loadCallerPeers via createApp', () => {
-  let peerDir: string;
-  let tmpKeysDir: string;
+  let tmpConfigDir: string;
+  const originalConfigDir = process.env.MCP_CONFIG_DIR;
 
   beforeAll(() => {
-    // Create temp directories for peer public keys
-    const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-peers-'));
-    peerDir = path.join(tmpBase, 'client1');
-    fs.mkdirSync(peerDir, { recursive: true });
-    tmpKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-server-keys-'));
+    // Create temp config dir with proper key structure
+    tmpConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-config-'));
+    const serverKeysPath = path.join(tmpConfigDir, 'keys', 'server');
+    const callerKeysPath = path.join(tmpConfigDir, 'keys', 'callers', 'client1');
+    fs.mkdirSync(serverKeysPath, { recursive: true });
+    fs.mkdirSync(callerKeysPath, { recursive: true });
 
     // Save server keys to disk so createApp can load them
-    saveKeyBundle(serverKeys, tmpKeysDir);
+    saveKeyBundle(serverKeys, serverKeysPath);
 
     // Save one valid peer's public keys
     const serialized = serializeKeyBundle(clientKeys);
-    fs.writeFileSync(path.join(peerDir, 'signing.pub.pem'), serialized.signing.publicKey);
-    fs.writeFileSync(path.join(peerDir, 'exchange.pub.pem'), serialized.exchange.publicKey);
+    fs.writeFileSync(path.join(callerKeysPath, 'signing.pub.pem'), serialized.signing.publicKey);
+    fs.writeFileSync(path.join(callerKeysPath, 'exchange.pub.pem'), serialized.exchange.publicKey);
+
+    process.env.MCP_CONFIG_DIR = tmpConfigDir;
   });
 
   afterAll(() => {
-    fs.rmSync(path.dirname(peerDir), { recursive: true, force: true });
-    fs.rmSync(tmpKeysDir, { recursive: true, force: true });
+    if (originalConfigDir) {
+      process.env.MCP_CONFIG_DIR = originalConfigDir;
+    } else {
+      delete process.env.MCP_CONFIG_DIR;
+    }
+    fs.rmSync(tmpConfigDir, { recursive: true, force: true });
   });
 
   it('should load peers from disk and allow authorized handshakes', async () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 0,
-      localKeysDir: tmpKeysDir,
       connectors: [
         {
           alias: 'disk-test',
@@ -1324,7 +1329,7 @@ describe('loadCallerPeers via createApp', () => {
         },
       ],
       callers: {
-        client1: { peerKeyDir: peerDir, connections: ['disk-test'] },
+        client1: { connections: ['disk-test'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -1398,10 +1403,8 @@ describe('loadCallerPeers via createApp', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 0,
-      localKeysDir: '',
       callers: {
         ghost: {
-          peerKeyDir: '/tmp/nonexistent-peers-dir-xyz-' + crypto.randomUUID(),
           connections: [],
         },
       },
@@ -1409,6 +1412,7 @@ describe('loadCallerPeers via createApp', () => {
     };
 
     // Should not throw — loadCallerPeers skips missing dirs
+    // (ghost has no keys in keys/callers/ghost/)
     expect(() =>
       createApp({
         config,
@@ -1519,7 +1523,7 @@ describe('Per-caller access control', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 0,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'service-x',
@@ -1537,8 +1541,8 @@ describe('Per-caller access control', () => {
         },
       ],
       callers: {
-        full: { peerKeyDir: '', connections: ['service-x', 'service-y'] },
-        limited: { peerKeyDir: '', connections: ['service-x'] },
+        full: { connections: ['service-x', 'service-y'] },
+        limited: { connections: ['service-x'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -1742,7 +1746,7 @@ describe('Per-caller env overrides', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 0,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'api',
@@ -1754,17 +1758,14 @@ describe('Per-caller env overrides', () => {
       ],
       callers: {
         alice: {
-          peerKeyDir: '',
           connections: ['api'],
           env: { GH_TOKEN: '${ALICE_GH_TOKEN}' },
         },
         bob: {
-          peerKeyDir: '',
           connections: ['api'],
           env: { GH_TOKEN: '${BOB_GH_TOKEN}' },
         },
         charlie: {
-          peerKeyDir: '',
           connections: ['api'],
           env: { GH_TOKEN: 'literal-hardcoded-token' },
         },
@@ -1954,7 +1955,7 @@ describe('Webhook ingestor', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 0,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'github',
@@ -1974,7 +1975,7 @@ describe('Webhook ingestor', () => {
         },
       ],
       callers: {
-        'webhook-client': { peerKeyDir: '', connections: ['github'] },
+        'webhook-client': { connections: ['github'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -2274,7 +2275,7 @@ describe('test_connection tool', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 0,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'test-api',
@@ -2321,7 +2322,6 @@ describe('test_connection tool', () => {
       ],
       callers: {
         'tc-client': {
-          peerKeyDir: '',
           connections: ['test-api', 'test-api-post', 'test-api-fail', 'no-test'],
         },
       },
@@ -2497,7 +2497,7 @@ describe('test_ingestor tool', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 0,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'webhook-conn',
@@ -2564,7 +2564,6 @@ describe('test_ingestor tool', () => {
       ],
       callers: {
         'ti-client': {
-          peerKeyDir: '',
           connections: [
             'webhook-conn',
             'http-conn',
@@ -2790,7 +2789,7 @@ describe('list_listener_configs, resolve_listener_options, control_listener, and
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 0,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'with-listener',
@@ -2881,7 +2880,6 @@ describe('list_listener_configs, resolve_listener_options, control_listener, and
       ],
       callers: {
         'lc-client': {
-          peerKeyDir: '',
           connections: ['with-listener', 'no-listener'],
         },
       },
