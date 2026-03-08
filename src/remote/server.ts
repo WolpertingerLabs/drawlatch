@@ -1835,15 +1835,24 @@ export function main(): void {
   const config = loadRemoteConfig();
 
   const serverKeysDirPath = getServerKeysDir();
-  if (!fs.existsSync(serverKeysDirPath)) {
-    console.error(`[remote] Error: Server keys not found at ${serverKeysDirPath}`);
+  const requiredKeyFiles = ['signing.key.pem', 'signing.pub.pem', 'exchange.key.pem', 'exchange.pub.pem'];
+  const missingKeyFiles = requiredKeyFiles.filter(
+    (f) => !fs.existsSync(path.join(serverKeysDirPath, f)),
+  );
+  if (missingKeyFiles.length > 0) {
+    if (!fs.existsSync(serverKeysDirPath)) {
+      console.error(`[remote] Error: Server keys not found at ${serverKeysDirPath}`);
+    } else {
+      console.error(`[remote] Error: Incomplete server keys in ${serverKeysDirPath}`);
+      console.error(`[remote] Missing: ${missingKeyFiles.join(', ')}`);
+    }
     console.error('[remote] Run: drawlatch generate-keys server');
     process.exit(1);
   }
 
   if (Object.keys(config.callers).length === 0) {
-    console.error('[remote] Warning: No callers configured. No clients will be able to connect.');
-    console.error('[remote] Add callers to remote.config.json or run: drawlatch init');
+    console.log('[remote] No callers configured — server will accept sync requests.');
+    console.log('[remote] To add callers, run: drawlatch sync');
   }
 
   const port = process.env.DRAWLATCH_PORT ? parseInt(process.env.DRAWLATCH_PORT, 10) : config.port;
