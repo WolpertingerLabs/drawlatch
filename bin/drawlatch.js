@@ -52,6 +52,8 @@ const ENV_FILE = getEnvFilePath();
 const PID_FILE = join(CONFIG_DIR, "drawlatch.pid");
 const LOG_DIR = join(CONFIG_DIR, "logs");
 const LOG_FILE = join(LOG_DIR, "drawlatch.log");
+const VERSION_CACHE_FILE = join(CONFIG_DIR, "latest-version.json");
+const VERSION_CHECK_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 // Read version from package.json
 const pkgJson = JSON.parse(
@@ -91,6 +93,11 @@ try {
   process.exit(1);
 }
 
+// ── Kick off version check early (non-blocking) ──────────────────
+const updateCheckPromise = (subcommand === null || subcommand === "help" || (values.help && !subcommand))
+  ? checkForUpdate()
+  : Promise.resolve(null);
+
 // ── Dispatch ──────────────────────────────────────────────────────
 if (values.version) {
   console.log(VERSION);
@@ -98,6 +105,8 @@ if (values.version) {
 }
 if (values.help && !subcommand) {
   printHelp();
+  const latestVersion = await updateCheckPromise;
+  if (latestVersion) console.log(formatUpdateNotice(latestVersion));
   process.exit(0);
 }
 
@@ -177,6 +186,10 @@ switch (subcommand) {
     break;
   case "help":
     printHelp();
+    {
+      const latestVersion = await updateCheckPromise;
+      if (latestVersion) console.log(formatUpdateNotice(latestVersion));
+    }
     break;
   default:
     console.error(`Unknown command: ${subcommand}\n`);
@@ -194,6 +207,8 @@ async function cmdDefault() {
     console.log("Drawlatch remote server is not running.\n");
     printHelp();
   }
+  const latestVersion = await updateCheckPromise;
+  if (latestVersion) console.log(formatUpdateNotice(latestVersion));
 }
 
 async function cmdInit() {
@@ -1092,6 +1107,120 @@ function formatUptime(ms) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// ── Version check utilities ───────────────────────────────────────
+
+const NPM_PACKAGE_NAME = pkgJson.name;
+
+function readVersionCache() {
+  try {
+    if (!existsSync(VERSION_CACHE_FILE)) return null;
+    const data = JSON.parse(readFileSync(VERSION_CACHE_FILE, "utf-8"));
+    if (data.checkedAt && Date.now() - data.checkedAt < VERSION_CHECK_TTL_MS) {
+      return data.latestVersion;
+    }
+    return null; // stale
+  } catch {
+    return null;
+  }
+}
+
+function writeVersionCache(latestVersion) {
+  try {
+    ensureConfigDir();
+    writeFileSync(
+      VERSION_CACHE_FILE,
+      JSON.stringify({ latestVersion, checkedAt: Date.now() }) + "\n",
+      { mode: 0o600 },
+    );
+  } catch {
+    // Best effort
+  }
+}
+
+async function fetchLatestVersion() {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(
+      `https://registry.npmjs.org/${NPM_PACKAGE_NAME}/latest`,
+      { signal: controller.signal },
+    );
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.version || null;
+  } catch {
+    return null;
+  }
+}
+
+function compareVersions(a, b) {
+  // Returns > 0 if a > b, < 0 if a < b, 0 if equal
+  // Handles pre-release: 1.0.0 > 1.0.0-alpha.1
+  const parseVer = (v) => {
+    const [core, pre] = v.split("-", 2);
+    const parts = core.split(".").map(Number);
+    return { parts, pre: pre || null };
+  };
+  const va = parseVer(a);
+  const vb = parseVer(b);
+
+  // Compare core version parts
+  const maxLen = Math.max(va.parts.length, vb.parts.length);
+  for (let i = 0; i < maxLen; i++) {
+    const pa = va.parts[i] || 0;
+    const pb = vb.parts[i] || 0;
+    if (pa !== pb) return pa - pb;
+  }
+
+  // Same core: no pre-release > pre-release
+  if (!va.pre && vb.pre) return 1;
+  if (va.pre && !vb.pre) return -1;
+  if (!va.pre && !vb.pre) return 0;
+
+  // Both have pre-release: compare segments
+  const aParts = va.pre.split(".");
+  const bParts = vb.pre.split(".");
+  const preLen = Math.max(aParts.length, bParts.length);
+  for (let i = 0; i < preLen; i++) {
+    const sa = aParts[i];
+    const sb = bParts[i];
+    if (sa === undefined) return -1;
+    if (sb === undefined) return 1;
+    const na = Number(sa);
+    const nb = Number(sb);
+    const aIsNum = !isNaN(na);
+    const bIsNum = !isNaN(nb);
+    if (aIsNum && bIsNum) {
+      if (na !== nb) return na - nb;
+    } else if (aIsNum) {
+      return -1; // numbers sort before strings
+    } else if (bIsNum) {
+      return 1;
+    } else {
+      if (sa < sb) return -1;
+      if (sa > sb) return 1;
+    }
+  }
+  return 0;
+}
+
+async function checkForUpdate() {
+  // Try cache first
+  const cached = readVersionCache();
+  if (cached) return cached !== VERSION && compareVersions(cached, VERSION) > 0 ? cached : null;
+
+  // Fetch in background-ish (awaited but with short timeout)
+  const latest = await fetchLatestVersion();
+  if (latest) writeVersionCache(latest);
+  if (latest && latest !== VERSION && compareVersions(latest, VERSION) > 0) return latest;
+  return null;
+}
+
+function formatUpdateNotice(latestVersion) {
+  return `\n  Update available: ${VERSION} → ${latestVersion}\n  Run: npm install -g ${NPM_PACKAGE_NAME}\n`;
 }
 
 // ── Help text ─────────────────────────────────────────────────────
