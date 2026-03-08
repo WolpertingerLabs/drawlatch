@@ -83,14 +83,18 @@ describe('resolveSecrets', () => {
     });
   });
 
-  it('should resolve ${VAR_NAME} from environment', () => {
-    process.env.MY_SECRET = 'resolved-value';
-    process.env.ANOTHER_SECRET = 'another-value';
+  it('should resolve ${VAR_NAME} from prefixed environment with callerAlias', () => {
+    process.env.TEST_MY_SECRET = 'resolved-value';
+    process.env.TEST_ANOTHER_SECRET = 'another-value';
 
-    const result = resolveSecrets({
-      secret1: '${MY_SECRET}',
-      secret2: '${ANOTHER_SECRET}',
-    });
+    const result = resolveSecrets(
+      {
+        secret1: '${MY_SECRET}',
+        secret2: '${ANOTHER_SECRET}',
+      },
+      undefined,
+      'test',
+    );
 
     expect(result).toEqual({
       secret1: 'resolved-value',
@@ -119,13 +123,17 @@ describe('resolveSecrets', () => {
   });
 
   it('should handle mixed literal and env var values', () => {
-    process.env.DB_PASSWORD = 'p@ssw0rd';
+    process.env.TEST_DB_PASSWORD = 'p@ssw0rd';
 
-    const result = resolveSecrets({
-      host: 'localhost',
-      password: '${DB_PASSWORD}',
-      port: '5432',
-    });
+    const result = resolveSecrets(
+      {
+        host: 'localhost',
+        password: '${DB_PASSWORD}',
+        port: '5432',
+      },
+      undefined,
+      'test',
+    );
 
     expect(result).toEqual({
       host: 'localhost',
@@ -156,21 +164,29 @@ describe('resolveSecrets', () => {
   });
 
   it('should resolve env var with empty string value', () => {
-    process.env.EMPTY_VAR = '';
+    process.env.TEST_EMPTY_VAR = '';
 
-    const result = resolveSecrets({
-      empty: '${EMPTY_VAR}',
-    });
+    const result = resolveSecrets(
+      {
+        empty: '${EMPTY_VAR}',
+      },
+      undefined,
+      'test',
+    );
 
     expect(result).toEqual({ empty: '' });
   });
 
   it('should resolve env var with special characters', () => {
-    process.env.SPECIAL_CHARS = 'p@$$w0rd!#%^&*()';
+    process.env.TEST_SPECIAL_CHARS = 'p@$$w0rd!#%^&*()';
 
-    const result = resolveSecrets({
-      special: '${SPECIAL_CHARS}',
-    });
+    const result = resolveSecrets(
+      {
+        special: '${SPECIAL_CHARS}',
+      },
+      undefined,
+      'test',
+    );
 
     expect(result).toEqual({ special: 'p@$$w0rd!#%^&*()' });
   });
@@ -186,31 +202,64 @@ describe('resolveSecrets', () => {
     expect(result).toEqual({ GITHUB_TOKEN: 'from-caller-override' });
   });
 
-  it('should fall back to process.env when envOverrides lacks the key', () => {
-    process.env.OTHER_TOKEN = 'from-env';
+  it('should fall back to prefixed env var when envOverrides lacks the key', () => {
+    process.env.TEST_OTHER_TOKEN = 'from-prefixed-env';
 
     const result = resolveSecrets(
       { OTHER_TOKEN: '${OTHER_TOKEN}' },
       { GITHUB_TOKEN: 'only-this-one' },
+      'test',
     );
 
-    expect(result).toEqual({ OTHER_TOKEN: 'from-env' });
+    expect(result).toEqual({ OTHER_TOKEN: 'from-prefixed-env' });
   });
 
-  it('should work normally with empty envOverrides', () => {
-    process.env.MY_VAR = 'hello';
+  it('should NOT fall back to bare process.env (cross-caller isolation)', () => {
+    process.env.OTHER_TOKEN = 'bare-env-value';
 
-    const result = resolveSecrets({ MY_VAR: '${MY_VAR}' }, {});
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {
+      /* noop */
+    });
+
+    const result = resolveSecrets(
+      { OTHER_TOKEN: '${OTHER_TOKEN}' },
+      { GITHUB_TOKEN: 'only-this-one' },
+      'test',
+    );
+
+    // Should NOT resolve — bare process.env is not used
+    expect(result).not.toHaveProperty('OTHER_TOKEN');
+    consoleSpy.mockRestore();
+  });
+
+  it('should work with empty envOverrides and callerAlias', () => {
+    process.env.TEST_MY_VAR = 'hello';
+
+    const result = resolveSecrets({ MY_VAR: '${MY_VAR}' }, {}, 'test');
 
     expect(result).toEqual({ MY_VAR: 'hello' });
   });
 
-  it('should work normally with undefined envOverrides', () => {
-    process.env.MY_VAR = 'hello';
+  it('should work with undefined envOverrides and callerAlias', () => {
+    process.env.TEST_MY_VAR = 'hello';
 
-    const result = resolveSecrets({ MY_VAR: '${MY_VAR}' }, undefined);
+    const result = resolveSecrets({ MY_VAR: '${MY_VAR}' }, undefined, 'test');
 
     expect(result).toEqual({ MY_VAR: 'hello' });
+  });
+
+  it('should not resolve without callerAlias or envOverrides', () => {
+    process.env.MY_VAR = 'hello';
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {
+      /* noop */
+    });
+
+    const result = resolveSecrets({ MY_VAR: '${MY_VAR}' });
+
+    // Without callerAlias, bare process.env is not checked
+    expect(result).not.toHaveProperty('MY_VAR');
+    consoleSpy.mockRestore();
   });
 });
 
@@ -318,16 +367,20 @@ describe('resolveRoutes', () => {
     expect(routes).toEqual([]);
   });
 
-  it('should resolve env var references in secrets within routes', () => {
-    process.env.ROUTE_SECRET = 'env-resolved-value';
+  it('should resolve env var references in secrets within routes via callerAlias', () => {
+    process.env.TEST_ROUTE_SECRET = 'env-resolved-value';
 
-    const routes = resolveRoutes([
-      {
-        secrets: { TOKEN: '${ROUTE_SECRET}' },
-        headers: { Authorization: 'Bearer ${TOKEN}' },
-        allowedEndpoints: ['https://api.example.com/**'],
-      },
-    ]);
+    const routes = resolveRoutes(
+      [
+        {
+          secrets: { TOKEN: '${ROUTE_SECRET}' },
+          headers: { Authorization: 'Bearer ${TOKEN}' },
+          allowedEndpoints: ['https://api.example.com/**'],
+        },
+      ],
+      undefined,
+      'test',
+    );
 
     expect(routes[0].secrets).toEqual({ TOKEN: 'env-resolved-value' });
     expect(routes[0].headers).toEqual({ Authorization: 'Bearer env-resolved-value' });

@@ -101,7 +101,8 @@ export function setEnvVars(updates: Record<string, string>): void {
 
 /**
  * Check if a secret is set for a caller.
- * Resolution: caller env mapping → prefixed env var → bare env var.
+ * Resolution: caller env mapping → prefixed env var.
+ * Bare env var fallback intentionally removed to prevent cross-caller leakage.
  */
 export function isSecretSetForCaller(
   secretName: string,
@@ -123,12 +124,7 @@ export function isSecretSetForCaller(
 
   // 2. Check prefixed env var (e.g., DEFAULT_GITHUB_TOKEN)
   const prefixed = prefixedEnvVar(callerAlias, secretName);
-  if (process.env[prefixed] !== undefined && process.env[prefixed] !== '') {
-    return true;
-  }
-
-  // 3. Fall back to bare env var (e.g., GITHUB_TOKEN)
-  return process.env[secretName] !== undefined && process.env[secretName] !== '';
+  return process.env[prefixed] !== undefined && process.env[prefixed] !== '';
 }
 
 /**
