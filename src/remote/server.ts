@@ -1376,8 +1376,14 @@ export function createApp(options: CreateAppOptions = {}) {
 
   rateLimitPerMinute = config.rateLimitPerMinute;
 
-  // Create or use the provided ingestor manager
-  const ingestorManager = options.ingestorManager ?? new IngestorManager(config);
+  // Create or use the provided ingestor manager.
+  // When config is loaded from disk (production), pass loadRemoteConfig as the
+  // config loader so startOne()/restartOne() read fresh config, picking up
+  // changes made by tool handlers without requiring a server restart.
+  // When config is injected via options (tests), omit the loader so the
+  // IngestorManager uses the injected config snapshot.
+  const configLoader = options.config ? undefined : loadRemoteConfig;
+  const ingestorManager = options.ingestorManager ?? new IngestorManager(config, configLoader);
   app.locals.ingestorManager = ingestorManager;
 
   // Log connector and caller summary
@@ -1435,9 +1441,13 @@ export function createApp(options: CreateAppOptions = {}) {
       const matchedPeer = authorizedPeers.find((p) => p.keys === initiatorPubKey);
       const callerAlias = matchedPeer?.alias ?? 'unknown';
 
+      // Reload config from disk so new sessions pick up changes made by tool
+      // handlers (e.g. set_connection_enabled, set_secrets) without a restart.
+      const freshConfig = options.config ?? loadRemoteConfig();
+
       // Resolve per-caller routes (with optional env overrides)
-      const callerRoutes = resolveCallerRoutes(config, callerAlias);
-      const caller = config.callers[callerAlias];
+      const callerRoutes = resolveCallerRoutes(freshConfig, callerAlias);
+      const caller = freshConfig.callers[callerAlias];
       const callerEnvResolved = resolveSecrets(caller.env ?? {});
       const callerResolvedRoutes = resolveRoutes(callerRoutes, callerEnvResolved, callerAlias);
 
@@ -1711,12 +1721,15 @@ export function createApp(options: CreateAppOptions = {}) {
       return;
     }
 
+    // Reload config from disk so we don't clobber changes made since startup
+    const freshConfig = options.config ?? loadRemoteConfig();
+
     // Register caller in config if not already present
-    if (!(callerAlias in config.callers)) {
-      config.callers[callerAlias] = {
+    if (!(callerAlias in freshConfig.callers)) {
+      freshConfig.callers[callerAlias] = {
         connections: [],
       };
-      saveRemoteConfig(config);
+      saveRemoteConfig(freshConfig);
       console.log(
         `[sync] Registered new caller "${callerAlias}" (0 connections — configure manually)`,
       );
@@ -1725,7 +1738,7 @@ export function createApp(options: CreateAppOptions = {}) {
     }
 
     // Reload authorized peers so the new caller can connect immediately
-    const newPeer = loadCallerPeers({ [callerAlias]: config.callers[callerAlias] });
+    const newPeer = loadCallerPeers({ [callerAlias]: freshConfig.callers[callerAlias] });
     for (const p of newPeer) {
       if (!authorizedPeers.find((existing) => existing.alias === p.alias)) {
         authorizedPeers.push(p);
