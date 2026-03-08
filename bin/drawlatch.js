@@ -944,9 +944,9 @@ async function cmdSync() {
   process.exit(1);
 }
 
-function promptInput(prompt) {
+async function promptInput(prompt) {
+  const { createInterface } = await import("node:readline");
   return new Promise((resolve) => {
-    const { createInterface } = require("node:readline");
     const rl = createInterface({
       input: process.stdin,
       output: process.stdout,
