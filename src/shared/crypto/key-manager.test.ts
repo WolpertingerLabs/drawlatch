@@ -4,18 +4,22 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   createCaller,
-  exportPublicKeys,
-  importPeerPublicKeys,
-  exportPeerPublicKeys,
-  saveRemotePublicKeys,
+  exportCallerPublicKeys,
+  exportServerPublicKeys,
+  importCallerPublicKeys,
+  saveServerPublicKeys,
   listCallers,
-  listPeers,
   callerExists,
-  peerExists,
+  serverExists,
   callerFingerprint,
-  peerFingerprint,
+  serverFingerprint,
 } from './key-manager.js';
-import { generateKeyBundle, saveKeyBundle, extractPublicKeys, serializePublicKeys } from './keys.js';
+import {
+  generateKeyBundle,
+  saveKeyBundle,
+  extractPublicKeys,
+  serializePublicKeys,
+} from './keys.js';
 
 let tmpDir: string;
 
@@ -35,7 +39,7 @@ describe('createCaller', () => {
     expect(result.fingerprint).toMatch(/^[0-9a-f]{2}(:[0-9a-f]{2}){15}$/);
 
     // Verify files exist
-    const keyDir = path.join(tmpDir, 'keys', 'local', 'test-caller');
+    const keyDir = path.join(tmpDir, 'keys', 'callers', 'test-caller');
     expect(fs.existsSync(path.join(keyDir, 'signing.pub.pem'))).toBe(true);
     expect(fs.existsSync(path.join(keyDir, 'signing.key.pem'))).toBe(true);
     expect(fs.existsSync(path.join(keyDir, 'exchange.pub.pem'))).toBe(true);
@@ -48,50 +52,51 @@ describe('createCaller', () => {
   });
 });
 
-describe('exportPublicKeys', () => {
-  it('exports local caller public keys', () => {
+describe('exportCallerPublicKeys', () => {
+  it('exports caller public keys', () => {
     const created = createCaller('export-test', { configDir: tmpDir });
-    const exported = exportPublicKeys('local', 'export-test', { configDir: tmpDir });
+    const exported = exportCallerPublicKeys('export-test', { configDir: tmpDir });
     expect(exported.signing).toBe(created.publicKeys.signing);
     expect(exported.exchange).toBe(created.publicKeys.exchange);
   });
+});
 
-  it('exports remote server public keys', () => {
-    // Set up a remote key bundle
-    const remoteDir = path.join(tmpDir, 'keys', 'remote');
+describe('exportServerPublicKeys', () => {
+  it('exports server public keys', () => {
+    const serverDir = path.join(tmpDir, 'keys', 'server');
     const bundle = generateKeyBundle();
-    saveKeyBundle(bundle, remoteDir);
+    saveKeyBundle(bundle, serverDir);
 
-    const exported = exportPublicKeys('remote', undefined, { configDir: tmpDir });
+    const exported = exportServerPublicKeys({ configDir: tmpDir });
     expect(exported.signing).toContain('PUBLIC KEY');
     expect(exported.exchange).toContain('PUBLIC KEY');
   });
 });
 
-describe('importPeerPublicKeys / exportPeerPublicKeys', () => {
-  it('round-trips peer public keys', () => {
+describe('importCallerPublicKeys', () => {
+  it('round-trips caller public keys', () => {
     const bundle = generateKeyBundle();
     const pub = serializePublicKeys(extractPublicKeys(bundle));
 
-    importPeerPublicKeys('my-peer', pub, { configDir: tmpDir });
-    const exported = exportPeerPublicKeys('my-peer', { configDir: tmpDir });
+    importCallerPublicKeys('my-caller', pub, { configDir: tmpDir });
+    const exported = exportCallerPublicKeys('my-caller', { configDir: tmpDir });
 
     expect(exported.signing).toBe(pub.signing);
     expect(exported.exchange).toBe(pub.exchange);
   });
 });
 
-describe('saveRemotePublicKeys', () => {
-  it('saves under peers/remote-server/', () => {
+describe('saveServerPublicKeys', () => {
+  it('saves under keys/server/', () => {
     const bundle = generateKeyBundle();
     const pub = serializePublicKeys(extractPublicKeys(bundle));
 
-    saveRemotePublicKeys(pub, { configDir: tmpDir });
-    expect(peerExists('remote-server', { configDir: tmpDir })).toBe(true);
+    saveServerPublicKeys(pub, { configDir: tmpDir });
+    expect(serverExists({ configDir: tmpDir })).toBe(true);
   });
 });
 
-describe('listCallers / listPeers', () => {
+describe('listCallers', () => {
   it('lists created callers', () => {
     expect(listCallers({ configDir: tmpDir })).toEqual([]);
     createCaller('alice', { configDir: tmpDir });
@@ -100,24 +105,31 @@ describe('listCallers / listPeers', () => {
     expect(callers).toEqual(['alice', 'bob']);
   });
 
-  it('lists imported peers', () => {
-    expect(listPeers({ configDir: tmpDir })).toEqual([]);
+  it('lists imported caller public keys', () => {
+    expect(listCallers({ configDir: tmpDir })).toEqual([]);
     const bundle = generateKeyBundle();
     const pub = serializePublicKeys(extractPublicKeys(bundle));
-    importPeerPublicKeys('peer-a', pub, { configDir: tmpDir });
-    expect(listPeers({ configDir: tmpDir })).toEqual(['peer-a']);
+    importCallerPublicKeys('peer-a', pub, { configDir: tmpDir });
+    expect(listCallers({ configDir: tmpDir })).toEqual(['peer-a']);
   });
 });
 
-describe('callerExists / peerExists', () => {
+describe('callerExists / serverExists', () => {
   it('returns false for nonexistent', () => {
     expect(callerExists('nope', { configDir: tmpDir })).toBe(false);
-    expect(peerExists('nope', { configDir: tmpDir })).toBe(false);
+    expect(serverExists({ configDir: tmpDir })).toBe(false);
   });
 
   it('returns true after creation', () => {
     createCaller('exists', { configDir: tmpDir });
     expect(callerExists('exists', { configDir: tmpDir })).toBe(true);
+  });
+
+  it('returns true for server after save', () => {
+    const bundle = generateKeyBundle();
+    const pub = serializePublicKeys(extractPublicKeys(bundle));
+    saveServerPublicKeys(pub, { configDir: tmpDir });
+    expect(serverExists({ configDir: tmpDir })).toBe(true);
   });
 });
 
@@ -128,11 +140,19 @@ describe('fingerprints', () => {
     expect(fp).toBe(result.fingerprint);
   });
 
-  it('computes peer fingerprint', () => {
+  it('computes caller fingerprint from public keys only', () => {
     const bundle = generateKeyBundle();
     const pub = serializePublicKeys(extractPublicKeys(bundle));
-    importPeerPublicKeys('fp-peer', pub, { configDir: tmpDir });
-    const fp = peerFingerprint('fp-peer', { configDir: tmpDir });
+    importCallerPublicKeys('fp-caller', pub, { configDir: tmpDir });
+    const fp = callerFingerprint('fp-caller', { configDir: tmpDir });
+    expect(fp).toMatch(/^[0-9a-f]{2}(:[0-9a-f]{2}){15}$/);
+  });
+
+  it('computes server fingerprint', () => {
+    const serverDir = path.join(tmpDir, 'keys', 'server');
+    const bundle = generateKeyBundle();
+    saveKeyBundle(bundle, serverDir);
+    const fp = serverFingerprint({ configDir: tmpDir });
     expect(fp).toMatch(/^[0-9a-f]{2}(:[0-9a-f]{2}){15}$/);
   });
 });

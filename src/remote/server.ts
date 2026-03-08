@@ -55,11 +55,11 @@ import {
   type SyncResponse,
 } from '../shared/protocol/sync.js';
 import {
-  importPeerPublicKeys,
-  exportPublicKeys,
-  peerFingerprint,
+  importCallerPublicKeys,
+  exportServerPublicKeys,
+  callerFingerprint,
 } from '../shared/crypto/key-manager.js';
-import { getPeerKeysDir } from '../shared/config.js';
+import { getCallerKeysDir, getServerKeysDir } from '../shared/config.js';
 import { IngestorManager } from './ingestors/index.js';
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller, setCallerSecrets } from '../shared/env-utils.js';
@@ -131,18 +131,20 @@ let activeSyncSession: SyncSession | null = null;
 
 /**
  * Load authorized peers from per-caller config.
- * Each caller specifies its own peerKeyDir containing signing.pub.pem + exchange.pub.pem.
+ * Caller public keys are loaded from keys/callers/<alias>/.
  */
 function loadCallerPeers(callers: Record<string, CallerConfig>): AuthorizedPeer[] {
   const peers: AuthorizedPeer[] = [];
+  const callersDir = getCallerKeysDir();
 
   for (const [alias, caller] of Object.entries(callers)) {
-    if (!fs.existsSync(caller.peerKeyDir)) {
-      console.error(`[remote] Peer key dir not found for "${alias}": ${caller.peerKeyDir}`);
+    const keysDir = path.join(callersDir, alias);
+    if (!fs.existsSync(keysDir)) {
+      console.error(`[remote] Caller keys not found for "${alias}": ${keysDir}`);
       continue;
     }
     try {
-      peers.push({ alias, name: caller.name, keys: loadPublicKeys(caller.peerKeyDir) });
+      peers.push({ alias, name: caller.name, keys: loadPublicKeys(keysDir) });
       console.log(`[remote] Loaded authorized peer: ${alias}`);
     } catch (err) {
       console.error(`[remote] Failed to load peer ${alias}:`, err);
@@ -264,7 +266,7 @@ setInterval(() => {
  */
 function refreshCallerSessions(callerAlias: string): void {
   const config = loadRemoteConfig();
-  const caller = config.callers[callerAlias];
+  const caller = config.callers[callerAlias] as CallerConfig | undefined;
   if (!caller) return;
 
   const callerRoutes = resolveCallerRoutes(config, callerAlias);
@@ -792,7 +794,6 @@ const toolHandlers: Record<string, ToolHandler> = {
         return { success: false, error: 'Response did not contain an array at the expected path.' };
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
       const options = items.map((item) => ({
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
         value: item[valueField],
@@ -1271,11 +1272,7 @@ const toolHandlers: Record<string, ToolHandler> = {
    * Set or delete secrets for the authenticated caller.
    * Uses prefixed env vars to prevent cross-caller collisions.
    */
-  set_secrets: (
-    input: Record<string, unknown>,
-    _routes: ResolvedRoute[],
-    context: ToolContext,
-  ) => {
+  set_secrets: (input: Record<string, unknown>, _routes: ResolvedRoute[], context: ToolContext) => {
     const secrets = input.secrets as Record<string, string> | undefined;
 
     if (!secrets || typeof secrets !== 'object') {
@@ -1374,7 +1371,7 @@ export function createApp(options: CreateAppOptions = {}) {
   app.use('/webhooks', express.raw({ type: 'application/json', limit: '1mb' }));
 
   const config = options.config ?? loadRemoteConfig();
-  const ownKeys = options.ownKeys ?? loadKeyBundle(config.localKeysDir);
+  const ownKeys = options.ownKeys ?? loadKeyBundle(getServerKeysDir());
   const authorizedPeers = options.authorizedPeers ?? loadCallerPeers(config.callers);
 
   rateLimitPerMinute = config.rateLimitPerMinute;
@@ -1704,10 +1701,10 @@ export function createApp(options: CreateAppOptions = {}) {
       return;
     }
 
-    // Save callboard's public keys as a peer
+    // Save callboard's public keys
     const callerAlias = syncReq.callerAlias;
     try {
-      importPeerPublicKeys(callerAlias, syncReq.publicKeys);
+      importCallerPublicKeys(callerAlias, syncReq.publicKeys);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(400).json({ error: 'INVALID_PAYLOAD', detail: `Invalid public keys: ${msg}` });
@@ -1715,14 +1712,14 @@ export function createApp(options: CreateAppOptions = {}) {
     }
 
     // Register caller in config if not already present
-    const peerKeyDir = path.join(getPeerKeysDir(), callerAlias);
     if (!(callerAlias in config.callers)) {
       config.callers[callerAlias] = {
-        peerKeyDir,
         connections: [],
       };
       saveRemoteConfig(config);
-      console.log(`[sync] Registered new caller "${callerAlias}" (0 connections — configure manually)`);
+      console.log(
+        `[sync] Registered new caller "${callerAlias}" (0 connections — configure manually)`,
+      );
     } else {
       console.log(`[sync] Caller "${callerAlias}" already exists, updated peer keys`);
     }
@@ -1736,8 +1733,8 @@ export function createApp(options: CreateAppOptions = {}) {
     }
 
     // Build response with remote server's public keys
-    const remotePublicKeys = exportPublicKeys('remote');
-    const fp = peerFingerprint(callerAlias);
+    const remotePublicKeys = exportServerPublicKeys();
+    const fp = callerFingerprint(callerAlias);
 
     const syncResponse: SyncResponse = {
       remotePublicKeys,
@@ -1837,9 +1834,10 @@ export function main(): void {
 
   const config = loadRemoteConfig();
 
-  if (!fs.existsSync(config.localKeysDir)) {
-    console.error(`[remote] Error: Remote server keys not found at ${config.localKeysDir}`);
-    console.error('[remote] Run: drawlatch generate-keys remote');
+  const serverKeysDirPath = getServerKeysDir();
+  if (!fs.existsSync(serverKeysDirPath)) {
+    console.error(`[remote] Error: Server keys not found at ${serverKeysDirPath}`);
+    console.error('[remote] Run: drawlatch generate-keys server');
     process.exit(1);
   }
 

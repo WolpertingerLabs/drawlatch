@@ -103,35 +103,35 @@ describe('validateSyncRequest', () => {
   });
 
   it('rejects missing inviteCode', () => {
-    const { inviteCode, ...rest } = validRequest;
+    const { inviteCode: _inviteCode, ...rest } = validRequest;
     expect(validateSyncRequest(rest)).toBe('missing or invalid inviteCode');
   });
 
   it('rejects missing confirmCode', () => {
-    const { confirmCode, ...rest } = validRequest;
+    const { confirmCode: _confirmCode, ...rest } = validRequest;
     expect(validateSyncRequest(rest)).toBe('missing or invalid confirmCode');
   });
 
   it('rejects missing callerAlias', () => {
-    const { callerAlias, ...rest } = validRequest;
+    const { callerAlias: _callerAlias, ...rest } = validRequest;
     expect(validateSyncRequest(rest)).toBe('missing or invalid callerAlias');
   });
 
   it('rejects missing publicKeys', () => {
-    const { publicKeys, ...rest } = validRequest;
+    const { publicKeys: _publicKeys, ...rest } = validRequest;
     expect(validateSyncRequest(rest)).toBe('missing publicKeys');
   });
 
   it('rejects missing publicKeys.signing', () => {
-    expect(
-      validateSyncRequest({ ...validRequest, publicKeys: { exchange: 'x' } }),
-    ).toBe('missing publicKeys.signing');
+    expect(validateSyncRequest({ ...validRequest, publicKeys: { exchange: 'x' } })).toBe(
+      'missing publicKeys.signing',
+    );
   });
 
   it('rejects missing publicKeys.exchange', () => {
-    expect(
-      validateSyncRequest({ ...validRequest, publicKeys: { signing: 'x' } }),
-    ).toBe('missing publicKeys.exchange');
+    expect(validateSyncRequest({ ...validRequest, publicKeys: { signing: 'x' } })).toBe(
+      'missing publicKeys.exchange',
+    );
   });
 });
 
