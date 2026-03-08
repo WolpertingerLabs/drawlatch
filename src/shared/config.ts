@@ -456,23 +456,36 @@ export function resolvePlaceholders(str: string, secretsMap: Record<string, stri
  * Load secrets from the config's secrets map, resolving from environment
  * variables. Value can be a literal string or "${VAR_NAME}" to read from env.
  *
- * When `envOverrides` is provided (pre-resolved caller env map), those values
- * are checked BEFORE process.env, allowing per-caller secret redirection.
+ * Resolution order for each ${VAR} reference:
+ *   1. `envOverrides[VAR]` — caller's explicit env mapping (pre-resolved)
+ *   2. `process.env[PREFIX_VAR]` — prefixed env var (e.g., ALICE_GITHUB_TOKEN)
+ *   3. Warning if not found (bare process.env fallback intentionally removed
+ *      to prevent cross-caller secret leakage)
+ *
+ * When `callerAlias` is omitted, step 2 is skipped (used for resolving
+ * the caller's own env mapping where prefixing doesn't apply).
  */
 export function resolveSecrets(
   secretsMap: Record<string, string>,
   envOverrides?: Record<string, string>,
+  callerAlias?: string,
 ): Record<string, string> {
   const resolved: Record<string, string> = {};
   for (const [key, value] of Object.entries(secretsMap)) {
     const envMatch = /^\$\{(.+)\}$/.exec(value);
     if (envMatch) {
       const varName = envMatch[1];
-      const envVal = envOverrides?.[varName] ?? process.env[varName];
+      // 1. Caller's explicit env mapping (pre-resolved values)
+      let envVal = envOverrides?.[varName];
+      // 2. Prefixed env var (e.g., ALICE_GITHUB_TOKEN for caller "alice" + var "GITHUB_TOKEN")
+      if (envVal === undefined && callerAlias) {
+        const prefix = callerAlias.toUpperCase().replace(/-/g, '_');
+        envVal = process.env[`${prefix}_${varName}`];
+      }
       if (envVal !== undefined) {
         resolved[key] = envVal;
       } else {
-        console.error(`[secrets] Warning: env var ${varName} not found for key ${key}`);
+        console.error(`[secrets] Warning: env var ${varName} not found for key ${key}${callerAlias ? ` (caller: ${callerAlias})` : ''}`);
       }
     } else {
       resolved[key] = value;
@@ -487,13 +500,17 @@ export function resolveSecrets(
  *
  * When `envOverrides` is provided, those pre-resolved values are checked
  * before process.env during secret resolution (used for per-caller env).
+ *
+ * When `callerAlias` is provided, prefixed env vars (e.g., ALICE_GITHUB_TOKEN)
+ * are checked as a fallback before giving up on a ${VAR} reference.
  */
 export function resolveRoutes(
   routes: Route[],
   envOverrides?: Record<string, string>,
+  callerAlias?: string,
 ): ResolvedRoute[] {
   return routes.map((route) => {
-    const resolvedSecrets = resolveSecrets(route.secrets ?? {}, envOverrides);
+    const resolvedSecrets = resolveSecrets(route.secrets ?? {}, envOverrides, callerAlias);
     const resolvedHeaders: Record<string, string> = {};
     for (const [key, value] of Object.entries(route.headers ?? {})) {
       resolvedHeaders[key] = resolvePlaceholders(value, resolvedSecrets);

@@ -255,6 +255,29 @@ setInterval(() => {
   cleanupSessions(sessions, pendingHandshakes);
 }, 60_000);
 
+// ── Session route invalidation ────────────────────────────────────────────
+
+/**
+ * Re-resolve routes for all active sessions belonging to a caller.
+ * Called after secrets or connection list changes to ensure the session
+ * uses up-to-date resolved routes without requiring a reconnection.
+ */
+function refreshCallerSessions(callerAlias: string): void {
+  const config = loadRemoteConfig();
+  const caller = config.callers[callerAlias];
+  if (!caller) return;
+
+  const callerRoutes = resolveCallerRoutes(config, callerAlias);
+  const callerEnvResolved = resolveSecrets(caller.env ?? {});
+  const callerResolvedRoutes = resolveRoutes(callerRoutes, callerEnvResolved, callerAlias);
+
+  for (const session of sessions.values()) {
+    if (session.callerAlias === callerAlias) {
+      session.resolvedRoutes = callerResolvedRoutes;
+    }
+  }
+}
+
 // ── Proxy request execution ────────────────────────────────────────────────
 
 /** A file attachment transmitted as base64 data through the encrypted channel. */
@@ -432,6 +455,9 @@ export interface ToolContext {
   callerAlias: string;
   /** The shared ingestor manager (for poll_events / ingestor_status). */
   ingestorManager: IngestorManager;
+  /** Re-resolve routes for all sessions belonging to this caller.
+   *  Call after secrets or connection list changes. */
+  refreshRoutes: () => void;
 }
 
 type ToolHandler = (
@@ -1235,8 +1261,8 @@ const toolHandlers: Record<string, ToolHandler> = {
     caller.connections = [...connectionSet];
     saveRemoteConfig(config);
 
-    // Re-resolve routes for this caller and update the session
-    // (new routes will take effect on next request naturally via config reload)
+    // Invalidate cached resolved routes so connection changes take effect immediately
+    context.refreshRoutes();
 
     return { success: true, connection, enabled };
   },
@@ -1265,6 +1291,9 @@ const toolHandlers: Record<string, ToolHandler> = {
     );
 
     saveRemoteConfig(updatedConfig);
+
+    // Invalidate cached resolved routes so new secrets take effect immediately
+    context.refreshRoutes();
 
     return { success: true, secretsSet: status };
   },
@@ -1413,7 +1442,7 @@ export function createApp(options: CreateAppOptions = {}) {
       const callerRoutes = resolveCallerRoutes(config, callerAlias);
       const caller = config.callers[callerAlias];
       const callerEnvResolved = resolveSecrets(caller.env ?? {});
-      const callerResolvedRoutes = resolveRoutes(callerRoutes, callerEnvResolved);
+      const callerResolvedRoutes = resolveRoutes(callerRoutes, callerEnvResolved, callerAlias);
 
       // Store pending handshake for the finish step
       pendingHandshakes.set(sessionKeys.sessionId, {
@@ -1529,6 +1558,7 @@ export function createApp(options: CreateAppOptions = {}) {
       const context: ToolContext = {
         callerAlias: session.callerAlias,
         ingestorManager: app.locals.ingestorManager as IngestorManager,
+        refreshRoutes: () => refreshCallerSessions(session.callerAlias),
       };
       const result = await handler(request.toolInput, session.resolvedRoutes, context);
 
