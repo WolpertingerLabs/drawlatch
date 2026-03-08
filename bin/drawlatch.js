@@ -38,7 +38,7 @@ const { generateKeyBundle, saveKeyBundle, extractPublicKeys, fingerprint, loadKe
 );
 
 // Import connection template helpers
-const { listConnectionTemplates, listAvailableConnections } = await import(
+const { listConnectionTemplates } = await import(
   join(PKG_ROOT, "dist/shared/connections.js")
 );
 
@@ -80,8 +80,6 @@ try {
       lines: { type: "string", short: "n", default: "50" },
       follow: { type: "boolean", default: false },
       path: { type: "boolean", default: false },
-      connections: { type: "string" },
-      alias: { type: "string" },
       full: { type: "boolean", default: false },
       ttl: { type: "string", default: "300" },
     },
@@ -212,23 +210,6 @@ async function cmdDefault() {
 }
 
 async function cmdInit() {
-  const alias = values.alias || "default";
-  const connectionsList = values.connections
-    ? values.connections.split(",").map((c) => c.trim()).filter(Boolean)
-    : [];
-
-  // Validate requested connections exist
-  if (connectionsList.length > 0) {
-    const available = listAvailableConnections();
-    const availableSet = new Set(available);
-    const invalid = connectionsList.filter((c) => !availableSet.has(c));
-    if (invalid.length > 0) {
-      console.error(`Unknown connection(s): ${invalid.join(", ")}`);
-      console.error(`Available: ${available.join(", ")}`);
-      process.exit(1);
-    }
-  }
-
   console.log(`\nDrawlatch Setup`);
   console.log(`===============\n`);
 
@@ -251,20 +232,7 @@ async function cmdInit() {
     steps.push(`Server keys: CREATED (${fp})`);
   }
 
-  // Step 3: Generate caller keypair
-  const callerKeysDir = join(getCallerKeysDir(), alias);
-  if (existsSync(join(callerKeysDir, "signing.key.pem"))) {
-    const existing = loadKeyBundle(callerKeysDir);
-    const fp = fingerprint(extractPublicKeys(existing));
-    steps.push(`Caller keys (${alias}): already exist (${fp})`);
-  } else {
-    const bundle = generateKeyBundle();
-    saveKeyBundle(bundle, callerKeysDir);
-    const fp = fingerprint(extractPublicKeys(bundle));
-    steps.push(`Caller keys (${alias}): CREATED (${fp})`);
-  }
-
-  // Step 4: Scaffold proxy.config.json
+  // Step 3: Scaffold proxy.config.json
   const proxyConfigPath = getProxyConfigPath();
   if (existsSync(proxyConfigPath)) {
     steps.push(`Proxy config: already exists`);
@@ -278,7 +246,7 @@ async function cmdInit() {
     steps.push(`Proxy config: CREATED`);
   }
 
-  // Step 5: Scaffold remote.config.json
+  // Step 4: Scaffold remote.config.json
   const remoteConfigPath = getRemoteConfigPath();
   if (existsSync(remoteConfigPath)) {
     steps.push(`Remote config: already exists`);
@@ -287,44 +255,22 @@ async function cmdInit() {
       host: "0.0.0.0",
       port: 9999,
       rateLimitPerMinute: 60,
-      callers: {
-        [alias]: {
-          name: alias === "default" ? "Default Caller" : alias,
-          connections: connectionsList,
-        },
-      },
+      callers: {},
     };
     writeFileSync(remoteConfigPath, JSON.stringify(remoteConfig, null, 2) + "\n", { mode: 0o600 });
-    steps.push(`Remote config: CREATED (caller "${alias}" with ${connectionsList.length} connection(s))`);
+    steps.push(`Remote config: CREATED`);
   }
 
-  // Step 7: Scaffold .env file
+  // Step 5: Scaffold .env file
   if (existsSync(ENV_FILE)) {
     steps.push(`.env file: already exists`);
   } else {
     const envLines = [
       "# Drawlatch environment secrets",
-      "# Uncomment and set tokens for your enabled connections",
+      "# Set tokens for your enabled connections",
+      "# Secrets are prefixed per caller (e.g., DEFAULT_GITHUB_TOKEN)",
       "",
     ];
-
-    // Get secret info for requested connections (or all if none specified)
-    const templates = listConnectionTemplates();
-    const relevantTemplates = connectionsList.length > 0
-      ? templates.filter((t) => connectionsList.includes(t.alias))
-      : templates.filter((t) => ["github", "slack", "discord-bot", "openai", "anthropic"].includes(t.alias));
-
-    for (const t of relevantTemplates) {
-      envLines.push(`# ${t.name}`);
-      for (const s of t.requiredSecrets) {
-        envLines.push(`# ${s}=`);
-      }
-      for (const s of t.optionalSecrets) {
-        envLines.push(`# ${s}=`);
-      }
-      envLines.push("");
-    }
-
     writeFileSync(ENV_FILE, envLines.join("\n") + "\n", { mode: 0o600 });
     steps.push(`.env file: CREATED`);
   }
@@ -335,25 +281,10 @@ async function cmdInit() {
   }
 
   console.log(`\nSetup complete! Next steps:\n`);
-
-  if (connectionsList.length > 0) {
-    const templates = listConnectionTemplates();
-    const enabledTemplates = templates.filter((t) => connectionsList.includes(t.alias));
-    const allSecrets = enabledTemplates.flatMap((t) => t.requiredSecrets);
-    if (allSecrets.length > 0) {
-      console.log(`  1. Set your API secrets in ${ENV_FILE}:`);
-      for (const s of [...new Set(allSecrets)]) {
-        console.log(`       ${s}=your_token_here`);
-      }
-      console.log();
-    }
-  } else {
-    console.log(`  1. Edit ${remoteConfigPath} to add connections (e.g., "github", "slack")`);
-    console.log(`     Then set the required secrets in ${ENV_FILE}\n`);
-  }
-
-  console.log(`  2. Start the remote server:`);
+  console.log(`  1. Start the remote server:`);
   console.log(`       drawlatch start\n`);
+  console.log(`  2. Add callers via key sync:`);
+  console.log(`       drawlatch sync\n`);
   console.log(`  3. Verify your setup:`);
   console.log(`       drawlatch doctor\n`);
 }
@@ -869,14 +800,14 @@ async function cmdSync() {
         console.log(
           `  Keys saved to: ${join(CONFIG_DIR, "keys", "callers", status.callerAlias)}/`,
         );
-        console.log(
-          `\nAdd connections for this caller in remote.config.json:`,
-        );
+        console.log(`\nThe caller can now connect (no server restart needed).`);
+        console.log(`\nTo grant API access, add connections in ${join(CONFIG_DIR, "remote.config.json")}:`);
         console.log(`  "callers": {`);
         console.log(`    "${status.callerAlias}": {`);
         console.log(`      "connections": ["github", "slack", ...]`);
         console.log(`    }`);
         console.log(`  }`);
+        console.log(`\nThen set the required secrets in ${ENV_FILE}`);
         console.log();
         process.exit(0);
       }
@@ -1167,7 +1098,7 @@ drawlatch v${VERSION}
 Usage: drawlatch [command] [options]
 
 Commands:
-  init               Set up drawlatch (keys, config, .env) in one step
+  init               Set up drawlatch server (keys, config, .env)
   start              Start the remote server (background by default)
   stop               Stop the background remote server
   restart            Restart the background remote server
@@ -1185,9 +1116,7 @@ Options:
 Running 'drawlatch' with no arguments shows status (if running) or this help.
 
 Examples:
-  drawlatch init                       Set up everything with defaults
-  drawlatch init --connections github   Set up with GitHub connection
-  drawlatch init --alias mybot         Set up with custom caller alias
+  drawlatch init                       Set up the remote server
   drawlatch start                      Start remote server in background
   drawlatch start -f                   Start remote server in foreground
   drawlatch start -f --tunnel          Start with a public tunnel for webhooks
@@ -1304,23 +1233,18 @@ function printInitHelp() {
   console.log(`
 drawlatch init
 
-Set up drawlatch for first-time use. Generates keys, creates config
-files, exchanges public keys, and scaffolds a .env template.
+Set up the drawlatch remote server. Generates server keys, creates
+config files, and scaffolds a .env template.
+
+Callers are added separately via 'drawlatch sync' after the server
+is running.
 
 Usage: drawlatch init [options]
 
 Options:
-  --connections <list>  Comma-separated connections to enable (e.g., github,slack)
-  --alias <name>        Name for the local identity (default: "default")
-  -h, --help            Show this help message
+  -h, --help     Show this help message
 
 All steps are idempotent — safe to re-run without overwriting existing files.
-
-Examples:
-  drawlatch init                          Set up with defaults
-  drawlatch init --connections github     Set up with GitHub enabled
-  drawlatch init --alias laptop           Use "laptop" as the caller alias
-  drawlatch init --alias ci --connections github,slack
 `);
 }
 
