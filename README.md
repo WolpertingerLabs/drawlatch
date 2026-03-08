@@ -108,11 +108,11 @@ For custom setups (different aliases, multiple callers, different machines), you
 **1. Generate keys:**
 
 ```bash
-drawlatch generate-keys local my-laptop
-drawlatch generate-keys remote
+drawlatch generate-keys caller my-laptop
+drawlatch generate-keys server
 ```
 
-**2. Exchange public keys** — copy `*.pub.pem` files into the appropriate `keys/peers/` subdirectories. See [Key Exchange](#key-exchange) for details.
+**2. Exchange public keys** — on separate machines, copy `*.pub.pem` files to the matching `keys/callers/<alias>/` or `keys/server/` directory on the other machine. See [Key Exchange](#key-exchange) for details.
 
 **3. Create configs** — copy the example files and edit:
 
@@ -165,7 +165,6 @@ Once connected, agents get these tools:
 {
   "host": "0.0.0.0",
   "port": 9999,
-  "localKeysDir": "~/.drawlatch/keys/remote",
   "connectors": [],
   "callers": {},
   "rateLimitPerMinute": 60
@@ -176,10 +175,11 @@ Once connected, agents get these tools:
 |-------|-------------|---------|
 | `host` | Network interface to bind | `127.0.0.1` |
 | `port` | Listen port | `9999` |
-| `localKeysDir` | Path to server's own keypair | `~/.drawlatch/keys/remote` |
 | `connectors` | Custom connector definitions (see below) | `[]` |
 | `callers` | Per-caller access control (see below) | `{}` |
 | `rateLimitPerMinute` | Max requests per minute per session | `60` |
+
+Server keys are always loaded from `keys/server/` inside the config directory.
 
 ### Callers
 
@@ -190,7 +190,6 @@ Each caller is identified by their public key and declares which connections the
   "callers": {
     "alice": {
       "name": "Alice (senior engineer)",
-      "peerKeyDir": "~/.drawlatch/keys/peers/alice",
       "connections": ["github", "stripe", "internal-api"],
       "env": {
         "GITHUB_TOKEN": "${ALICE_GITHUB_TOKEN}"
@@ -198,16 +197,16 @@ Each caller is identified by their public key and declares which connections the
     },
     "ci-server": {
       "name": "GitHub Actions CI",
-      "peerKeyDir": "~/.drawlatch/keys/peers/ci-server",
       "connections": ["github"]
     }
   }
 }
 ```
 
+Caller public keys are loaded automatically from `keys/callers/<alias>/` — no path configuration needed.
+
 | Field | Required | Description |
 |-------|----------|-------------|
-| `peerKeyDir` | Yes | Path to this caller's public key files |
 | `connections` | Yes | Array of connection names (built-in or custom connector aliases) |
 | `name` | No | Human-readable name for audit logs |
 | `env` | No | Per-caller env var overrides — redirect secret resolution per caller |
@@ -216,7 +215,9 @@ Each caller is identified by their public key and declares which connections the
 The `env` map lets multiple callers share the same connection with different credentials:
 - Keys are the env var names connectors reference (e.g., `GITHUB_TOKEN`)
 - Values are `"${REAL_ENV_VAR}"` (redirect) or literal strings (direct injection)
-- Checked before `process.env` during secret resolution
+- Checked before prefixed env vars during secret resolution
+
+Without an explicit `env` mapping, secrets resolve via prefixed env vars (e.g., caller "alice" + `GITHUB_TOKEN` → `ALICE_GITHUB_TOKEN`).
 
 ### Custom Connectors
 
@@ -256,8 +257,6 @@ Used by the local MCP proxy to connect to the remote server:
 ```json
 {
   "remoteUrl": "http://127.0.0.1:9999",
-  "localKeyAlias": "my-laptop",
-  "remotePublicKeysDir": "~/.drawlatch/keys/peers/remote-server",
   "connectTimeout": 10000,
   "requestTimeout": 30000
 }
@@ -266,13 +265,12 @@ Used by the local MCP proxy to connect to the remote server:
 | Field | Description | Default |
 |-------|-------------|---------|
 | `remoteUrl` | URL of the remote server | `http://localhost:9999` |
-| `localKeyAlias` | Key alias — resolved to `keys/local/<alias>/` | _(none)_ |
-| `localKeysDir` | Explicit path to proxy's keypair (ignored when `localKeyAlias` is set) | `~/.drawlatch/keys/local/default` |
-| `remotePublicKeysDir` | Path to remote server's public keys | `~/.drawlatch/keys/peers/remote-server` |
 | `connectTimeout` | Handshake timeout (ms) | `10000` |
 | `requestTimeout` | Request timeout (ms) | `30000` |
 
-Key alias resolution order: `MCP_KEY_ALIAS` env var > `localKeyAlias` > `localKeysDir` > `keys/local/default`.
+Key paths are derived automatically — no configuration needed:
+- Caller keys: `keys/callers/{MCP_KEY_ALIAS || "default"}/`
+- Server public keys: `keys/server/`
 
 ### Advanced Configuration
 
@@ -337,40 +335,27 @@ See **[INGESTORS.md](INGESTORS.md)** for full configuration reference.
 
 Remote mode requires mutual authentication via Ed25519/X25519 keypairs. Each identity gets four PEM files (signing + exchange, public + private). The `drawlatch init` command handles this automatically for single-machine setups.
 
-For multi-machine setups, exchange public keys manually:
-
 **Directory structure:**
 
 ```
 ~/.drawlatch/keys/
-├── local/my-laptop/       # MCP proxy keypair
-├── remote/                # Remote server keypair
-└── peers/
-    ├── my-laptop/         # Proxy's public keys (on the server)
-    └── remote-server/     # Server's public keys (on the proxy)
+├── callers/
+│   ├── default/           # Default caller keypair
+│   └── alice/             # Additional caller keypair
+└── server/                # Server keypair
 ```
 
-**Exchange public keys** (`.pub.pem` only — never share private keys):
+Both sides (caller and server) store their keys in the same directory tree. On a single machine, `drawlatch init` generates both and they can authenticate immediately. On separate machines, copy the `*.pub.pem` files to the corresponding directory on the other machine.
 
-```bash
-# Proxy's public keys → server's peers directory
-cp keys/local/my-laptop/signing.pub.pem   keys/peers/my-laptop/signing.pub.pem
-cp keys/local/my-laptop/exchange.pub.pem  keys/peers/my-laptop/exchange.pub.pem
-
-# Server's public keys → proxy's peers directory
-cp keys/remote/signing.pub.pem   keys/peers/remote-server/signing.pub.pem
-cp keys/remote/exchange.pub.pem  keys/peers/remote-server/exchange.pub.pem
-```
-
-If the proxy and server are on different machines, transfer only `*.pub.pem` files via `scp` or similar.
+**Using [Callboard](https://github.com/WolpertingerLabs/callboard)?** Use `drawlatch sync` to exchange keys automatically via a double-code approval flow — no manual file copying needed.
 
 ### Multiple Agent Identities
 
 Generate a keypair per agent and set `MCP_KEY_ALIAS` at spawn time:
 
 ```bash
-drawlatch generate-keys local alice
-drawlatch generate-keys local bob
+drawlatch generate-keys caller alice
+drawlatch generate-keys caller bob
 ```
 
 ```json
@@ -385,7 +370,7 @@ drawlatch generate-keys local bob
 }
 ```
 
-Register each agent as a separate caller on the remote server with matching peer key directories.
+Register each agent as a separate caller in `remote.config.json`.
 
 ## CLI Reference
 
@@ -402,6 +387,7 @@ Commands:
   config             Show effective configuration and secret status
   doctor             Validate setup and diagnose issues
   generate-keys      Generate Ed25519 + X25519 keypairs
+  sync               Exchange keys with a callboard instance
 
 Options:
   -h, --help         Show help
@@ -422,10 +408,13 @@ Logs options:
   --follow           Tail the log output
 
 Generate-keys subcommands:
-  local [alias]      Generate local proxy keypair (default alias: "default")
-  remote             Generate remote server keypair
+  caller [alias]     Generate caller keypair (default alias: "default")
+  server             Generate server keypair
   show <path>        Show fingerprint of existing keypair
   --dir <path>       Generate to custom directory
+
+Sync options:
+  --ttl <seconds>    Session timeout (default: 300)
 ```
 
 ## Library Usage (Local Mode)
