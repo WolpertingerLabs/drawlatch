@@ -103,7 +103,10 @@ if (values.version) {
 }
 if (values.help && !subcommand) {
   printHelp();
-  const latestVersion = await updateCheckPromise;
+  const latestVersion = await Promise.race([
+    updateCheckPromise,
+    new Promise((r) => setTimeout(() => r(null), 100)),
+  ]);
   if (latestVersion) console.log(formatUpdateNotice(latestVersion));
   process.exit(0);
 }
@@ -185,7 +188,10 @@ switch (subcommand) {
   case "help":
     printHelp();
     {
-      const latestVersion = await updateCheckPromise;
+      const latestVersion = await Promise.race([
+        updateCheckPromise,
+        new Promise((r) => setTimeout(() => r(null), 100)),
+      ]);
       if (latestVersion) console.log(formatUpdateNotice(latestVersion));
     }
     break;
@@ -205,7 +211,11 @@ async function cmdDefault() {
     console.log("Drawlatch remote server is not running.\n");
     printHelp();
   }
-  const latestVersion = await updateCheckPromise;
+  // Show update notice only if the check already resolved (don't block on network)
+  const latestVersion = await Promise.race([
+    updateCheckPromise,
+    new Promise((r) => setTimeout(() => r(null), 100)),
+  ]);
   if (latestVersion) console.log(formatUpdateNotice(latestVersion));
 }
 
