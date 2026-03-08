@@ -88,7 +88,20 @@ export class IngestorManager {
   /** Active ingestor instances, keyed by `callerAlias:connectionAlias:instanceId`. */
   private ingestors = new Map<string, BaseIngestor>();
 
-  constructor(private readonly config: RemoteServerConfig) {}
+  /**
+   * Optional config loader for hot-reload support. When provided, `startOne()`
+   * uses it to get fresh config from disk instead of the constructor snapshot.
+   */
+  private configLoader: (() => RemoteServerConfig) | undefined;
+
+  constructor(private readonly config: RemoteServerConfig, configLoader?: () => RemoteServerConfig) {
+    this.configLoader = configLoader;
+  }
+
+  /** Return fresh config if a loader is available, otherwise the constructor snapshot. */
+  private getConfig(): RemoteServerConfig {
+    return this.configLoader ? this.configLoader() : this.config;
+  }
 
   /**
    * Start ingestors for all callers whose connections have an `ingestor` config.
@@ -329,7 +342,11 @@ export class IngestorManager {
     connectionAlias: string,
     instanceId?: string,
   ): Promise<LifecycleResult | LifecycleResult[]> {
-    const callerConfig = this.config.callers[callerAlias] as CallerConfig | undefined;
+    // Get fresh config (from disk in production, or constructor snapshot in tests)
+    // so we pick up changes made by tool handlers (e.g. set_connection_enabled,
+    // set_listener_params, set_secrets) without requiring a server restart.
+    const config = this.getConfig();
+    const callerConfig = config.callers[callerAlias] as CallerConfig | undefined;
     if (!callerConfig) {
       return {
         success: false,
@@ -347,7 +364,7 @@ export class IngestorManager {
       };
     }
 
-    const rawRoutes = resolveCallerRoutes(this.config, callerAlias);
+    const rawRoutes = resolveCallerRoutes(config, callerAlias);
     const callerEnvResolved = resolveSecrets(callerConfig.env ?? {});
     const resolvedRoutes = resolveRoutes(rawRoutes, callerEnvResolved, callerAlias);
     const rawRoute = rawRoutes[connectionIndex];
@@ -369,6 +386,7 @@ export class IngestorManager {
         instanceId,
         rawRoute,
         resolvedRoute,
+        config,
       );
     }
 
@@ -385,6 +403,7 @@ export class IngestorManager {
             instId,
             rawRoute,
             resolvedRoute,
+            config,
           ),
         );
       }
@@ -392,7 +411,7 @@ export class IngestorManager {
     }
 
     // Single default instance
-    return this.startOneInstance(callerAlias, connectionAlias, undefined, rawRoute, resolvedRoute);
+    return this.startOneInstance(callerAlias, connectionAlias, undefined, rawRoute, resolvedRoute, config);
   }
 
   /** Internal: start a single specific instance. */
@@ -402,6 +421,7 @@ export class IngestorManager {
     instanceId: string | undefined,
     rawRoute: Route,
     resolvedRoute: ResolvedRoute,
+    config: RemoteServerConfig,
   ): Promise<LifecycleResult> {
     const key = makeKey(callerAlias, connectionAlias, instanceId ?? DEFAULT_INSTANCE_ID);
 
@@ -420,10 +440,10 @@ export class IngestorManager {
       this.ingestors.delete(key);
     }
 
-    const callerConfig = this.config.callers[callerAlias];
+    const callerCfg = config.callers[callerAlias];
     const overrides = instanceId
-      ? callerConfig.listenerInstances?.[connectionAlias]?.[instanceId]
-      : callerConfig.ingestorOverrides?.[connectionAlias];
+      ? callerCfg.listenerInstances?.[connectionAlias]?.[instanceId]
+      : callerCfg.ingestorOverrides?.[connectionAlias];
 
     const effectiveConfig = IngestorManager.mergeIngestorConfig(rawRoute.ingestor!, overrides);
 
