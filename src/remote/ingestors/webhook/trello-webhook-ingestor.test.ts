@@ -533,7 +533,7 @@ describe('TrelloWebhookIngestor — getModelId and board filtering', () => {
     const ingestor = new TrelloWebhookIngestor('trello', { TRELLO_API_SECRET: 'secret' }, {
       path: 'trello',
       protocol: 'trello',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       _boardId: 'board-xyz-789',
     } as any);
 
@@ -568,7 +568,7 @@ describe('TrelloWebhookIngestor — getModelId and board filtering', () => {
     const ingestor = new TrelloWebhookIngestor('trello', {}, {
       path: 'trello',
       protocol: 'trello',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       _boardId: targetBoardId,
     } as any);
 

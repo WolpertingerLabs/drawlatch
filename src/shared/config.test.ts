@@ -16,7 +16,7 @@ import {
   getProxyConfigPath,
   getRemoteConfigPath,
   getEnvFilePath,
-  getLocalKeysDir,
+  resolveCallerKeyAlias,
 } from './config.js';
 import { _resetConnectionIndex } from './connections.js';
 
@@ -735,7 +735,7 @@ describe('loadProxyConfig', () => {
   });
 });
 
-describe('loadProxyConfig alias resolution', () => {
+describe('resolveCallerKeyAlias', () => {
   const originalEnv = process.env;
 
   beforeEach(() => {
@@ -747,118 +747,23 @@ describe('loadProxyConfig alias resolution', () => {
     process.env = originalEnv;
   });
 
-  it('should resolve MCP_KEY_ALIAS env var to localKeysDir', () => {
+  it('should resolve MCP_KEY_ALIAS env var', () => {
     process.env.MCP_KEY_ALIAS = 'alice';
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
-
-    const config = loadProxyConfig();
-
-    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'alice'));
-
-    existsSpy.mockRestore();
+    expect(resolveCallerKeyAlias()).toBe('alice');
   });
 
-  it('should prioritize MCP_KEY_ALIAS over localKeyAlias in config', () => {
-    process.env.MCP_KEY_ALIAS = 'alice';
-    const existsSpy = vi
-      .spyOn(fs, 'existsSync')
-      .mockImplementation((p) => String(p) === getProxyConfigPath());
-    const readSpy = vi
-      .spyOn(fs, 'readFileSync')
-      .mockReturnValue(JSON.stringify({ localKeyAlias: 'bob' }));
-
-    const config = loadProxyConfig();
-
-    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'alice'));
-
-    existsSpy.mockRestore();
-    readSpy.mockRestore();
-  });
-
-  it('should resolve localKeyAlias from config when no env var is set', () => {
-    const existsSpy = vi
-      .spyOn(fs, 'existsSync')
-      .mockImplementation((p) => String(p) === getProxyConfigPath());
-    const readSpy = vi
-      .spyOn(fs, 'readFileSync')
-      .mockReturnValue(JSON.stringify({ localKeyAlias: 'bob' }));
-
-    const config = loadProxyConfig();
-
-    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'bob'));
-
-    existsSpy.mockRestore();
-    readSpy.mockRestore();
-  });
-
-  it('should let localKeyAlias take precedence over localKeysDir', () => {
-    const existsSpy = vi
-      .spyOn(fs, 'existsSync')
-      .mockImplementation((p) => String(p) === getProxyConfigPath());
-    const readSpy = vi
-      .spyOn(fs, 'readFileSync')
-      .mockReturnValue(JSON.stringify({ localKeyAlias: 'bob', localKeysDir: '/explicit/path' }));
-
-    const config = loadProxyConfig();
-
-    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'bob'));
-
-    existsSpy.mockRestore();
-    readSpy.mockRestore();
-  });
-
-  it('should use localKeysDir when no alias is set', () => {
-    const existsSpy = vi
-      .spyOn(fs, 'existsSync')
-      .mockImplementation((p) => String(p) === getProxyConfigPath());
-    const readSpy = vi
-      .spyOn(fs, 'readFileSync')
-      .mockReturnValue(JSON.stringify({ localKeysDir: '/explicit/path' }));
-
-    const config = loadProxyConfig();
-
-    expect(config.localKeysDir).toBe('/explicit/path');
-
-    existsSpy.mockRestore();
-    readSpy.mockRestore();
-  });
-
-  it('should default to keys/local/default when nothing is set', () => {
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
-
-    const config = loadProxyConfig();
-
-    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'default'));
-
-    existsSpy.mockRestore();
+  it('should default to "default" when nothing is set', () => {
+    expect(resolveCallerKeyAlias()).toBe('default');
   });
 
   it('should trim whitespace from MCP_KEY_ALIAS', () => {
     process.env.MCP_KEY_ALIAS = '  alice  ';
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
-
-    const config = loadProxyConfig();
-
-    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'alice'));
-
-    existsSpy.mockRestore();
+    expect(resolveCallerKeyAlias()).toBe('alice');
   });
 
   it('should ignore empty or whitespace-only MCP_KEY_ALIAS', () => {
     process.env.MCP_KEY_ALIAS = '   ';
-    const existsSpy = vi
-      .spyOn(fs, 'existsSync')
-      .mockImplementation((p) => String(p) === getProxyConfigPath());
-    const readSpy = vi
-      .spyOn(fs, 'readFileSync')
-      .mockReturnValue(JSON.stringify({ localKeyAlias: 'bob' }));
-
-    const config = loadProxyConfig();
-
-    expect(config.localKeysDir).toBe(path.join(getLocalKeysDir(), 'bob'));
-
-    existsSpy.mockRestore();
-    readSpy.mockRestore();
+    expect(resolveCallerKeyAlias()).toBe('default');
   });
 });
 
@@ -893,7 +798,6 @@ describe('loadRemoteConfig', () => {
         ],
         callers: {
           laptop: {
-            peerKeyDir: '/keys/laptop',
             connections: ['my-api'],
           },
         },
@@ -942,12 +846,12 @@ describe('resolveCallerRoutes', () => {
     const config = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [
         { alias: 'my-api', name: 'My API', allowedEndpoints: ['https://api.example.com/**'] },
       ],
       callers: {
-        laptop: { peerKeyDir: '/keys/laptop', connections: ['my-api'] },
+        laptop: { connections: ['my-api'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -984,9 +888,9 @@ describe('resolveCallerRoutes', () => {
     const config = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       callers: {
-        laptop: { peerKeyDir: '/keys/laptop', connections: ['test-conn'] },
+        laptop: { connections: ['test-conn'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -1005,10 +909,10 @@ describe('resolveCallerRoutes', () => {
     const config = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [{ alias: 'my-api', allowedEndpoints: ['https://api.example.com/**'] }],
       callers: {
-        laptop: { peerKeyDir: '/keys/laptop', connections: ['my-api'] },
+        laptop: { connections: ['my-api'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -1042,7 +946,7 @@ describe('resolveCallerRoutes', () => {
     const config = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'custom-api',
@@ -1051,7 +955,7 @@ describe('resolveCallerRoutes', () => {
         },
       ],
       callers: {
-        laptop: { peerKeyDir: '/keys/laptop', connections: ['custom-api', 'test-conn'] },
+        laptop: { connections: ['custom-api', 'test-conn'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -1071,7 +975,7 @@ describe('resolveCallerRoutes', () => {
     const config = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'github',
@@ -1080,7 +984,7 @@ describe('resolveCallerRoutes', () => {
         },
       ],
       callers: {
-        laptop: { peerKeyDir: '/keys/laptop', connections: ['github'] },
+        laptop: { connections: ['github'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -1118,9 +1022,9 @@ describe('resolveCallerRoutes', () => {
     const config = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       callers: {
-        laptop: { peerKeyDir: '/keys/laptop', connections: ['test-conn'] },
+        laptop: { connections: ['test-conn'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -1140,7 +1044,7 @@ describe('resolveCallerRoutes', () => {
     const config = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'custom-api',
@@ -1149,7 +1053,7 @@ describe('resolveCallerRoutes', () => {
         },
       ],
       callers: {
-        laptop: { peerKeyDir: '/keys/laptop', connections: ['custom-api'] },
+        laptop: { connections: ['custom-api'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -1165,7 +1069,7 @@ describe('resolveCallerRoutes', () => {
     const config = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'my-api',
@@ -1174,7 +1078,7 @@ describe('resolveCallerRoutes', () => {
         },
       ],
       callers: {
-        laptop: { peerKeyDir: '/keys/laptop', connections: ['my-api'] },
+        laptop: { connections: ['my-api'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -1192,7 +1096,7 @@ describe('resolveCallerRoutes', () => {
     const config = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'my-api',
@@ -1203,7 +1107,7 @@ describe('resolveCallerRoutes', () => {
         },
       ],
       callers: {
-        laptop: { peerKeyDir: '/keys/laptop', connections: ['my-api'] },
+        laptop: { connections: ['my-api'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -1239,9 +1143,9 @@ describe('resolveCallerRoutes', () => {
     const config = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       callers: {
-        laptop: { peerKeyDir: '/keys/laptop', connections: ['test-conn'] },
+        laptop: { connections: ['test-conn'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -1278,7 +1182,6 @@ describe('loadRemoteConfig legacy migration', () => {
     expect(config.connectors).toHaveLength(1);
     expect(config.connectors![0].alias).toBe('my-api'); // auto-generated from name
     expect(config.callers.default).toBeDefined();
-    expect(config.callers.default.peerKeyDir).toBe('/old/peers');
     expect(config.callers.default.connections).toContain('my-api');
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('legacy config format'));
 
@@ -1295,8 +1198,6 @@ describe('saveProxyConfig', () => {
 
     saveProxyConfig({
       remoteUrl: 'http://localhost:9999',
-      localKeysDir: '/path/to/keys',
-      remotePublicKeysDir: '/path/to/remote-pub',
       connectTimeout: 10_000,
       requestTimeout: 30_000,
     });
@@ -1325,9 +1226,8 @@ describe('saveRemoteConfig', () => {
     saveRemoteConfig({
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '/path/to/keys',
       callers: {
-        laptop: { peerKeyDir: '/keys/laptop', connections: ['github'] },
+        laptop: { connections: ['github'] },
       },
       rateLimitPerMinute: 60,
     });

@@ -28,7 +28,7 @@ const SERVER_ENTRY = join(PKG_ROOT, "dist/remote/server.js");
 const GENERATE_KEYS_ENTRY = join(PKG_ROOT, "dist/cli/generate-keys.js");
 
 // Import config helpers from compiled drawlatch code
-const { getConfigDir, getEnvFilePath, getKeysDir, getLocalKeysDir, getRemoteKeysDir, getPeerKeysDir, getProxyConfigPath, getRemoteConfigPath, loadRemoteConfig } = await import(
+const { getConfigDir, getEnvFilePath, getKeysDir, getCallerKeysDir, getServerKeysDir, getProxyConfigPath, getRemoteConfigPath, loadRemoteConfig } = await import(
   join(PKG_ROOT, "dist/shared/config.js")
 );
 
@@ -238,60 +238,39 @@ async function cmdInit() {
   ensureConfigDir();
   steps.push(`Config directory: ${CONFIG_DIR}`);
 
-  // Step 2: Generate remote server keypair
-  const remoteKeysDir = getRemoteKeysDir();
-  if (existsSync(join(remoteKeysDir, "signing.key.pem"))) {
-    const existing = loadKeyBundle(remoteKeysDir);
+  // Step 2: Generate server keypair
+  const serverKeysDir = getServerKeysDir();
+  if (existsSync(join(serverKeysDir, "signing.key.pem"))) {
+    const existing = loadKeyBundle(serverKeysDir);
     const fp = fingerprint(extractPublicKeys(existing));
-    steps.push(`Remote server keys: already exist (${fp})`);
+    steps.push(`Server keys: already exist (${fp})`);
   } else {
     const bundle = generateKeyBundle();
-    saveKeyBundle(bundle, remoteKeysDir);
+    saveKeyBundle(bundle, serverKeysDir);
     const fp = fingerprint(extractPublicKeys(bundle));
-    steps.push(`Remote server keys: CREATED (${fp})`);
+    steps.push(`Server keys: CREATED (${fp})`);
   }
 
-  // Step 3: Generate local proxy keypair
-  const localKeysDir = join(getLocalKeysDir(), alias);
-  if (existsSync(join(localKeysDir, "signing.key.pem"))) {
-    const existing = loadKeyBundle(localKeysDir);
+  // Step 3: Generate caller keypair
+  const callerKeysDir = join(getCallerKeysDir(), alias);
+  if (existsSync(join(callerKeysDir, "signing.key.pem"))) {
+    const existing = loadKeyBundle(callerKeysDir);
     const fp = fingerprint(extractPublicKeys(existing));
-    steps.push(`Local proxy keys (${alias}): already exist (${fp})`);
+    steps.push(`Caller keys (${alias}): already exist (${fp})`);
   } else {
     const bundle = generateKeyBundle();
-    saveKeyBundle(bundle, localKeysDir);
+    saveKeyBundle(bundle, callerKeysDir);
     const fp = fingerprint(extractPublicKeys(bundle));
-    steps.push(`Local proxy keys (${alias}): CREATED (${fp})`);
+    steps.push(`Caller keys (${alias}): CREATED (${fp})`);
   }
 
-  // Step 4: Copy public keys into peer directories
-  const localPeerDir = join(getPeerKeysDir(), alias);
-  mkdirSync(localPeerDir, { recursive: true, mode: 0o700 });
-  copyPublicKey(localKeysDir, localPeerDir, "signing.pub.pem");
-  copyPublicKey(localKeysDir, localPeerDir, "exchange.pub.pem");
-  steps.push(`Peer keys for "${alias}": ${localPeerDir}`);
-
-  const remotePeerDir = join(getPeerKeysDir(), "remote-server");
-  mkdirSync(remotePeerDir, { recursive: true, mode: 0o700 });
-  copyPublicKey(remoteKeysDir, remotePeerDir, "signing.pub.pem");
-  copyPublicKey(remoteKeysDir, remotePeerDir, "exchange.pub.pem");
-  steps.push(`Peer keys for remote server: ${remotePeerDir}`);
-
-  // Determine portable path prefix for config files.
-  // If using the default ~/.drawlatch config dir, use tilde for portability.
-  // If using a custom MCP_CONFIG_DIR, use the absolute path.
-  const isDefaultDir = !process.env.MCP_CONFIG_DIR;
-  const configPrefix = isDefaultDir ? "~/.drawlatch" : CONFIG_DIR;
-
-  // Step 5: Scaffold proxy.config.json
+  // Step 4: Scaffold proxy.config.json
   const proxyConfigPath = getProxyConfigPath();
   if (existsSync(proxyConfigPath)) {
     steps.push(`Proxy config: already exists`);
   } else {
     const proxyConfig = {
       remoteUrl: "http://127.0.0.1:9999",
-      localKeyAlias: alias,
-      remotePublicKeysDir: `${configPrefix}/keys/peers/remote-server`,
       connectTimeout: 10000,
       requestTimeout: 300000,
     };
@@ -299,7 +278,7 @@ async function cmdInit() {
     steps.push(`Proxy config: CREATED`);
   }
 
-  // Step 6: Scaffold remote.config.json
+  // Step 5: Scaffold remote.config.json
   const remoteConfigPath = getRemoteConfigPath();
   if (existsSync(remoteConfigPath)) {
     steps.push(`Remote config: already exists`);
@@ -307,12 +286,10 @@ async function cmdInit() {
     const remoteConfig = {
       host: "0.0.0.0",
       port: 9999,
-      localKeysDir: `${configPrefix}/keys/remote`,
       rateLimitPerMinute: 60,
       callers: {
         [alias]: {
           name: alias === "default" ? "Default Caller" : alias,
-          peerKeyDir: `${configPrefix}/keys/peers/${alias}`,
           connections: connectionsList,
         },
       },
@@ -381,14 +358,7 @@ async function cmdInit() {
   console.log(`       drawlatch doctor\n`);
 }
 
-function copyPublicKey(srcDir, destDir, filename) {
-  const src = join(srcDir, filename);
-  const dest = join(destDir, filename);
-  if (existsSync(src)) {
-    const content = readFileSync(src);
-    writeFileSync(dest, content, { mode: 0o644 });
-  }
-}
+
 
 async function cmdStart() {
   if (values.foreground) return cmdStartForeground();
@@ -612,14 +582,14 @@ function cmdConfig() {
   console.log(`  Host:               ${config.host}`);
   console.log(`  Port:               ${config.port}`);
   console.log(`  Rate limit:         ${config.rateLimitPerMinute} req/min`);
-  console.log(`  Local keys dir:     ${config.localKeysDir}`);
+  console.log(`  Server keys dir:    ${getServerKeysDir()}`);
 
   // Show key fingerprints if keys exist
-  const remoteKeysPath = getRemoteKeysDir();
-  if (existsSync(join(remoteKeysPath, "signing.key.pem"))) {
+  const serverKeysPath = getServerKeysDir();
+  if (existsSync(join(serverKeysPath, "signing.key.pem"))) {
     try {
-      const remoteKeys = loadKeyBundle(remoteKeysPath);
-      console.log(`  Remote key fp:      ${fingerprint(extractPublicKeys(remoteKeys))}`);
+      const serverKeys = loadKeyBundle(serverKeysPath);
+      console.log(`  Server key fp:      ${fingerprint(extractPublicKeys(serverKeys))}`);
     } catch { /* skip */ }
   }
 
@@ -684,12 +654,6 @@ async function cmdGenerateKeys() {
   process.exit(child.exitCode ?? 0);
 }
 
-function resolveTilde(p) {
-  if (p.startsWith("~/") || p === "~") {
-    return join(process.env.HOME || "/", p.slice(1));
-  }
-  return p;
-}
 
 async function cmdDoctor() {
   console.log(`\nDrawlatch Setup Check`);
@@ -730,70 +694,41 @@ async function cmdDoctor() {
   const hasProxyConfig = existsSync(proxyConfigPath);
   check("Proxy config (proxy.config.json)", hasProxyConfig, "Run: drawlatch init");
 
-  // 4. Remote server keys
-  const remoteKeysPath = getRemoteKeysDir();
-  const hasRemoteKeys = existsSync(join(remoteKeysPath, "signing.key.pem")) &&
-                        existsSync(join(remoteKeysPath, "exchange.key.pem")) &&
-                        existsSync(join(remoteKeysPath, "signing.pub.pem")) &&
-                        existsSync(join(remoteKeysPath, "exchange.pub.pem"));
-  check("Remote server keys (keys/remote/)", hasRemoteKeys, "Run: drawlatch generate-keys remote");
+  // 4. Server keys
+  const serverKeysPath = getServerKeysDir();
+  const hasServerKeys = existsSync(join(serverKeysPath, "signing.key.pem")) &&
+                        existsSync(join(serverKeysPath, "exchange.key.pem")) &&
+                        existsSync(join(serverKeysPath, "signing.pub.pem")) &&
+                        existsSync(join(serverKeysPath, "exchange.pub.pem"));
+  check("Server keys (keys/server/)", hasServerKeys, "Run: drawlatch generate-keys server");
 
-  if (hasRemoteKeys) {
+  if (hasServerKeys) {
     try {
-      const rk = loadKeyBundle(remoteKeysPath);
-      console.log(`    Fingerprint: ${fingerprint(extractPublicKeys(rk))}`);
+      const sk = loadKeyBundle(serverKeysPath);
+      console.log(`    Fingerprint: ${fingerprint(extractPublicKeys(sk))}`);
     } catch { /* skip */ }
   }
 
-  // 5. Local proxy keys — need to figure out which alias
-  let localAlias = "default";
-  if (hasProxyConfig) {
-    try {
-      const { loadProxyConfig } = await import(join(PKG_ROOT, "dist/shared/config.js"));
-      const proxyConfig = loadProxyConfig();
-      localAlias = process.env.MCP_KEY_ALIAS?.trim() || proxyConfig.localKeyAlias || "default";
-    } catch { /* skip */ }
-  }
-
-  const localKeysPath = join(getLocalKeysDir(), localAlias);
-  const hasLocalKeys = existsSync(join(localKeysPath, "signing.key.pem")) &&
-                       existsSync(join(localKeysPath, "exchange.key.pem")) &&
-                       existsSync(join(localKeysPath, "signing.pub.pem")) &&
-                       existsSync(join(localKeysPath, "exchange.pub.pem"));
-  check(`Local proxy keys (keys/local/${localAlias}/)`, hasLocalKeys, `Run: drawlatch generate-keys local ${localAlias}`);
-
-  if (hasLocalKeys) {
-    try {
-      const lk = loadKeyBundle(localKeysPath);
-      console.log(`    Fingerprint: ${fingerprint(extractPublicKeys(lk))}`);
-    } catch { /* skip */ }
-  }
-
-  // 6. Peer keys for callers
+  // 5. Caller keys — check each caller from config
   if (hasRemoteConfig) {
     try {
       const config = loadRemoteConfig();
-      for (const [alias, caller] of Object.entries(config.callers)) {
-        const peerDir = resolveTilde(caller.peerKeyDir);
-        const hasPeerKeys = existsSync(join(peerDir, "signing.pub.pem")) &&
-                            existsSync(join(peerDir, "exchange.pub.pem"));
-        check(`Peer keys for "${alias}"`, hasPeerKeys, `Copy public keys to ${caller.peerKeyDir}`);
+      const callersDir = getCallerKeysDir();
+      for (const [alias] of Object.entries(config.callers)) {
+        const callerDir = join(callersDir, alias);
+        const hasCallerKeys = existsSync(join(callerDir, "signing.pub.pem")) &&
+                              existsSync(join(callerDir, "exchange.pub.pem"));
+        check(`Caller keys for "${alias}" (keys/callers/${alias}/)`, hasCallerKeys, `Run: drawlatch generate-keys caller ${alias} (or sync)`);
 
-        if (hasPeerKeys) {
+        if (hasCallerKeys) {
           try {
-            const pk = loadPublicKeys(peerDir);
+            const pk = loadPublicKeys(callerDir);
             console.log(`    Fingerprint: ${fingerprint(pk)}`);
           } catch { /* skip */ }
         }
       }
     } catch { /* skip */ }
   }
-
-  // 7. Peer keys for remote server (proxy side)
-  const remotePeerDir = join(getPeerKeysDir(), "remote-server");
-  const hasRemotePeerKeys = existsSync(join(remotePeerDir, "signing.pub.pem")) &&
-                            existsSync(join(remotePeerDir, "exchange.pub.pem"));
-  check("Peer keys for remote server", hasRemotePeerKeys, "Run: drawlatch init");
 
   // 8. .env file
   check("Environment file (.env)", existsSync(ENV_FILE), "Run: drawlatch init");
@@ -932,7 +867,7 @@ async function cmdSync() {
         console.log(`  Caller alias:  ${status.callerAlias}`);
         console.log(`  Fingerprint:   ${status.fingerprint}`);
         console.log(
-          `  Keys saved to: ${join(CONFIG_DIR, "keys", "peers", status.callerAlias)}/`,
+          `  Keys saved to: ${join(CONFIG_DIR, "keys", "callers", status.callerAlias)}/`,
         );
         console.log(
           `\nAdd connections for this caller in remote.config.json:`,
@@ -1439,10 +1374,11 @@ Generate Ed25519 + X25519 keypairs for authentication and encryption.
 Usage: drawlatch generate-keys <subcommand> [options]
 
 Subcommands:
-  local [alias]      Generate MCP proxy (local) keypair
+  caller [alias]     Generate caller keypair
                      Alias defaults to "default" if omitted.
-                     Keys are stored in keys/local/<alias>/
-  remote             Generate remote server keypair
+                     Keys are stored in keys/callers/<alias>/
+  server             Generate server keypair
+                     Keys are stored in keys/server/
   --dir <path>       Generate keypair in a custom directory
   show <path>        Show fingerprint of an existing keypair
 

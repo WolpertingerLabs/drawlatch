@@ -13,9 +13,9 @@ describe('IngestorManager', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       callers: {
-        'test-caller': { peerKeyDir: '', connections: [] },
+        'test-caller': { connections: [] },
       },
       rateLimitPerMinute: 60,
     };
@@ -29,7 +29,7 @@ describe('IngestorManager', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       callers: {},
       rateLimitPerMinute: 60,
     };
@@ -44,7 +44,7 @@ describe('IngestorManager', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'no-ingestor-route',
@@ -53,7 +53,7 @@ describe('IngestorManager', () => {
         },
       ],
       callers: {
-        'test-caller': { peerKeyDir: '', connections: ['no-ingestor-route'] },
+        'test-caller': { connections: ['no-ingestor-route'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -67,7 +67,7 @@ describe('IngestorManager', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       callers: {},
       rateLimitPerMinute: 60,
     };
@@ -184,9 +184,9 @@ describe('IngestorManager.has', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       callers: {
-        'test-caller': { peerKeyDir: '', connections: [] },
+        'test-caller': { connections: [] },
       },
       rateLimitPerMinute: 60,
     };
@@ -198,7 +198,7 @@ describe('IngestorManager.has', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       callers: {},
       rateLimitPerMinute: 60,
     };
@@ -212,9 +212,9 @@ describe('IngestorManager.stopOne', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       callers: {
-        'test-caller': { peerKeyDir: '', connections: [] },
+        'test-caller': { connections: [] },
       },
       rateLimitPerMinute: 60,
     };
@@ -231,7 +231,7 @@ describe('IngestorManager.startOne', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       callers: {},
       rateLimitPerMinute: 60,
     };
@@ -246,9 +246,9 @@ describe('IngestorManager.startOne', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       callers: {
-        'test-caller': { peerKeyDir: '', connections: ['other-connection'] },
+        'test-caller': { connections: ['other-connection'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -263,7 +263,7 @@ describe('IngestorManager.startOne', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'no-ingestor',
@@ -272,7 +272,7 @@ describe('IngestorManager.startOne', () => {
         },
       ],
       callers: {
-        'test-caller': { peerKeyDir: '', connections: ['no-ingestor'] },
+        'test-caller': { connections: ['no-ingestor'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -289,9 +289,9 @@ describe('IngestorManager.restartOne', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       callers: {
-        'test-caller': { peerKeyDir: '', connections: [] },
+        'test-caller': { connections: [] },
       },
       rateLimitPerMinute: 60,
     };
@@ -306,7 +306,7 @@ describe('IngestorManager.restartOne', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       callers: {},
       rateLimitPerMinute: 60,
     };
@@ -322,7 +322,7 @@ describe('IngestorManager — webhook ingestor lifecycle', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'github',
@@ -339,7 +339,7 @@ describe('IngestorManager — webhook ingestor lifecycle', () => {
         },
       ],
       callers: {
-        'test-caller': { peerKeyDir: '', connections: ['github'] },
+        'test-caller': { connections: ['github'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -361,7 +361,7 @@ describe('IngestorManager — webhook ingestor lifecycle', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'github',
@@ -378,7 +378,7 @@ describe('IngestorManager — webhook ingestor lifecycle', () => {
         },
       ],
       callers: {
-        'test-caller': { peerKeyDir: '', connections: ['github'] },
+        'test-caller': { connections: ['github'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -397,7 +397,7 @@ describe('IngestorManager — webhook ingestor lifecycle', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'github',
@@ -414,7 +414,7 @@ describe('IngestorManager — webhook ingestor lifecycle', () => {
         },
       ],
       callers: {
-        'test-caller': { peerKeyDir: '', connections: ['github'] },
+        'test-caller': { connections: ['github'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -433,7 +433,7 @@ describe('IngestorManager — webhook ingestor lifecycle', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'github',
@@ -450,7 +450,7 @@ describe('IngestorManager — webhook ingestor lifecycle', () => {
         },
       ],
       callers: {
-        'test-caller': { peerKeyDir: '', connections: ['github'] },
+        'test-caller': { connections: ['github'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -667,7 +667,6 @@ describe('IngestorManager — multi-instance webhook lifecycle', () => {
   const makeMultiInstanceConfig = (): RemoteServerConfig => ({
     host: '127.0.0.1',
     port: 9999,
-    localKeysDir: '',
     connectors: [
       {
         alias: 'github',
@@ -700,7 +699,6 @@ describe('IngestorManager — multi-instance webhook lifecycle', () => {
     ],
     callers: {
       'test-caller': {
-        peerKeyDir: '',
         connections: ['github'],
         listenerInstances: {
           github: {
@@ -863,7 +861,7 @@ describe('IngestorManager — backward compatibility', () => {
     const config: RemoteServerConfig = {
       host: '127.0.0.1',
       port: 9999,
-      localKeysDir: '',
+
       connectors: [
         {
           alias: 'github',
@@ -880,7 +878,7 @@ describe('IngestorManager — backward compatibility', () => {
         },
       ],
       callers: {
-        'test-caller': { peerKeyDir: '', connections: ['github'] },
+        'test-caller': { connections: ['github'] },
       },
       rateLimitPerMinute: 60,
     };
@@ -902,7 +900,6 @@ describe('IngestorManager — webhook lifecycle permanent stop', () => {
   const makeWebhookConfig = (): RemoteServerConfig => ({
     host: '127.0.0.1',
     port: 9999,
-    localKeysDir: '',
     connectors: [
       {
         alias: 'github',
@@ -919,7 +916,7 @@ describe('IngestorManager — webhook lifecycle permanent stop', () => {
       },
     ],
     callers: {
-      'test-caller': { peerKeyDir: '', connections: ['github'] },
+      'test-caller': { connections: ['github'] },
     },
     rateLimitPerMinute: 60,
   });

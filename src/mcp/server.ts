@@ -17,7 +17,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { loadProxyConfig, getProxyConfigPath } from '../shared/config.js';
+import {
+  loadProxyConfig,
+  resolveCallerKeyAlias,
+  getCallerKeysDir,
+  getServerKeysDir,
+  getProxyConfigPath,
+} from '../shared/config.js';
 import {
   loadKeyBundle,
   loadPublicKeys,
@@ -48,43 +54,39 @@ async function establishChannel(): Promise<EncryptedChannel> {
   const config = loadProxyConfig();
   remoteUrl = config.remoteUrl;
 
-  // Log which key identity is being used
-  const envAlias = process.env.MCP_KEY_ALIAS?.trim();
-  if (envAlias) {
-    console.error(`[mcp-proxy] Using key alias from MCP_KEY_ALIAS: "${envAlias}"`);
-  } else if (config.localKeyAlias) {
-    console.error(`[mcp-proxy] Using key alias from config: "${config.localKeyAlias}"`);
-  }
-  console.error(`[mcp-proxy] Local keys dir: ${config.localKeysDir}`);
+  // Resolve key paths from config dir + alias
+  const alias = resolveCallerKeyAlias();
+  const callerKeysDir = path.join(getCallerKeysDir(), alias);
+  const serverKeysDir = getServerKeysDir();
+
+  console.error(`[mcp-proxy] Using caller alias: "${alias}"`);
+  console.error(`[mcp-proxy] Caller keys dir: ${callerKeysDir}`);
 
   // Validate key paths before attempting to load
-  if (!existsSync(config.localKeysDir)) {
-    const alias = envAlias ?? config.localKeyAlias ?? 'default';
+  if (!existsSync(callerKeysDir)) {
     throw new Error(
-      `Local proxy keys not found at ${config.localKeysDir}. Run: drawlatch generate-keys local ${alias}`,
+      `Caller keys not found at ${callerKeysDir}. Run: drawlatch generate-keys caller ${alias}`,
     );
   }
-  if (!existsSync(config.remotePublicKeysDir)) {
-    throw new Error(
-      `Remote server public keys not found at ${config.remotePublicKeysDir}. Run: drawlatch init (or copy keys manually)`,
-    );
+  if (!existsSync(serverKeysDir)) {
+    throw new Error(`Server public keys not found at ${serverKeysDir}. Run: drawlatch sync`);
   }
 
   let ownKeys, remotePub;
   try {
-    ownKeys = loadKeyBundle(config.localKeysDir);
+    ownKeys = loadKeyBundle(callerKeysDir);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `Failed to load local proxy keys from ${config.localKeysDir}: ${msg}. Run: drawlatch generate-keys local`,
+      `Failed to load caller keys from ${callerKeysDir}: ${msg}. Run: drawlatch generate-keys caller ${alias}`,
     );
   }
   try {
-    remotePub = loadPublicKeys(config.remotePublicKeysDir);
+    remotePub = loadPublicKeys(serverKeysDir);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `Failed to load remote server public keys from ${config.remotePublicKeysDir}: ${msg}. Run: drawlatch init`,
+      `Failed to load server public keys from ${serverKeysDir}: ${msg}. Run: drawlatch sync`,
     );
   }
 

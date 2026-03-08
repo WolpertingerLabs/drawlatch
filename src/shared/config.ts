@@ -53,14 +53,11 @@ export function getRemoteConfigPath(): string {
 export function getKeysDir(): string {
   return path.join(getConfigDir(), 'keys');
 }
-export function getLocalKeysDir(): string {
-  return path.join(getKeysDir(), 'local');
+export function getCallerKeysDir(): string {
+  return path.join(getKeysDir(), 'callers');
 }
-export function getRemoteKeysDir(): string {
-  return path.join(getKeysDir(), 'remote');
-}
-export function getPeerKeysDir(): string {
-  return path.join(getKeysDir(), 'peers');
+export function getServerKeysDir(): string {
+  return path.join(getKeysDir(), 'server');
 }
 export function getEnvFilePath(): string {
   return path.join(getConfigDir(), '.env');
@@ -80,14 +77,6 @@ export type ConnectionCategory =
 export interface ProxyConfig {
   /** Remote server URL */
   remoteUrl: string;
-  /** Key alias — resolved to keys/local/<alias>/.
-   *  Overridden by the MCP_KEY_ALIAS env var at runtime.
-   *  When set, takes precedence over localKeysDir. */
-  localKeyAlias?: string;
-  /** Path to our own key bundle (full-path override; ignored when alias is set) */
-  localKeysDir: string;
-  /** Path to the remote server's public keys */
-  remotePublicKeysDir: string;
   /** Connection timeout (ms) */
   connectTimeout: number;
   /** Request timeout (ms) */
@@ -210,8 +199,6 @@ export interface IngestorOverrides {
 export interface CallerConfig {
   /** Human-readable name for this caller (used in audit logs) */
   name?: string;
-  /** Path to this caller's public key files (signing.pub.pem + exchange.pub.pem) */
-  peerKeyDir: string;
   /** List of connection aliases — references built-in templates (e.g., "github")
    *  or custom connector aliases defined in the top-level connectors array. */
   connections: string[];
@@ -248,13 +235,12 @@ export interface RemoteServerConfig {
   host: string;
   /** Port to listen on */
   port: number;
-  /** Path to our own key bundle */
-  localKeysDir: string;
   /** Custom connector definitions — a reusable pool referenced by alias from callers.
    *  Each connector scopes secrets and headers to endpoint patterns. */
   connectors?: Route[];
   /** Per-caller access control. Keys are caller aliases (used in audit logs).
-   *  Each caller specifies their peer key directory and which connections they can use. */
+   *  Each caller specifies which connections they can use.
+   *  Caller public keys are loaded from keys/callers/<alias>/. */
   callers: Record<string, CallerConfig>;
   /** Rate limit: max requests per minute per session */
   rateLimitPerMinute: number;
@@ -265,8 +251,6 @@ export interface RemoteServerConfig {
 function proxyDefaults(): ProxyConfig {
   return {
     remoteUrl: 'http://localhost:9999',
-    localKeysDir: path.join(getLocalKeysDir(), 'default'),
-    remotePublicKeysDir: path.join(getPeerKeysDir(), 'remote-server'),
     connectTimeout: 10_000,
     requestTimeout: 30_000,
   };
@@ -276,7 +260,6 @@ function remoteDefaults(): RemoteServerConfig {
   return {
     host: '127.0.0.1',
     port: 9999,
-    localKeysDir: getRemoteKeysDir(),
     callers: {},
     rateLimitPerMinute: 60,
   };
@@ -292,11 +275,9 @@ function remoteDefaults(): RemoteServerConfig {
  *   2. config.json → .proxy section (legacy combined format)
  *   3. Built-in defaults
  *
- * Key alias resolution (applied after loading):
- *   1. MCP_KEY_ALIAS env var (highest — set per agent at spawn time)
- *   2. localKeyAlias in config file
- *   3. localKeysDir in config file (explicit full path)
- *   4. Default: keys/local/default
+ * Key paths are derived automatically:
+ *   - Caller keys: keys/callers/{MCP_KEY_ALIAS || "default"}/
+ *   - Server keys: keys/server/
  */
 export function loadProxyConfig(): ProxyConfig {
   const def = proxyDefaults();
@@ -315,16 +296,17 @@ export function loadProxyConfig(): ProxyConfig {
     config = def;
   }
 
-  // Alias resolution: env var > config alias > localKeysDir > default
-  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- intentionally coerces empty string to undefined
-  const envAlias = process.env.MCP_KEY_ALIAS?.trim() || undefined;
-  const alias = envAlias ?? config.localKeyAlias;
-
-  if (alias) {
-    config.localKeysDir = path.join(getLocalKeysDir(), alias);
-  }
-
   return config;
+}
+
+/**
+ * Resolve the caller key alias for the MCP proxy.
+ *
+ * Resolution: MCP_KEY_ALIAS env var > "default"
+ */
+export function resolveCallerKeyAlias(): string {
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- intentionally coerces empty string
+  return process.env.MCP_KEY_ALIAS?.trim() || 'default';
 }
 
 /**
@@ -366,8 +348,6 @@ export function loadRemoteConfig(): RemoteServerConfig {
 
     const legacyRoutes: Route[] = rawConfig.routes;
     const legacyConnections: string[] = rawConfig.connections ?? [];
-    const legacyPeersDir: string =
-      rawConfig.authorizedPeersDir ?? path.join(getPeerKeysDir(), 'authorized-clients');
 
     // Auto-assign aliases to unnamed routes for the default caller
     const connectors = legacyRoutes.map((r, i) => ({
@@ -381,11 +361,9 @@ export function loadRemoteConfig(): RemoteServerConfig {
       ...def,
       host: config.host,
       port: config.port,
-      localKeysDir: config.localKeysDir,
       connectors,
       callers: {
         default: {
-          peerKeyDir: legacyPeersDir,
           connections: allConnectionNames,
         },
       },
@@ -485,7 +463,9 @@ export function resolveSecrets(
       if (envVal !== undefined) {
         resolved[key] = envVal;
       } else {
-        console.error(`[secrets] Warning: env var ${varName} not found for key ${key}${callerAlias ? ` (caller: ${callerAlias})` : ''}`);
+        console.error(
+          `[secrets] Warning: env var ${varName} not found for key ${key}${callerAlias ? ` (caller: ${callerAlias})` : ''}`,
+        );
       }
     } else {
       resolved[key] = value;

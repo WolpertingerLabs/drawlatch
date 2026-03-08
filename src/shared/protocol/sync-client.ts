@@ -2,7 +2,7 @@
  * Sync client — callboard-side API for the key exchange protocol.
  *
  * Usage:
- *   const exchange = await startKeyExchange({ remoteUrl, inviteCode, encryptionKey, callerAlias });
+ *   const exchange = startKeyExchange({ remoteUrl, inviteCode, encryptionKey, callerAlias });
  *   // Display exchange.confirmCode to the user
  *   // User enters confirmCode into drawlatch
  *   const result = await exchange.complete();
@@ -12,15 +12,14 @@
 import type { SerializedPublicKeys } from '../crypto/keys.js';
 import {
   createCaller,
-  exportPublicKeys,
-  saveRemotePublicKeys,
+  exportCallerPublicKeys,
+  saveServerPublicKeys,
   callerExists,
 } from '../crypto/key-manager.js';
 import {
   generateSyncCode,
   encryptSyncPayload,
   decryptSyncPayload,
-  validateSyncRequest,
   type SyncRequest,
   type SyncResponse,
   type SyncErrorCode,
@@ -73,14 +72,14 @@ export interface StartKeyExchangeOpts {
  * 3. Returns the confirm code + a `complete()` function
  * 4. `complete()` encrypts and sends POST /sync, decrypts response, saves remote keys
  */
-export async function startKeyExchange(opts: StartKeyExchangeOpts): Promise<KeyExchangeInit> {
+export function startKeyExchange(opts: StartKeyExchangeOpts): KeyExchangeInit {
   const { remoteUrl, inviteCode, encryptionKey, callerAlias, configDir } = opts;
   const keyOpts = configDir ? { configDir } : undefined;
 
   // Create caller keys if they don't exist
   let publicKeys: SerializedPublicKeys;
   if (callerExists(callerAlias, keyOpts)) {
-    publicKeys = exportPublicKeys('local', callerAlias, keyOpts);
+    publicKeys = exportCallerPublicKeys(callerAlias, keyOpts);
   } else {
     const result = createCaller(callerAlias, keyOpts);
     publicKeys = result.publicKeys;
@@ -135,22 +134,27 @@ export async function startKeyExchange(opts: StartKeyExchangeOpts): Promise<KeyE
         );
       }
 
-      const syncResponse = decrypted as SyncResponse;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- validating unknown payload
+      const syncResponse: {
+        remotePublicKeys?: { signing?: unknown; exchange?: unknown };
+        callerAlias?: string;
+      } = decrypted as any;
       if (
         !syncResponse.remotePublicKeys?.signing ||
-        !syncResponse.remotePublicKeys?.exchange ||
+        !syncResponse.remotePublicKeys.exchange ||
         !syncResponse.callerAlias
       ) {
         throw new SyncClientError('Invalid sync response payload', 'INVALID_PAYLOAD');
       }
 
       // Save the remote server's public keys locally
-      saveRemotePublicKeys(syncResponse.remotePublicKeys, keyOpts);
+      const validResponse = syncResponse as unknown as SyncResponse;
+      saveServerPublicKeys(validResponse.remotePublicKeys, keyOpts);
 
       return {
-        remotePublicKeys: syncResponse.remotePublicKeys,
-        callerAlias: syncResponse.callerAlias,
-        fingerprint: syncResponse.fingerprint,
+        remotePublicKeys: validResponse.remotePublicKeys,
+        callerAlias: validResponse.callerAlias,
+        fingerprint: validResponse.fingerprint,
       };
     },
   };
