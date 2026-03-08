@@ -356,10 +356,16 @@ async function cmdStart() {
     }
     console.log(`  Logs:      drawlatch logs`);
   } else {
-    console.log(
-      `\nServer started (PID ${child.pid}) but health check did not pass.`,
-    );
-    console.log(`  Check logs: drawlatch logs`);
+    const stillAlive = isProcessAlive(child.pid);
+    if (stillAlive) {
+      console.log(
+        `\nServer started (PID ${child.pid}) but health check did not pass within 5s.`,
+      );
+      console.log(`  The server process is still running — it may need more time.`);
+    } else {
+      console.log(`\nServer process (PID ${child.pid}) exited before becoming healthy.`);
+      cleanPidFile();
+    }
     await diagnoseStartFailure();
   }
 }
@@ -956,18 +962,18 @@ function ensureConfigDir() {
 // ── Diagnostic utilities ──────────────────────────────────────────
 
 async function diagnoseStartFailure() {
-  if (!existsSync(LOG_FILE)) return;
+  if (!existsSync(LOG_FILE)) {
+    console.log("\n  No log file found. The server may not have started at all.");
+    return;
+  }
   try {
     const content = readFileSync(LOG_FILE, "utf-8");
-    const lines = content.split("\n").slice(-20);
-    const eaddrinuse = lines.find((l) => l.includes("EADDRINUSE"));
-    const eacces = lines.find((l) => l.includes("EACCES"));
-    if (eaddrinuse) {
-      console.log("\n  Error: Port is already in use.");
-      console.log("  Another process may be using the same port.");
-    } else if (eacces) {
-      console.log("\n  Error: Permission denied.");
-      console.log("  Try using a port >= 1024.");
+    const lines = content.split("\n").filter(Boolean).slice(-15);
+    if (lines.length > 0) {
+      console.log("\n  Recent logs:");
+      for (const line of lines) {
+        console.log(`    ${line}`);
+      }
     }
   } catch {
     // Best effort
