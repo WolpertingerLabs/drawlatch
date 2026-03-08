@@ -885,11 +885,16 @@ function cleanPidFile() {
 
 // ── Health check utilities ────────────────────────────────────────
 
+/** Resolve the host for client connections — 0.0.0.0 is a bind address, not connectable. */
+function connectHost(host) {
+  return host === "0.0.0.0" ? "127.0.0.1" : host;
+}
+
 async function healthCheck(host, port) {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
-    const res = await fetch(`http://${host}:${port}/health`, {
+    const res = await fetch(`http://${connectHost(host)}:${port}/health`, {
       signal: controller.signal,
     });
     clearTimeout(timeout);
@@ -903,7 +908,7 @@ async function healthCheckFull(host, port) {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
-    const res = await fetch(`http://${host}:${port}/health`, {
+    const res = await fetch(`http://${connectHost(host)}:${port}/health`, {
       signal: controller.signal,
     });
     clearTimeout(timeout);
