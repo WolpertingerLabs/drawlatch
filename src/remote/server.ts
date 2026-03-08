@@ -70,11 +70,11 @@ import { isSecretSetForCaller, setCallerSecrets } from '../shared/env-utils.js';
 function loadEnvFile(): void {
   const configDirEnvPath = getEnvFilePath();
   if (fs.existsSync(configDirEnvPath)) {
-    dotenv.config({ path: configDirEnvPath });
+    dotenv.config({ path: configDirEnvPath, quiet: true });
     return;
   }
   // Backward compat: fall back to cwd .env
-  const result = dotenv.config();
+  const result = dotenv.config({ quiet: true });
   if (result.parsed) {
     console.warn(
       `[remote] Loaded .env from working directory. ` +
@@ -1824,6 +1824,8 @@ export function createApp(options: CreateAppOptions = {}) {
 // ── Start ──────────────────────────────────────────────────────────────────
 
 export function main(): void {
+  console.log('[remote] Starting drawlatch server...');
+
   // Pre-flight validation: check for common setup issues before starting
   const remoteConfigPath = getRemoteConfigPath();
   if (!fs.existsSync(remoteConfigPath)) {
@@ -1871,6 +1873,7 @@ export function main(): void {
     () =>
       void (async () => {
         console.log(`[remote] Secure remote server listening on ${host}:${port}`);
+        console.log(`[remote] PID: ${process.pid}, Node: ${process.version}`);
 
         // If a tunnel was requested, start it before ingestors so that
         // process.env.DRAWLATCH_TUNNEL_URL is available during secret resolution.
@@ -1952,6 +1955,17 @@ export function main(): void {
       process.exit(1);
     }, 10_000).unref();
   };
+
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[remote] Error: Port ${port} is already in use.`);
+    } else if (err.code === 'EACCES') {
+      console.error(`[remote] Error: Permission denied for ${host}:${port}. Try a port >= 1024.`);
+    } else {
+      console.error(`[remote] Server error:`, err);
+    }
+    process.exit(1);
+  });
 
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
