@@ -102,7 +102,7 @@ export class IngestorManager {
       // Resolve routes for this caller (raw + resolved)
       const rawRoutes = resolveCallerRoutes(this.config, callerAlias);
       const callerEnvResolved = resolveSecrets(callerConfig.env ?? {});
-      const resolvedRoutes = resolveRoutes(rawRoutes, callerEnvResolved);
+      const resolvedRoutes = resolveRoutes(rawRoutes, callerEnvResolved, callerAlias);
 
       for (let i = 0; i < rawRoutes.length; i++) {
         const rawRoute = rawRoutes[i];
@@ -208,6 +208,8 @@ export class IngestorManager {
     );
 
     if (ingestor) {
+      const { caller } = parseKey(key);
+      ingestor.callerAlias = caller;
       this.ingestors.set(key, ingestor);
       log.info(`Starting ${effectiveConfig.type} ingestor for ${key}`);
       try {
@@ -347,7 +349,7 @@ export class IngestorManager {
 
     const rawRoutes = resolveCallerRoutes(this.config, callerAlias);
     const callerEnvResolved = resolveSecrets(callerConfig.env ?? {});
-    const resolvedRoutes = resolveRoutes(rawRoutes, callerEnvResolved);
+    const resolvedRoutes = resolveRoutes(rawRoutes, callerEnvResolved, callerAlias);
     const rawRoute = rawRoutes[connectionIndex];
     const resolvedRoute = resolvedRoutes[connectionIndex];
 
@@ -458,6 +460,7 @@ export class IngestorManager {
       };
     }
 
+    ingestor.callerAlias = callerAlias;
     this.ingestors.set(key, ingestor);
     log.info(`Starting ${effectiveConfig.type} ingestor for ${key}`);
 

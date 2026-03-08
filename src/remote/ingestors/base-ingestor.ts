@@ -46,6 +46,9 @@ export abstract class BaseIngestor extends EventEmitter {
   protected lastEventAt: string | null = null;
   protected errorMessage?: string;
 
+  /** Caller alias that owns this ingestor. Set by IngestorManager after creation. */
+  callerAlias = 'unknown';
+
   /** Per-instance epoch for event ID generation.
    *  Each instance claims a unique epoch so IDs never collide across restarts. */
   private readonly bootEpoch: number;
@@ -109,6 +112,7 @@ export abstract class BaseIngestor extends EventEmitter {
       idempotencyKey: key,
       receivedAt: now.toISOString(),
       receivedAtMs: now.getTime(),
+      callerAlias: this.callerAlias,
       source: this.connectionAlias,
       ...(this.instanceId !== undefined && { instanceId: this.instanceId }),
       eventType,

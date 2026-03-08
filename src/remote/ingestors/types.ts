@@ -145,6 +145,9 @@ export interface IngestedEvent {
   /** Unix timestamp (milliseconds) when the event was received by the ingestor. */
   receivedAtMs: number;
 
+  /** Caller alias that owns this event (e.g., 'default', 'alice'). */
+  callerAlias: string;
+
   /** Source connection alias (e.g., 'discord-bot', 'github'). */
   source: string;
 
