@@ -128,6 +128,13 @@ export function isSecretSetForCaller(
 }
 
 /**
+ * Regex for valid secret names: uppercase letters, digits, and underscores;
+ * must start with a letter. Prevents injection of system env vars
+ * (e.g., PATH, NODE_OPTIONS, LD_PRELOAD).
+ */
+export const SECRET_NAME_REGEX = /^[A-Z][A-Z0-9_]*$/;
+
+/**
  * Set secrets for a caller with prefixed env vars.
  * Updates .env file, process.env, and caller's env mapping in config.
  * Returns boolean status per secret name.
@@ -149,6 +156,13 @@ export function setCallerSecrets(
   caller.env ??= {};
 
   for (const [secretName, value] of Object.entries(secrets)) {
+    if (!SECRET_NAME_REGEX.test(secretName)) {
+      throw new Error(
+        `Invalid secret name "${secretName}": must match ${SECRET_NAME_REGEX} ` +
+          `(uppercase letters, digits, underscores; must start with a letter)`,
+      );
+    }
+
     const prefixed = prefixedEnvVar(callerAlias, secretName);
 
     if (value === '') {

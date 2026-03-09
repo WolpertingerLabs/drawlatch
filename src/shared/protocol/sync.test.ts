@@ -144,6 +144,7 @@ describe('isSyncSessionActive', () => {
       createdAt: Date.now(),
       ttlMs: DEFAULT_SYNC_TTL_MS,
       completed: false,
+      failedAttempts: 0,
       ...overrides,
     };
   }

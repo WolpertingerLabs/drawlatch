@@ -27,6 +27,7 @@ export {
   validateSyncRequest,
   isSyncSessionActive,
   DEFAULT_SYNC_TTL_MS,
+  MAX_SYNC_ATTEMPTS,
 } from './sync.js';
 
 export {
