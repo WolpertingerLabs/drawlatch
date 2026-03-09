@@ -50,6 +50,7 @@ import {
   encryptSyncPayload,
   validateSyncRequest,
   isSyncSessionActive,
+  MAX_SYNC_ATTEMPTS,
   type SyncSession,
   type SyncRequest,
   type SyncResponse,
@@ -1351,24 +1352,90 @@ export interface CreateAppOptions {
   authorizedPeers?: AuthorizedPeer[];
   /** Override the ingestor manager instead of creating one from config */
   ingestorManager?: IngestorManager;
+  /** Disable per-IP rate limiting (for tests that make many requests from localhost) */
+  disableRateLimiting?: boolean;
 }
 
 export function createApp(options: CreateAppOptions = {}) {
   const app = express();
 
-  // Parse JSON for handshake endpoints
-  app.use('/handshake', express.json());
+  // Parse JSON for handshake endpoints (64kb limit — handshake messages are <2KB)
+  app.use('/handshake', express.json({ limit: '64kb' }));
 
   // Raw buffer for encrypted request endpoint (50 MB to accommodate base64-encoded file uploads)
   app.use('/request', express.raw({ type: 'application/octet-stream', limit: '50mb' }));
 
   // Plain text for sync endpoint (AES-encrypted base64 body)
   app.use('/sync', express.text({ type: 'text/plain', limit: '64kb' }));
-  // JSON for sync management endpoints
-  app.use('/sync/listen', express.json());
+  // JSON for sync management endpoints (64kb limit — sync listen messages are tiny)
+  app.use('/sync/listen', express.json({ limit: '64kb' }));
 
   // Raw buffer for webhook endpoints (needed for signature verification)
   app.use('/webhooks', express.raw({ type: 'application/json', limit: '1mb' }));
+
+  // ── Per-IP rate limiting for pre-auth endpoints ──────────────────────────
+  // The per-session rate limit (checkRateLimit) only applies to authenticated
+  // /request calls. These limiters protect unauthenticated endpoints against
+  // volumetric abuse and brute-force attacks.
+  if (!options.disableRateLimiting) {
+    const ipRequestCounts = new Map<string, { windowStart: number; count: number }>();
+
+    function getIpRateLimit(
+      ip: string,
+      windowMs: number,
+      max: number,
+    ): { allowed: boolean; remaining: number } {
+      const now = Date.now();
+      const key = `${ip}:${windowMs}:${max}`;
+      let entry = ipRequestCounts.get(key);
+
+      if (!entry || now - entry.windowStart > windowMs) {
+        entry = { windowStart: now, count: 0 };
+        ipRequestCounts.set(key, entry);
+      }
+
+      entry.count++;
+      const allowed = entry.count <= max;
+      return { allowed, remaining: Math.max(0, max - entry.count) };
+    }
+
+    function ipRateLimiter(windowMs: number, max: number) {
+      return (req: express.Request, res: express.Response, next: express.NextFunction): void => {
+        const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+        const { allowed, remaining } = getIpRateLimit(ip, windowMs, max);
+
+        res.setHeader('X-RateLimit-Limit', max);
+        res.setHeader('X-RateLimit-Remaining', remaining);
+
+        if (!allowed) {
+          res.status(429).json({ error: 'Too many requests' });
+          return;
+        }
+        next();
+      };
+    }
+
+    app.use('/handshake', ipRateLimiter(60_000, 30));
+    app.use('/sync', ipRateLimiter(60_000, 10));
+    app.use('/webhooks', ipRateLimiter(60_000, 120));
+    app.use('/health', ipRateLimiter(60_000, 60));
+  }
+
+  // ── Loopback guard for local-only endpoints ──────────────────────────────
+  // /sync/listen and /sync/status are intended for local CLI use only.
+  // Reject requests from non-loopback addresses to prevent remote abuse.
+  function requireLoopback(
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ): void {
+    const addr = req.socket.remoteAddress;
+    if (addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1') {
+      next();
+    } else {
+      res.status(403).json({ error: 'Forbidden: local access only' });
+    }
+  }
 
   const config = options.config ?? loadRemoteConfig();
   const ownKeys = options.ownKeys ?? loadKeyBundle(getServerKeysDir());
@@ -1616,7 +1683,7 @@ export function createApp(options: CreateAppOptions = {}) {
   // ── Sync: key exchange endpoints ───────────────────────────────────────
 
   // Internal management: open a sync session (called by drawlatch CLI)
-  app.post('/sync/listen', (req, res) => {
+  app.post('/sync/listen', requireLoopback, (req, res) => {
     const { inviteCode, confirmCode, encryptionKey, ttlMs } = req.body;
 
     if (!inviteCode || !encryptionKey) {
@@ -1636,6 +1703,7 @@ export function createApp(options: CreateAppOptions = {}) {
       createdAt: Date.now(),
       ttlMs: ttlMs ?? 5 * 60 * 1000,
       completed: false,
+      failedAttempts: 0,
     };
 
     console.log('[sync] Sync session opened, waiting for callboard...');
@@ -1643,7 +1711,7 @@ export function createApp(options: CreateAppOptions = {}) {
   });
 
   // Internal management: check sync session status (polled by CLI)
-  app.get('/sync/status', (_req, res) => {
+  app.get('/sync/status', requireLoopback, (_req, res) => {
     if (!activeSyncSession) {
       res.json({ active: false, completed: false });
       return;
@@ -1690,6 +1758,11 @@ export function createApp(options: CreateAppOptions = {}) {
 
     // Validate invite code
     if (syncReq.inviteCode !== session.inviteCode) {
+      session.failedAttempts++;
+      if (session.failedAttempts >= MAX_SYNC_ATTEMPTS) {
+        console.error('[sync] Too many failed attempts — invalidating session');
+        activeSyncSession = null;
+      }
       res.status(403).json({ error: 'CODE_MISMATCH' });
       return;
     }
@@ -1700,6 +1773,11 @@ export function createApp(options: CreateAppOptions = {}) {
       return;
     }
     if (syncReq.confirmCode !== session.confirmCode) {
+      session.failedAttempts++;
+      if (session.failedAttempts >= MAX_SYNC_ATTEMPTS) {
+        console.error('[sync] Too many failed attempts — invalidating session');
+        activeSyncSession = null;
+      }
       res.status(403).json({ error: 'CODE_MISMATCH' });
       return;
     }
@@ -1772,7 +1850,6 @@ export function createApp(options: CreateAppOptions = {}) {
       status: 'ok',
       activeSessions: sessions.size,
       uptime: process.uptime(),
-      tunnelUrl: process.env.DRAWLATCH_TUNNEL_URL ?? null,
     });
   });
 
@@ -1827,7 +1904,9 @@ export function createApp(options: CreateAppOptions = {}) {
     if (anyAccepted) {
       res.status(200).json({ received: true });
     } else {
-      res.status(403).json({ error: 'Webhook rejected by all ingestors', details: results });
+      // Log details server-side for debugging; never expose ingestor internals to callers
+      console.error('[remote] Webhook rejected by all ingestors:', JSON.stringify(results));
+      res.status(403).json({ error: 'Webhook rejected' });
     }
   });
 

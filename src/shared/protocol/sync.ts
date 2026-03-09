@@ -169,6 +169,9 @@ export interface SyncResponse {
   fingerprint: string;
 }
 
+/** Maximum number of failed sync code attempts before session invalidation. */
+export const MAX_SYNC_ATTEMPTS = 5;
+
 /** Server-side sync session state. */
 export interface SyncSession {
   inviteCode: string;
@@ -177,6 +180,8 @@ export interface SyncSession {
   createdAt: number;
   ttlMs: number;
   completed: boolean;
+  /** Number of failed code-match attempts (session invalidated at MAX_SYNC_ATTEMPTS). */
+  failedAttempts: number;
   /** Populated after successful sync. */
   result?: {
     callerAlias: string;
