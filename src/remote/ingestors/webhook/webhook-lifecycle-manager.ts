@@ -101,20 +101,20 @@ export class WebhookLifecycleManager {
 
         // Find a webhook matching our callback URL (and model ID if applicable)
         const matching = existingWebhooks.find((wh) => {
-          const rawUrl = wh[listConfig.callbackUrlField];
+          const rawUrl = getByPath(wh, listConfig.callbackUrlField);
           const whCallbackUrl = typeof rawUrl === 'string' ? rawUrl : '';
           const urlMatch = whCallbackUrl === callbackUrl;
 
           if (!urlMatch) return false;
           if (modelId && listConfig.modelIdField) {
-            const rawModelId = wh[listConfig.modelIdField];
+            const rawModelId = getByPath(wh, listConfig.modelIdField);
             return (typeof rawModelId === 'string' ? rawModelId : '') === modelId;
           }
           return true;
         });
 
         if (matching) {
-          const webhookId = String(matching[listConfig.idField]);
+          const webhookId = String(getByPath(matching, listConfig.idField));
           log.info(`Found existing webhook (ID: ${webhookId}), reusing`);
           return { registered: true, webhookId, lastAttempt: now };
         }
@@ -122,15 +122,15 @@ export class WebhookLifecycleManager {
         // Clean up stale webhooks (matching model but wrong callback URL)
         if (modelId && listConfig.modelIdField && this.config.unregister) {
           const stale = existingWebhooks.filter((wh) => {
-            const rawModelId = wh[listConfig.modelIdField!];
+            const rawModelId = getByPath(wh, listConfig.modelIdField!);
             const whModelId = typeof rawModelId === 'string' ? rawModelId : '';
-            const rawUrl = wh[listConfig.callbackUrlField];
+            const rawUrl = getByPath(wh, listConfig.callbackUrlField);
             const whCallbackUrl = typeof rawUrl === 'string' ? rawUrl : '';
             return whModelId === modelId && whCallbackUrl !== callbackUrl;
           });
 
           for (const staleWh of stale) {
-            const staleId = String(staleWh[listConfig.idField]);
+            const staleId = String(getByPath(staleWh, listConfig.idField));
             log.info(`Cleaning up stale webhook (ID: ${staleId})`);
             try {
               await this.unregister(staleId);

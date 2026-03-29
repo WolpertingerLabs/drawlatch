@@ -17,6 +17,7 @@ import path from 'node:path';
 
 import { loadConnection } from './connections.js';
 import type { IngestorConfig } from '../remote/ingestors/types.js';
+import type { TriggerRule } from '../remote/triggers/types.js';
 import type {
   TestConnectionConfig,
   TestIngestorConfig,
@@ -227,6 +228,10 @@ export interface CallerConfig {
    *  }
    *  ``` */
   listenerInstances?: Record<string, Record<string, IngestorOverrides>>;
+  /** Trigger rules that map ingestor events to Claude Code remote trigger invocations.
+   *  When an ingestor event matches a rule's criteria (source, event type, filter),
+   *  the engine dispatches the event to the configured remote trigger. */
+  triggerRules?: TriggerRule[];
 }
 
 /** Remote server configuration */

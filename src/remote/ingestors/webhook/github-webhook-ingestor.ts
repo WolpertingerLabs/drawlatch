@@ -44,6 +44,14 @@ export class GitHubWebhookIngestor extends WebhookIngestor {
   }
 
   /**
+   * Return the repository name for multi-instance webhook lifecycle management.
+   * Enables the lifecycle manager to match and clean up stale webhooks per-repo.
+   */
+  protected override getModelId(): string | undefined {
+    return this.repoFilter.length === 1 ? this.repoFilter[0] : undefined;
+  }
+
+  /**
    * Filter webhooks by repository for multi-instance support.
    * When repoFilter is set, only events from those repos are accepted.
    * The repo is found in `body.repository.full_name` of GitHub webhook payloads.

@@ -26,6 +26,7 @@ import {
   type ListenerConfigField,
 } from '../../shared/config.js';
 import { createLogger } from '../../shared/logger.js';
+import { TriggerRuleEngine } from '../triggers/rule-engine.js';
 
 const log = createLogger('ingestor');
 import type {
@@ -87,6 +88,9 @@ interface LifecycleResult {
 export class IngestorManager {
   /** Active ingestor instances, keyed by `callerAlias:connectionAlias:instanceId`. */
   private ingestors = new Map<string, BaseIngestor>();
+
+  /** Trigger rule engines per caller. Created during startAll() for callers with triggerRules. */
+  private triggerEngines = new Map<string, TriggerRuleEngine>();
 
   /**
    * Optional config loader for hot-reload support. When provided, `startOne()`
@@ -178,6 +182,9 @@ export class IngestorManager {
     if (count > 0) {
       log.info(`${count} ingestor(s) started`);
     }
+
+    // Wire up trigger rule engines for callers that have triggerRules
+    this.initTriggerEngines();
   }
 
   /**
@@ -230,6 +237,42 @@ export class IngestorManager {
       } catch (err) {
         log.error(`Failed to start ${key}:`, err);
       }
+    }
+  }
+
+  /**
+   * Initialize trigger rule engines for callers with triggerRules config.
+   * Subscribes to 'event' emissions from matching ingestors and dispatches
+   * to Claude Code remote triggers.
+   */
+  private initTriggerEngines(): void {
+    const config = this.getConfig();
+
+    for (const [callerAlias, callerConfig] of Object.entries(config.callers)) {
+      if (!callerConfig.triggerRules || callerConfig.triggerRules.length === 0) continue;
+
+      // Resolve caller-level secrets for API key access
+      const callerEnvResolved = resolveSecrets(callerConfig.env ?? {});
+
+      const engine = new TriggerRuleEngine(callerConfig.triggerRules, callerEnvResolved);
+      if (engine.activeRuleCount === 0) continue;
+
+      this.triggerEngines.set(callerAlias, engine);
+
+      // Subscribe the engine to all ingestors belonging to this caller
+      for (const [key, ingestor] of this.ingestors) {
+        const { caller } = parseKey(key);
+        if (caller !== callerAlias) continue;
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-explicit-any -- BaseIngestor extends EventEmitter; .on() is inherited
+        (ingestor as any).on('event', (event: IngestedEvent) => {
+          engine.handleEvent(event);
+        });
+      }
+
+      log.info(
+        `Trigger rule engine for ${callerAlias}: ${engine.activeRuleCount} active rule(s)`,
+      );
     }
   }
 

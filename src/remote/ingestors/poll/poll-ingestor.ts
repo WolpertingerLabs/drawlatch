@@ -52,6 +52,8 @@ export class PollIngestor extends BaseIngestor {
   private readonly responsePath: string | undefined;
   private readonly eventType: string;
   private readonly pollHeaders: Record<string, string>;
+  private readonly useEtag: boolean;
+  private lastEtag: string | null = null;
 
   /** Resolved headers from the parent connection route (injected by manager). */
   private readonly routeHeaders: Record<string, string>;
@@ -75,6 +77,7 @@ export class PollIngestor extends BaseIngestor {
     this.deduplicateBy = pollConfig.deduplicateBy;
     this.responsePath = pollConfig.responsePath;
     this.eventType = pollConfig.eventType ?? 'poll';
+    this.useEtag = pollConfig.etag ?? false;
     this.routeHeaders = routeHeaders;
 
     // Resolve ${VAR} placeholders in poll-specific headers
@@ -126,6 +129,11 @@ export class PollIngestor extends BaseIngestor {
         ...this.pollHeaders,
       };
 
+      // Add ETag conditional request header if enabled and we have a cached ETag
+      if (this.useEtag && this.lastEtag) {
+        headers['If-None-Match'] = this.lastEtag;
+      }
+
       // Build request options
       const fetchOptions: RequestInit = {
         method: this.method,
@@ -148,8 +156,22 @@ export class PollIngestor extends BaseIngestor {
 
       const response = await fetch(this.url, fetchOptions);
 
+      // Handle ETag 304 Not Modified — no new data, not an error
+      if (this.useEtag && response.status === 304) {
+        this.consecutiveErrors = 0;
+        if (this.state !== 'connected') this.state = 'connected';
+        log.debug(`${this.connectionAlias}: 304 Not Modified (ETag cache hit)`);
+        return;
+      }
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      }
+
+      // Store ETag for subsequent conditional requests
+      if (this.useEtag) {
+        const etag = response.headers.get('etag');
+        if (etag) this.lastEtag = etag;
       }
 
       const responseBody: unknown = await response.json();

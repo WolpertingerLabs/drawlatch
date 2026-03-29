@@ -352,6 +352,136 @@ describe('WebhookLifecycleManager', () => {
     });
   });
 
+  // ── dot-path field lookups (GitHub-style nested responses) ────────────
+
+  describe('dot-path field lookups', () => {
+    /**
+     * GitHub webhook list responses nest the callback URL at `config.url`
+     * rather than a top-level field. These tests verify that `callbackUrlField`,
+     * `idField`, and `modelIdField` all support dot-separated paths.
+     */
+
+    const GITHUB_CALLBACK_URL = 'https://my-tunnel.trycloudflare.com/webhooks/github';
+    const REPO = 'octocat/Hello-World';
+
+    function makeGitHubConfig(): WebhookLifecycleConfig {
+      return {
+        list: {
+          method: 'GET',
+          url: 'https://api.github.com/repos/${repoFilter}/hooks',
+          headers: { Authorization: 'Bearer ${GITHUB_TOKEN}' },
+          callbackUrlField: 'config.url',
+          idField: 'id',
+        },
+        register: {
+          method: 'POST',
+          url: 'https://api.github.com/repos/${repoFilter}/hooks',
+          headers: { Authorization: 'Bearer ${GITHUB_TOKEN}' },
+          body: {
+            name: 'web',
+            active: true,
+            config: {
+              url: '${CALLBACK_URL}',
+              content_type: 'json',
+              secret: '${GITHUB_WEBHOOK_SECRET}',
+            },
+          },
+          idField: 'id',
+        },
+        unregister: {
+          method: 'DELETE',
+          url: 'https://api.github.com/repos/${repoFilter}/hooks/${_webhookId}',
+          headers: { Authorization: 'Bearer ${GITHUB_TOKEN}' },
+        },
+      };
+    }
+
+    const GITHUB_SECRETS: Record<string, string> = {
+      GITHUB_TOKEN: 'ghp_test123',
+      GITHUB_WEBHOOK_SECRET: 'whsec_test',
+      repoFilter: REPO,
+    };
+
+    it('should match existing webhook with nested callbackUrlField (config.url)', async () => {
+      // GitHub list returns webhooks with config.url (nested)
+      fetchSpy.mockResolvedValueOnce(
+        mockFetchResponse([
+          {
+            id: 12345,
+            type: 'Repository',
+            config: {
+              url: GITHUB_CALLBACK_URL,
+              content_type: 'json',
+              insecure_ssl: '0',
+            },
+            events: ['push'],
+            active: true,
+          },
+        ]),
+      );
+
+      const manager = new WebhookLifecycleManager(makeGitHubConfig(), GITHUB_SECRETS);
+      const result = await manager.ensureRegistered(GITHUB_CALLBACK_URL);
+
+      expect(result.registered).toBe(true);
+      expect(result.webhookId).toBe('12345');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should register new webhook when nested config.url does not match', async () => {
+      // List returns webhook with different URL
+      fetchSpy.mockResolvedValueOnce(
+        mockFetchResponse([
+          {
+            id: 99999,
+            config: { url: 'https://other-service.com/hook', content_type: 'json' },
+          },
+        ]),
+      );
+      // Register returns new webhook
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({ id: 54321 }));
+
+      const manager = new WebhookLifecycleManager(makeGitHubConfig(), GITHUB_SECRETS);
+      const result = await manager.ensureRegistered(GITHUB_CALLBACK_URL);
+
+      expect(result.registered).toBe(true);
+      expect(result.webhookId).toBe('54321');
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should clean up stale webhooks using dot-path modelIdField', async () => {
+      const configWithModel = makeGitHubConfig();
+      configWithModel.list!.modelIdField = 'config.repo';
+
+      const oldUrl = 'https://old-tunnel.com/webhooks/github';
+
+      // List returns stale webhook (same model, wrong URL)
+      fetchSpy.mockResolvedValueOnce(
+        mockFetchResponse([
+          {
+            id: 11111,
+            config: { url: oldUrl, repo: REPO },
+          },
+        ]),
+      );
+      // Unregister stale
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({}));
+      // Register new
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({ id: 22222 }));
+
+      const manager = new WebhookLifecycleManager(configWithModel, GITHUB_SECRETS);
+      const result = await manager.ensureRegistered(GITHUB_CALLBACK_URL, REPO);
+
+      expect(result.registered).toBe(true);
+      expect(result.webhookId).toBe('22222');
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+
+      // Verify stale webhook was unregistered
+      const unregisterCall = fetchSpy.mock.calls[1];
+      expect(unregisterCall[0]).toContain('11111');
+    });
+  });
+
   // ── responsePath support ──────────────────────────────────────────────
 
   describe('responsePath', () => {
