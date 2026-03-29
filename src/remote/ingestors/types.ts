@@ -114,6 +114,13 @@ export interface PollIngestorConfig {
    *  Values may contain ${VAR} placeholders.
    *  These are merged UNDER the connection's route headers (route headers take precedence). */
   headers?: Record<string, string>;
+
+  /** Enable ETag-based conditional requests.
+   *  When true, the poller stores the ETag from each successful response and sends
+   *  `If-None-Match` on subsequent requests. HTTP 304 responses are treated as a
+   *  successful no-op (no items, no error). Useful for APIs like GitHub Events
+   *  where 304s do not count against rate limits. */
+  etag?: boolean;
 }
 
 // ── Buffered event ──────────────────────────────────────────────────────

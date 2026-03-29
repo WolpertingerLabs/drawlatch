@@ -13,7 +13,8 @@
   },
   "secrets": {
     "GITHUB_TOKEN": "${GITHUB_TOKEN}",
-    "GITHUB_WEBHOOK_SECRET": "${GITHUB_WEBHOOK_SECRET}"
+    "GITHUB_WEBHOOK_SECRET": "${GITHUB_WEBHOOK_SECRET}",
+    "GITHUB_WEBHOOK_URL": "${GITHUB_WEBHOOK_URL}"
   },
   "allowedEndpoints": ["https://api.github.com/**"],
   "ingestor": {
@@ -21,7 +22,51 @@
     "webhook": {
       "path": "github",
       "signatureHeader": "X-Hub-Signature-256",
-      "signatureSecret": "GITHUB_WEBHOOK_SECRET"
+      "signatureSecret": "GITHUB_WEBHOOK_SECRET",
+      "callbackUrl": "${GITHUB_WEBHOOK_URL}",
+      "lifecycle": {
+        "list": {
+          "method": "GET",
+          "url": "https://api.github.com/repos/${repoFilter}/hooks",
+          "headers": {
+            "Authorization": "Bearer ${GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28"
+          },
+          "callbackUrlField": "config.url",
+          "idField": "id"
+        },
+        "register": {
+          "method": "POST",
+          "url": "https://api.github.com/repos/${repoFilter}/hooks",
+          "headers": {
+            "Authorization": "Bearer ${GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28"
+          },
+          "body": {
+            "name": "web",
+            "active": true,
+            "events": ["push", "pull_request", "issues", "issue_comment", "create", "delete", "release", "workflow_run", "check_run"],
+            "config": {
+              "url": "${GITHUB_WEBHOOK_URL}/webhooks/github",
+              "content_type": "json",
+              "secret": "${GITHUB_WEBHOOK_SECRET}",
+              "insecure_ssl": "0"
+            }
+          },
+          "idField": "id"
+        },
+        "unregister": {
+          "method": "DELETE",
+          "url": "https://api.github.com/repos/${repoFilter}/hooks/${_webhookId}",
+          "headers": {
+            "Authorization": "Bearer ${GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28"
+          }
+        }
+      }
     }
   },
   "testIngestor": {

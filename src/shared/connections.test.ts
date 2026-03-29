@@ -497,7 +497,7 @@ describe('listConnectionTemplates (integration)', () => {
 
     expect(github.name).toBe('GitHub API');
     expect(github.requiredSecrets).toEqual(['GITHUB_TOKEN']);
-    expect(github.optionalSecrets).toEqual(['GITHUB_WEBHOOK_SECRET']);
+    expect(github.optionalSecrets).toEqual(['GITHUB_WEBHOOK_SECRET', 'GITHUB_WEBHOOK_URL']);
     expect(github.hasIngestor).toBe(true);
     expect(github.ingestorType).toBe('webhook');
     expect(github.docsUrl).toBeTruthy();
