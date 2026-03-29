@@ -69,6 +69,7 @@
     "start:remote": "NODE_ENV=production node dist/remote/server.js",
     "start:mcp": "node dist/mcp/server.js",
     "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src/",
