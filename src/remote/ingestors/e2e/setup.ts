@@ -16,7 +16,7 @@ import { expect } from 'vitest';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { createApp, type CreateAppOptions } from '../../server.js';
+import { createApp } from '../../server.js';
 import { generateKeyBundle, extractPublicKeys } from '../../../shared/crypto/index.js';
 import { IngestorManager } from '../manager.js';
 import type { RemoteServerConfig } from '../../../shared/config.js';

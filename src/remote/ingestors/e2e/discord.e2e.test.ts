@@ -30,7 +30,7 @@ const shouldSkip = missing.length > 0;
 
 describe.skipIf(shouldSkip)('Discord Gateway e2e', () => {
   if (shouldSkip) {
-    it.skip(`skipped — missing env vars: ${missing.join(', ')}`, () => {});
+    it.skip(`skipped — missing env vars: ${missing.join(', ')}`, () => { /* noop */ });
     return;
   }
 
@@ -74,7 +74,7 @@ describe.skipIf(shouldSkip)('Discord Gateway e2e', () => {
         // Best-effort cleanup
       }
     }
-    await e2e?.teardown();
+    await e2e.teardown();
   });
 
   it('receives MESSAGE_CREATE from the Gateway', async () => {

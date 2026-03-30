@@ -30,7 +30,7 @@ const shouldSkip = missing.length > 0;
 
 describe.skipIf(shouldSkip)('GitHub webhook e2e', () => {
   if (shouldSkip) {
-    it.skip(`skipped — missing env vars: ${missing.join(', ')}`, () => {});
+    it.skip(`skipped — missing env vars: ${missing.join(', ')}`, () => { /* noop */ });
     return;
   }
 
@@ -49,7 +49,7 @@ describe.skipIf(shouldSkip)('GitHub webhook e2e', () => {
   });
 
   afterAll(async () => {
-    await e2e?.teardown();
+    await e2e.teardown();
   });
 
   it('accepts a properly signed webhook and buffers the event', async () => {
