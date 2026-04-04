@@ -1,6 +1,6 @@
 {
   "name": "GitHub API",
-  "stability": "beta",
+  "stability": "stable",
   "category": "developer-tools",
   "description": "GitHub REST API — repositories, issues, pull requests, users, organizations, and more. Auth is handled automatically via the GITHUB_TOKEN environment variable. Includes a webhook ingestor for real-time events (push, pull_request, issues, etc.) — set GITHUB_WEBHOOK_SECRET and use poll_events to retrieve them.",
   "docsUrl": "https://docs.github.com/en/rest",
