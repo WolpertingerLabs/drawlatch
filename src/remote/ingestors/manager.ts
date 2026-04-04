@@ -788,7 +788,7 @@ export class IngestorManager {
         ) {
           // For text[] instanceKey fields, inject the first element into secrets
           // for lifecycle URL ${VAR} resolution (e.g., repoFilter → "owner/repo")
-          secrets[paramKey] = paramValue[0] as string;
+          secrets[paramKey] = paramValue[0];
         }
       }
     }
