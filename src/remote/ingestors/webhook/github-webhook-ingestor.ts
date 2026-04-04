@@ -29,6 +29,13 @@ export class GitHubWebhookIngestor extends WebhookIngestor {
    */
   private readonly repoFilter: string[];
 
+  /**
+   * Organization filter for org-level webhook registration.
+   * When set, lifecycle URLs target the org API instead of the repo API.
+   * Set via `_orgFilter` on the webhook config (injected by IngestorManager).
+   */
+  private readonly orgFilter: string | undefined;
+
   constructor(
     connectionAlias: string,
     secrets: Record<string, string>,
@@ -36,19 +43,54 @@ export class GitHubWebhookIngestor extends WebhookIngestor {
     bufferSize?: number,
     instanceId?: string,
   ) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- injected by IngestorManager for multi-instance support
+    const orgFilter = (webhookConfig as any)._orgFilter as string | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+    const repoFilterArr = (webhookConfig as any)._repoFilter as string[] | undefined;
+
+    // When orgFilter is set, swap lifecycle URLs to use org endpoints
+    if (orgFilter && webhookConfig.lifecycle) {
+      webhookConfig = GitHubWebhookIngestor.withOrgLifecycle(webhookConfig);
+    } else if (!repoFilterArr?.length && !orgFilter && webhookConfig.lifecycle) {
+      // Neither filter set — lifecycle registration can't determine the target
+      log.warn(
+        `${connectionAlias}: No repoFilter or orgFilter set — webhook auto-registration disabled. ` +
+          'Set repoFilter (owner/repo) or orgFilter (org name) to enable.',
+      );
+      webhookConfig = { ...webhookConfig, lifecycle: undefined };
+    }
+
     super(connectionAlias, secrets, webhookConfig, bufferSize, instanceId);
 
-    // Repo filter for multi-instance discrimination
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- injected by IngestorManager for multi-instance support
-    this.repoFilter = ((webhookConfig as any)._repoFilter as string[] | undefined) ?? [];
+    this.repoFilter = repoFilterArr ?? [];
+    this.orgFilter = orgFilter;
   }
 
   /**
-   * Return the repository name for multi-instance webhook lifecycle management.
-   * Enables the lifecycle manager to match and clean up stale webhooks per-repo.
+   * Return the model ID for multi-instance webhook lifecycle management.
+   * For org-level: the org name. For repo-level: the single repo name.
    */
   protected override getModelId(): string | undefined {
+    if (this.orgFilter) return this.orgFilter;
     return this.repoFilter.length === 1 ? this.repoFilter[0] : undefined;
+  }
+
+  /**
+   * Clone webhookConfig with lifecycle URLs rewritten for org-level endpoints.
+   * Replaces `repos/${repoFilter}` with `orgs/${orgFilter}` in all lifecycle URLs.
+   */
+  private static withOrgLifecycle(config: WebhookIngestorConfig): WebhookIngestorConfig {
+    if (!config.lifecycle) return config;
+    const lc = config.lifecycle;
+    const swap = (url: string) => url.replace('repos/${repoFilter}', 'orgs/${orgFilter}');
+    return {
+      ...config,
+      lifecycle: {
+        list: lc.list ? { ...lc.list, url: swap(lc.list.url) } : undefined,
+        register: lc.register ? { ...lc.register, url: swap(lc.register.url) } : undefined,
+        unregister: lc.unregister ? { ...lc.unregister, url: swap(lc.unregister.url) } : undefined,
+      },
+    };
   }
 
   /**

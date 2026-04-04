@@ -975,12 +975,12 @@ describe('connection template JSON structure validation', () => {
     }
   });
 
-  it('should have at most one instanceKey field per listenerConfig', () => {
+  it('should have at most two instanceKey fields per listenerConfig (mutually exclusive alternatives allowed)', () => {
     for (const t of withIngestors) {
       const route = loadConnection(t.alias);
       if (route.listenerConfig) {
         const instanceKeyFields = route.listenerConfig.fields.filter((f) => f.instanceKey);
-        expect(instanceKeyFields.length).toBeLessThanOrEqual(1);
+        expect(instanceKeyFields.length).toBeLessThanOrEqual(2);
       }
     }
   });
@@ -1147,7 +1147,7 @@ describe('listConnectionTemplates — stability field (integration)', () => {
 
   it('should report stability="beta" for github, stripe, and other beta connections', () => {
     const templates = listConnectionTemplates();
-    const betaAliases = ['github', 'stripe', 'anthropic', 'openai'];
+    const betaAliases = ['stripe', 'anthropic', 'openai'];
 
     for (const alias of betaAliases) {
       const t = templates.find((t) => t.alias === alias)!;

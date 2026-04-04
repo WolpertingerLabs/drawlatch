@@ -82,10 +82,19 @@
       {
         "key": "repoFilter",
         "label": "Repository Filter",
-        "description": "Only capture webhook events from these repositories (owner/repo format). Leave empty for all.",
+        "description": "Register a repo-level webhook and only capture events from this repository (owner/repo format). Mutually exclusive with Organization for registration.",
         "type": "text[]",
         "instanceKey": true,
         "placeholder": "e.g., octocat/Hello-World",
+        "group": "Filtering"
+      },
+      {
+        "key": "orgFilter",
+        "label": "Organization",
+        "description": "Register an org-level webhook that receives events from all repos in the organization. Mutually exclusive with Repository Filter for registration.",
+        "type": "text",
+        "instanceKey": true,
+        "placeholder": "e.g., my-org",
         "group": "Filtering"
       },
       {

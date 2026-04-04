@@ -740,6 +740,14 @@ export class IngestorManager {
         (config.webhook as any)[`_${paramKey}`] = paramValue;
         if (typeof paramValue === 'string') {
           secrets[paramKey] = paramValue;
+        } else if (
+          Array.isArray(paramValue) &&
+          paramValue.length > 0 &&
+          typeof paramValue[0] === 'string'
+        ) {
+          // For text[] instanceKey fields, inject the first element into secrets
+          // for lifecycle URL ${VAR} resolution (e.g., repoFilter → "owner/repo")
+          secrets[paramKey] = paramValue[0] as string;
         }
       }
     }

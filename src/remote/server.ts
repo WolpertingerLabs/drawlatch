@@ -1990,10 +1990,19 @@ export function main(): void {
                 const match = /^\$\{(\w+)\}$/.exec(callbackTpl);
                 if (match) {
                   const envVar = match[1];
+                  const fullUrl = `${tunnel.url}/webhooks/${webhookPath}`;
+                  // Set bare env var
                   if (!process.env[envVar]) {
-                    const fullUrl = `${tunnel.url}/webhooks/${webhookPath}`;
                     process.env[envVar] = fullUrl;
                     console.log(`[remote] Auto-set ${envVar}=${fullUrl}`);
+                  }
+                  // Also set prefixed env var so caller-scoped secret resolution
+                  // (which checks PREFIX_VAR, not bare VAR) can find it.
+                  const prefix = callerAlias.toUpperCase().replace(/-/g, '_');
+                  const prefixedEnvVar = `${prefix}_${envVar}`;
+                  if (!process.env[prefixedEnvVar]) {
+                    process.env[prefixedEnvVar] = fullUrl;
+                    console.log(`[remote] Auto-set ${prefixedEnvVar}=${fullUrl}`);
                   }
                 }
               }
