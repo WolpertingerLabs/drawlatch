@@ -81,6 +81,7 @@ try {
       follow: { type: "boolean", default: false },
       path: { type: "boolean", default: false },
       full: { type: "boolean", default: false },
+      requests: { type: "boolean", default: false },
       ttl: { type: "string", default: "300" },
     },
     strict: false,
@@ -183,6 +184,13 @@ switch (subcommand) {
       printSyncHelp();
     } else {
       await cmdSync();
+    }
+    break;
+  case "watch":
+    if (values.help) {
+      printWatchHelp();
+    } else {
+      await cmdWatch();
     }
     break;
   case "help":
@@ -477,39 +485,154 @@ async function cmdLogs() {
 
   const lines = parseInt(values.lines, 10) || 50;
   const follow = values.follow;
+  const showRequests = values.requests;
 
   const tailArgs = follow
     ? ["-n", String(lines), "-f", LOG_FILE]
     : ["-n", String(lines), LOG_FILE];
 
-  const tail = spawn("tail", tailArgs, { stdio: "inherit" });
+  if (showRequests) {
+    // Show everything — pipe directly to stdout
+    const tail = spawn("tail", tailArgs, { stdio: "inherit" });
 
-  tail.on("error", () => {
-    // Fallback: read last N lines with Node.js if tail is not available
-    try {
-      const content = readFileSync(LOG_FILE, "utf-8");
-      const allLines = content.split("\n");
-      const lastLines = allLines.slice(-lines).join("\n");
-      console.log(lastLines);
-      if (follow) {
-        console.log(
-          "\n(Live following not available \u2014 'tail' command not found)",
-        );
-      }
-    } catch (err) {
-      console.error(`Error reading log file: ${err.message}`);
-      process.exit(1);
+    tail.on("error", () => logsFallback(lines, follow, null));
+
+    process.on("SIGINT", () => {
+      tail.kill();
+      process.exit(0);
+    });
+
+    await new Promise((res) => tail.on("close", res));
+  } else {
+    // Filter out [audit] lines (request/response noise from poll_events etc.)
+    const tail = spawn("tail", tailArgs, { stdio: ["ignore", "pipe", "inherit"] });
+    const grepProc = spawn("grep", ["-v", "^\\[audit\\]"], {
+      stdio: [tail.stdout, "inherit", "inherit"],
+    });
+
+    tail.on("error", () => logsFallback(lines, follow, "[audit]"));
+
+    process.on("SIGINT", () => {
+      tail.kill();
+      grepProc.kill();
+      process.exit(0);
+    });
+
+    await new Promise((res) => grepProc.on("close", res));
+  }
+}
+
+function logsFallback(lines, follow, filterPrefix) {
+  try {
+    const content = readFileSync(LOG_FILE, "utf-8");
+    let allLines = content.split("\n");
+    if (filterPrefix) {
+      allLines = allLines.filter((l) => !l.startsWith(filterPrefix));
     }
-  });
+    const lastLines = allLines.slice(-lines).join("\n");
+    console.log(lastLines);
+    if (follow) {
+      console.log(
+        "\n(Live following not available \u2014 'tail' command not found)",
+      );
+    }
+  } catch (err) {
+    console.error(`Error reading log file: ${err.message}`);
+    process.exit(1);
+  }
+}
 
-  // Forward SIGINT to cleanly exit
+async function cmdWatch() {
+  const config = loadRemoteConfig();
+  const port = config.port;
+  const host = config.host;
+
+  // Verify the server is running
+  const healthy = await healthCheck(host, port);
+  if (!healthy) {
+    console.error("Remote server is not running. Start it first:");
+    console.error("  drawlatch start");
+    process.exit(1);
+  }
+
+  const showFull = values.full;
+  const sourceFilter = positionals[0] || null;
+
+  console.log("Watching for events" + (sourceFilter ? ` from "${sourceFilter}"` : "") + "...");
+  console.log("Press Ctrl+C to stop.\n");
+
+  const controller = new AbortController();
   process.on("SIGINT", () => {
-    tail.kill();
+    controller.abort();
     process.exit(0);
   });
 
-  // Wait for tail to exit (when using --no-follow)
-  await new Promise((res) => tail.on("close", res));
+  try {
+    const res = await fetch(
+      `http://${connectHost(host)}:${port}/events/stream`,
+      { signal: controller.signal },
+    );
+
+    if (!res.ok) {
+      console.error(`Failed to connect to event stream: HTTP ${res.status}`);
+      process.exit(1);
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    for await (const chunk of res.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+
+      // Parse SSE lines
+      let newlineIdx;
+      while ((newlineIdx = buffer.indexOf("\n\n")) !== -1) {
+        const message = buffer.slice(0, newlineIdx);
+        buffer = buffer.slice(newlineIdx + 2);
+
+        for (const line of message.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+
+          try {
+            const event = JSON.parse(line.slice(6));
+
+            // Apply source filter if set
+            if (sourceFilter && event.source !== sourceFilter) continue;
+
+            const time = new Date(event.receivedAt).toLocaleTimeString();
+            const source = event.source;
+            const instance = event.instanceId ? `:${event.instanceId}` : "";
+            const caller = event.callerAlias || "?";
+            const eventType = event.eventType;
+
+            const dataStr = JSON.stringify(event.data);
+
+            if (showFull) {
+              console.log(
+                `\x1b[2m${time}\x1b[0m \x1b[36m${source}${instance}\x1b[0m \x1b[33m${eventType}\x1b[0m \x1b[2m(${caller})\x1b[0m`
+              );
+              console.log(dataStr);
+              console.log("");
+            } else {
+              const preview =
+                dataStr.length > 100
+                  ? dataStr.slice(0, 100) + "…"
+                  : dataStr;
+              console.log(
+                `\x1b[2m${time}\x1b[0m \x1b[36m${source}${instance}\x1b[0m \x1b[33m${eventType}\x1b[0m \x1b[2m(${caller})\x1b[0m ${preview}`
+              );
+            }
+          } catch {
+            // Skip malformed SSE data
+          }
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name === "AbortError") return;
+    console.error(`Event stream error: ${err.message}`);
+    process.exit(1);
+  }
 }
 
 function cmdConfig() {
@@ -1126,6 +1249,7 @@ Commands:
   status             Show server status (PID, port, uptime, health, sessions)
   logs               View and follow remote server logs
   config             Show effective configuration
+  watch              Watch ingestor events in real time
   doctor             Validate setup and diagnose issues
   generate-keys      Generate Ed25519 + X25519 keypairs
   sync               Exchange keys with a callboard instance
@@ -1220,16 +1344,39 @@ function printLogsHelp() {
   console.log(`
 drawlatch logs
 
-View server logs.
+View server logs (request/response audit lines are hidden by default).
 
 Usage: drawlatch logs [options]
 
 Options:
   -n, --lines <number>  Number of lines to show (default: 50)
   --follow               Follow/tail the log output (default: print and exit)
+  --requests             Include request/response audit lines (noisy with polling)
   -h, --help             Show this help message
 
 Log file: ~/.drawlatch/logs/drawlatch.log
+`);
+}
+
+function printWatchHelp() {
+  console.log(`
+drawlatch watch
+
+Watch ingestor events in real time.
+
+Usage: drawlatch watch [source] [options]
+
+Arguments:
+  source                 Filter to a specific connection (e.g., "discord-bot", "github")
+
+Options:
+  --full                 Show full event payload (default: truncate to 100 chars)
+  -h, --help             Show this help message
+
+Examples:
+  drawlatch watch                     Watch all events
+  drawlatch watch github              Watch only GitHub events
+  drawlatch watch discord-bot --full  Watch Discord events with full payloads
 `);
 }
 

@@ -92,6 +92,9 @@ export class IngestorManager {
   /** Trigger rule engines per caller. Created during startAll() for callers with triggerRules. */
   private triggerEngines = new Map<string, TriggerRuleEngine>();
 
+  /** Global event listeners (e.g. SSE streams). Called for every event from every ingestor. */
+  private eventListeners = new Set<(event: IngestedEvent) => void>();
+
   /**
    * Optional config loader for hot-reload support. When provided, `startOne()`
    * uses it to get fresh config from disk instead of the constructor snapshot.
@@ -231,6 +234,13 @@ export class IngestorManager {
       const { caller } = parseKey(key);
       ingestor.callerAlias = caller;
       this.ingestors.set(key, ingestor);
+
+      // Forward events to global listeners (SSE streams, etc.)
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-explicit-any -- BaseIngestor extends EventEmitter; .on() is inherited
+      (ingestor as any).on('event', (event: IngestedEvent) => {
+        this.notifyEventListeners(event);
+      });
+
       log.info(`Starting ${effectiveConfig.type} ingestor for ${key}`);
       try {
         await ingestor.start();
@@ -355,6 +365,30 @@ export class IngestorManager {
       }
     }
     return statuses;
+  }
+
+  /**
+   * Subscribe to all events from all ingestors (current and future).
+   * Used by the SSE /events/stream endpoint to fan out events to CLI watchers.
+   */
+  onEvent(listener: (event: IngestedEvent) => void): void {
+    this.eventListeners.add(listener);
+  }
+
+  /** Unsubscribe a global event listener. */
+  offEvent(listener: (event: IngestedEvent) => void): void {
+    this.eventListeners.delete(listener);
+  }
+
+  /** Forward an ingestor event to all global listeners. */
+  private notifyEventListeners(event: IngestedEvent): void {
+    for (const listener of this.eventListeners) {
+      try {
+        listener(event);
+      } catch {
+        // Don't let a broken listener crash ingestor event processing
+      }
+    }
   }
 
   /**
@@ -525,6 +559,13 @@ export class IngestorManager {
 
     ingestor.callerAlias = callerAlias;
     this.ingestors.set(key, ingestor);
+
+    // Forward events to global listeners (SSE streams, etc.)
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-explicit-any -- BaseIngestor extends EventEmitter; .on() is inherited
+    (ingestor as any).on('event', (event: IngestedEvent) => {
+      this.notifyEventListeners(event);
+    });
+
     log.info(`Starting ${effectiveConfig.type} ingestor for ${key}`);
 
     try {

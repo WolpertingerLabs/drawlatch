@@ -1853,6 +1853,29 @@ export function createApp(options: CreateAppOptions = {}) {
     });
   });
 
+  // ── Event stream (loopback-only, for `drawlatch watch`) ─────────────
+
+  app.get('/events/stream', requireLoopback, (req, res) => {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    res.flushHeaders();
+
+    const mgr = app.locals.ingestorManager as IngestorManager;
+
+    const listener = (event: import('./ingestors/types.js').IngestedEvent) => {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    mgr.onEvent(listener);
+
+    req.on('close', () => {
+      mgr.offEvent(listener);
+    });
+  });
+
   // ── Webhook receiver ─────────────────────────────────────────────────
 
   // Trello (and potentially other services) send a HEAD request to the
