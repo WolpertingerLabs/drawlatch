@@ -49,7 +49,7 @@
             "active": true,
             "events": ["push", "pull_request", "issues", "issue_comment", "create", "delete", "release", "workflow_run", "check_run"],
             "config": {
-              "url": "${GITHUB_WEBHOOK_URL}/webhooks/github",
+              "url": "${GITHUB_WEBHOOK_URL}",
               "content_type": "json",
               "secret": "${GITHUB_WEBHOOK_SECRET}",
               "insecure_ssl": "0"
