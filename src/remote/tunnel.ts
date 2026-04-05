@@ -157,3 +157,41 @@ export async function startTunnel(options: TunnelOptions): Promise<TunnelResult>
     }
   });
 }
+
+// ── Tunnel readiness probe ──────────────────────────────────────────────
+
+/**
+ * Wait for a tunnel to be fully connected by probing a URL through it.
+ *
+ * cloudflared emits the tunnel URL before the QUIC connection is fully
+ * established. Services like Trello validate the callback URL at registration
+ * time, so callers should wait until the tunnel is actually reachable before
+ * starting webhook ingestors.
+ *
+ * @param tunnelUrl  The public tunnel URL to probe (e.g. https://abc.trycloudflare.com).
+ * @param timeoutMs  How long to wait before giving up (default: 10 000 ms).
+ * @param probePath  Path to probe on the tunnel (default: "/health").
+ */
+export async function waitForTunnelReady(
+  tunnelUrl: string,
+  timeoutMs = 10_000,
+  probePath = '/health',
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const resp = await fetch(`${tunnelUrl}${probePath}`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(2000),
+      });
+      if (resp.ok) {
+        log.info('Tunnel connectivity verified');
+        return;
+      }
+    } catch {
+      // Tunnel not ready yet — retry
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  log.warn('Tunnel readiness probe timed out — webhook registration may fail');
+}

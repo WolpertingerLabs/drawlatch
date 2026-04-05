@@ -1936,34 +1936,8 @@ export function createApp(options: CreateAppOptions = {}) {
   return app;
 }
 
-// ── Tunnel readiness probe ───────────────────────────────────────────────
-
-/**
- * Wait for the tunnel to be fully connected by probing its /health endpoint.
- *
- * cloudflared emits the tunnel URL before the QUIC connection is fully
- * established. Services like Trello validate the callback URL at registration
- * time, so we need to wait until the tunnel is actually reachable.
- */
-async function waitForTunnelReady(tunnelUrl: string, timeoutMs: number): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const resp = await fetch(`${tunnelUrl}/health`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(2000),
-      });
-      if (resp.ok) {
-        console.log('[remote] Tunnel connectivity verified');
-        return;
-      }
-    } catch {
-      // Tunnel not ready yet — retry
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  console.warn('[remote] Tunnel readiness probe timed out — webhook registration may fail');
-}
+// waitForTunnelReady is now exported from tunnel.ts — imported dynamically
+// alongside startTunnel in the tunnel startup block below.
 
 // ── Start ──────────────────────────────────────────────────────────────────
 
@@ -2023,7 +1997,7 @@ export function main(): void {
         // process.env.DRAWLATCH_TUNNEL_URL is available during secret resolution.
         if (useTunnel) {
           try {
-            const { startTunnel } = await import('./tunnel.js');
+            const { startTunnel, waitForTunnelReady } = await import('./tunnel.js');
             const tunnel = await startTunnel({ port, host });
             stopTunnel = tunnel.stop;
 
