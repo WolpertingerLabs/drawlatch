@@ -151,6 +151,21 @@ const PKG_VERSION: string = (() => {
   }
 })();
 
+/** Resolve the listen port from DRAWLATCH_PORT (env override) or fall back to
+ *  the configured port. Guards against non-numeric env values that would
+ *  otherwise be silently coerced to NaN by parseInt. */
+function resolvePort(envValue: string | undefined, fallback: number): number {
+  if (envValue === undefined) return fallback;
+  const parsed = parseInt(envValue, 10);
+  if (Number.isNaN(parsed)) {
+    console.warn(
+      `[remote] Ignoring DRAWLATCH_PORT="${envValue}" (not a number); falling back to configured port ${fallback}`,
+    );
+    return fallback;
+  }
+  return parsed;
+}
+
 /** Loopback guard — used by /sync/listen, /sync/status, /events/stream, /admin.
  *  Hoisted to module scope so the admin router and its tests can reuse it. */
 export function requireLoopback(
@@ -1492,7 +1507,7 @@ export function createApp(options: CreateAppOptions = {}) {
 
   // Capture for /admin/meta. Resolves the same way main() picks the listen port.
   const startedAt = Date.now();
-  const port = process.env.DRAWLATCH_PORT ? parseInt(process.env.DRAWLATCH_PORT, 10) : config.port;
+  const port = resolvePort(process.env.DRAWLATCH_PORT, config.port);
 
   rateLimitPerMinute = config.rateLimitPerMinute;
 
@@ -2048,7 +2063,7 @@ export function main(): void {
     console.log('[remote] To add callers, run: drawlatch sync');
   }
 
-  const port = process.env.DRAWLATCH_PORT ? parseInt(process.env.DRAWLATCH_PORT, 10) : config.port;
+  const port = resolvePort(process.env.DRAWLATCH_PORT, config.port);
   const host = process.env.DRAWLATCH_HOST ?? config.host;
   const useTunnel = process.env.DRAWLATCH_TUNNEL === '1';
   const app = createApp();

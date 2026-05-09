@@ -62,6 +62,28 @@ describe('requireLoopback', () => {
     expect(r.state.body).toEqual({ error: 'Forbidden: local access only' });
   });
 
+  it('rejects when the remote address is undefined (closed/unknown socket)', () => {
+    const r = fakeRes();
+    let calledNext = false;
+    requireLoopback(fakeReq(undefined), r.res, () => {
+      calledNext = true;
+    });
+    expect(calledNext).toBe(false);
+    expect(r.state.status).toBe(403);
+    expect(r.state.body).toEqual({ error: 'Forbidden: local access only' });
+  });
+
+  it('rejects non-loopback IPv6 addresses', () => {
+    const r = fakeRes();
+    let calledNext = false;
+    requireLoopback(fakeReq('2001:db8::1'), r.res, () => {
+      calledNext = true;
+    });
+    expect(calledNext).toBe(false);
+    expect(r.state.status).toBe(403);
+    expect(r.state.body).toEqual({ error: 'Forbidden: local access only' });
+  });
+
   it('accepts the three loopback address variants', () => {
     for (const addr of ['127.0.0.1', '::1', '::ffff:127.0.0.1']) {
       const r = fakeRes();
@@ -85,6 +107,7 @@ let ingestorStatuses: (IngestorStatus & { callerAlias: string })[] = [];
 let tmpConfigDir: string;
 
 const SECRET_VALUE = 'sekret-must-not-leak-1234567890';
+const LISTENER_SECRET_VALUE = 'listener-param-secret-must-not-leak-zzz';
 
 beforeAll(async () => {
   // Isolated config dir so getCallerKeysDir/etc don't touch the user's home.
@@ -97,14 +120,40 @@ beforeAll(async () => {
   process.env.MY_VAR = SECRET_VALUE;
 
   // Use the github connection template — it has a stable required-secret list.
+  // Also wire up a custom connector with a listenerConfig field of type: 'secret'
+  // to exercise the /admin/callers/:alias/connections params filter.
   testConfig = {
     host: '127.0.0.1',
     port: 0,
+    connectors: [
+      {
+        alias: 'secret-listener',
+        name: 'Secret Listener (test fixture)',
+        allowedEndpoints: [],
+        listenerConfig: {
+          name: 'Secret Listener',
+          fields: [
+            { key: 'boardId', label: 'Board ID', type: 'text' },
+            { key: 'apiToken', label: 'API Token', type: 'secret' },
+          ],
+        },
+      },
+    ],
     callers: {
       acme: {
         name: 'ACME Corp',
-        connections: ['github'],
+        connections: ['github', 'secret-listener'],
         env: { GITHUB_TOKEN: '${MY_VAR}' },
+        listenerInstances: {
+          'secret-listener': {
+            inst1: {
+              params: {
+                boardId: 'board-public-123',
+                apiToken: LISTENER_SECRET_VALUE,
+              },
+            },
+          },
+        },
       },
     },
     rateLimitPerMinute: 60,
@@ -172,6 +221,35 @@ describe('/admin/secrets', () => {
     const raw = JSON.stringify(body);
     expect(raw.includes(SECRET_VALUE)).toBe(false);
     expect(raw.includes('${MY_VAR}')).toBe(false);
+  });
+});
+
+describe('/admin/callers/:alias/connections', () => {
+  it('filters out listenerConfig fields whose type is "secret" from instance params', async () => {
+    const resp = await fetch(`${baseUrl}/admin/callers/acme/connections`);
+    expect(resp.ok).toBe(true);
+    const body = (await resp.json()) as {
+      connectionAlias: string;
+      enabled: boolean;
+      isCustom: boolean;
+      instances: { instanceId: string; enabled: boolean; params: Record<string, unknown> }[];
+    }[];
+
+    const secretConn = body.find((c) => c.connectionAlias === 'secret-listener');
+    if (!secretConn) throw new Error('expected secret-listener connection in response');
+    expect(secretConn.instances).toHaveLength(1);
+
+    const inst = secretConn.instances[0];
+    expect(inst.instanceId).toBe('inst1');
+    expect(inst.enabled).toBe(true);
+    // Public param (non-secret field) is preserved
+    expect(inst.params.boardId).toBe('board-public-123');
+    // Secret-typed field is stripped
+    expect(inst.params.apiToken).toBeUndefined();
+
+    // Critical: the secret value must NEVER appear anywhere in the response.
+    const raw = JSON.stringify(body);
+    expect(raw.includes(LISTENER_SECRET_VALUE)).toBe(false);
   });
 });
 

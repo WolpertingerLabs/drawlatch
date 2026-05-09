@@ -19,10 +19,10 @@ import {
   getServerKeysDir,
   getEnvFilePath,
   getRemoteConfigPath,
-  loadRemoteConfig,
   type RemoteServerConfig,
 } from '../shared/config.js';
-import { listConnectionTemplates } from '../shared/connections.js';
+import { listConnectionTemplates, loadConnection } from '../shared/connections.js';
+import type { ListenerConfigSchema } from '../shared/listener-config.js';
 import { isSecretSetForCaller } from '../shared/env-utils.js';
 import { callerFingerprint } from '../shared/crypto/key-manager.js';
 import type { IngestorManager } from './ingestors/index.js';
@@ -125,6 +125,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
 
     const out = caller.connections.map((connectionAlias) => {
       const tpl = tplMap.get(connectionAlias);
+      const customRoute = customMap.get(connectionAlias);
       const isCustom = !tpl;
       const requiredNames = tpl?.requiredSecrets ?? [];
       const optionalNames = tpl?.optionalSecrets ?? [];
@@ -138,24 +139,50 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         present: isSecretSetForCaller(name, req.params.alias, caller.env),
       }));
 
+      // Resolve listenerConfig so we can identify ListenerConfigField.type === 'secret'
+      // fields and strip them from the params projection. Without this, a future
+      // template that declares a 'secret' field would silently leak the value via
+      // the ...ov.params spread below.
+      let listenerConfig: ListenerConfigSchema | undefined;
+      if (customRoute) {
+        listenerConfig = customRoute.listenerConfig;
+      } else if (tpl) {
+        try {
+          listenerConfig = loadConnection(connectionAlias).listenerConfig;
+        } catch {
+          listenerConfig = undefined;
+        }
+      }
+      const secretFieldKeys = new Set(
+        (listenerConfig?.fields ?? []).filter((f) => f.type === 'secret').map((f) => f.key),
+      );
+
       // Multi-instance projection — drop anything that could carry secrets.
       const instancesMap = caller.listenerInstances?.[connectionAlias] ?? {};
-      const instances = Object.entries(instancesMap).map(([instanceId, ov]) => ({
-        instanceId,
-        params: {
-          ...(ov.intents !== undefined && { intents: ov.intents }),
-          ...(ov.eventFilter !== undefined && { eventFilter: ov.eventFilter }),
-          ...(ov.guildIds !== undefined && { guildIds: ov.guildIds }),
-          ...(ov.channelIds !== undefined && { channelIds: ov.channelIds }),
-          ...(ov.userIds !== undefined && { userIds: ov.userIds }),
-          ...(ov.bufferSize !== undefined && { bufferSize: ov.bufferSize }),
-          ...(ov.intervalMs !== undefined && { intervalMs: ov.intervalMs }),
-          ...(ov.disabled !== undefined && { disabled: ov.disabled }),
-          // Listener params (board IDs, subreddit names, etc.) are user-set
-          // configuration, not secrets. Pass through verbatim.
-          ...(ov.params !== undefined && { ...ov.params }),
-        },
-      }));
+      const instances = Object.entries(instancesMap).map(([instanceId, ov]) => {
+        const safeParams =
+          ov.params !== undefined
+            ? Object.fromEntries(Object.entries(ov.params).filter(([k]) => !secretFieldKeys.has(k)))
+            : undefined;
+        return {
+          instanceId,
+          enabled: ov.disabled !== true,
+          params: {
+            ...(ov.intents !== undefined && { intents: ov.intents }),
+            ...(ov.eventFilter !== undefined && { eventFilter: ov.eventFilter }),
+            ...(ov.guildIds !== undefined && { guildIds: ov.guildIds }),
+            ...(ov.channelIds !== undefined && { channelIds: ov.channelIds }),
+            ...(ov.userIds !== undefined && { userIds: ov.userIds }),
+            ...(ov.bufferSize !== undefined && { bufferSize: ov.bufferSize }),
+            ...(ov.intervalMs !== undefined && { intervalMs: ov.intervalMs }),
+            ...(ov.disabled !== undefined && { disabled: ov.disabled }),
+            // Listener params (board IDs, subreddit names, etc.) are user-set
+            // configuration, not secrets. Pass through verbatim — except for any
+            // field whose schema marks it as type: 'secret', which is filtered above.
+            ...(safeParams !== undefined && safeParams),
+          },
+        };
+      });
 
       // `enabled`: a connection is enabled by default; explicit disabled
       // override (single-instance) toggles it off.
@@ -247,7 +274,3 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
 
   return router;
 }
-
-// Re-export loadRemoteConfig so callers can wire deps.loadConfig conveniently
-// without a second import. Not strictly needed but useful for tests.
-export { loadRemoteConfig };
