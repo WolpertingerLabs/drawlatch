@@ -101,7 +101,10 @@ export class IngestorManager {
    */
   private configLoader: (() => RemoteServerConfig) | undefined;
 
-  constructor(private readonly config: RemoteServerConfig, configLoader?: () => RemoteServerConfig) {
+  constructor(
+    private readonly config: RemoteServerConfig,
+    configLoader?: () => RemoteServerConfig,
+  ) {
     this.configLoader = configLoader;
   }
 
@@ -280,9 +283,7 @@ export class IngestorManager {
         });
       }
 
-      log.info(
-        `Trigger rule engine for ${callerAlias}: ${engine.activeRuleCount} active rule(s)`,
-      );
+      log.info(`Trigger rule engine for ${callerAlias}: ${engine.activeRuleCount} active rule(s)`);
     }
   }
 
@@ -365,6 +366,20 @@ export class IngestorManager {
       }
     }
     return statuses;
+  }
+
+  /**
+   * Get status of every ingestor across all callers, augmented with the
+   * owning caller alias. Used by the read-only /admin API to render a global
+   * dashboard view without iterating per-caller.
+   */
+  getAllStatuses(): (IngestorStatus & { callerAlias: string })[] {
+    const out: (IngestorStatus & { callerAlias: string })[] = [];
+    for (const [key, ingestor] of this.ingestors) {
+      const { caller } = parseKey(key);
+      out.push({ ...ingestor.getStatus(), callerAlias: caller });
+    }
+    return out;
   }
 
   /**
@@ -488,7 +503,14 @@ export class IngestorManager {
     }
 
     // Single default instance
-    return this.startOneInstance(callerAlias, connectionAlias, undefined, rawRoute, resolvedRoute, config);
+    return this.startOneInstance(
+      callerAlias,
+      connectionAlias,
+      undefined,
+      rawRoute,
+      resolvedRoute,
+      config,
+    );
   }
 
   /** Internal: start a single specific instance. */
