@@ -64,6 +64,7 @@ import { getCallerKeysDir, getServerKeysDir } from '../shared/config.js';
 import { IngestorManager } from './ingestors/index.js';
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller, setCallerSecrets } from '../shared/env-utils.js';
+import { createAdminRouter } from './admin.js';
 
 // ── Environment loading ─────────────────────────────────────────────────────
 
@@ -118,12 +119,52 @@ export interface PendingHandshake {
   createdAt: number;
 }
 
+/** Sanitized session projection — never includes channel keys or resolved
+ *  routes (which carry decrypted secrets). Returned by getSessionsSnapshot()
+ *  for the read-only /admin API. */
+export interface SessionSnapshot {
+  /** First 12 chars of the session ID — enough to disambiguate, doesn't
+   *  expose enough material to forge or replay encrypted requests. */
+  sessionIdShort: string;
+  callerAlias: string;
+  createdAt: number;
+  lastActivity: number;
+  requestCount: number;
+  windowRequests: number;
+  windowStart: number;
+}
+
 // ── State ──────────────────────────────────────────────────────────────────
 
 const sessions = new Map<string, Session>();
 const pendingHandshakes = new Map<string, PendingHandshake>();
 
 let rateLimitPerMinute = 60;
+
+/** Read package.json version once at module load. */
+const PKG_VERSION: string = (() => {
+  try {
+    const raw = fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8');
+    return (JSON.parse(raw) as { version?: string }).version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
+
+/** Loopback guard — used by /sync/listen, /sync/status, /events/stream, /admin.
+ *  Hoisted to module scope so the admin router and its tests can reuse it. */
+export function requireLoopback(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+): void {
+  const addr = req.socket.remoteAddress;
+  if (addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1') {
+    next();
+  } else {
+    res.status(403).json({ error: 'Forbidden: local access only' });
+  }
+}
 
 /** Active sync session (at most one at a time). */
 let activeSyncSession: SyncSession | null = null;
@@ -257,6 +298,28 @@ export function cleanupSessions(
 setInterval(() => {
   cleanupSessions(sessions, pendingHandshakes);
 }, 60_000);
+
+/**
+ * Project the active sessions into a sanitized snapshot for read-only use.
+ *
+ * Drops `channel` (holds AES keys) and `resolvedRoutes` (carry decrypted
+ * secrets). Used by the loopback /admin API; never call res.json(session).
+ */
+export function getSessionsSnapshot(): SessionSnapshot[] {
+  const out: SessionSnapshot[] = [];
+  for (const [id, s] of sessions) {
+    out.push({
+      sessionIdShort: id.substring(0, 12),
+      callerAlias: s.callerAlias,
+      createdAt: s.createdAt,
+      lastActivity: s.lastActivity,
+      requestCount: s.requestCount,
+      windowRequests: s.windowRequests,
+      windowStart: s.windowStart,
+    });
+  }
+  return out;
+}
 
 // ── Session route invalidation ────────────────────────────────────────────
 
@@ -1419,27 +1482,17 @@ export function createApp(options: CreateAppOptions = {}) {
     app.use('/sync', ipRateLimiter(60_000, 10));
     app.use('/webhooks', ipRateLimiter(60_000, 120));
     app.use('/health', ipRateLimiter(60_000, 60));
-  }
-
-  // ── Loopback guard for local-only endpoints ──────────────────────────────
-  // /sync/listen and /sync/status are intended for local CLI use only.
-  // Reject requests from non-loopback addresses to prevent remote abuse.
-  function requireLoopback(
-    req: express.Request,
-    res: express.Response,
-    next: express.NextFunction,
-  ): void {
-    const addr = req.socket.remoteAddress;
-    if (addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1') {
-      next();
-    } else {
-      res.status(403).json({ error: 'Forbidden: local access only' });
-    }
+    // /admin is loopback-only but the dashboard polls — give it more headroom than /health
+    app.use('/admin', ipRateLimiter(60_000, 300));
   }
 
   const config = options.config ?? loadRemoteConfig();
   const ownKeys = options.ownKeys ?? loadKeyBundle(getServerKeysDir());
   const authorizedPeers = options.authorizedPeers ?? loadCallerPeers(config.callers);
+
+  // Capture for /admin/meta. Resolves the same way main() picks the listen port.
+  const startedAt = Date.now();
+  const port = process.env.DRAWLATCH_PORT ? parseInt(process.env.DRAWLATCH_PORT, 10) : config.port;
 
   rateLimitPerMinute = config.rateLimitPerMinute;
 
@@ -1876,6 +1929,21 @@ export function createApp(options: CreateAppOptions = {}) {
     });
   });
 
+  // ── Admin API (loopback-only, read-only) ─────────────────────────────
+  // Powers the drawlatch-ui dashboard. No mutations, no secrets, no CORS.
+  app.use(
+    '/admin',
+    requireLoopback,
+    createAdminRouter({
+      getSessionsSnapshot,
+      ingestorManager: () => app.locals.ingestorManager as IngestorManager,
+      loadConfig: () => options.config ?? loadRemoteConfig(),
+      version: PKG_VERSION,
+      port,
+      startedAt,
+    }),
+  );
+
   // ── Webhook receiver ─────────────────────────────────────────────────
 
   // Trello (and potentially other services) send a HEAD request to the
@@ -1955,7 +2023,12 @@ export function main(): void {
   const config = loadRemoteConfig();
 
   const serverKeysDirPath = getServerKeysDir();
-  const requiredKeyFiles = ['signing.key.pem', 'signing.pub.pem', 'exchange.key.pem', 'exchange.pub.pem'];
+  const requiredKeyFiles = [
+    'signing.key.pem',
+    'signing.pub.pem',
+    'exchange.key.pem',
+    'exchange.pub.pem',
+  ];
   const missingKeyFiles = requiredKeyFiles.filter(
     (f) => !fs.existsSync(path.join(serverKeysDirPath, f)),
   );
