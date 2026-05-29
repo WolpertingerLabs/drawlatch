@@ -2,13 +2,13 @@
 
 > **Alpha Software:** Expect breaking changes between updates.
 
-Drawlatch is a config-driven proxy that gives AI agents authenticated access to external APIs. Define your connections and secrets in a single config file — agents get structured, allowlisted access to 22 pre-built APIs without ever seeing your credentials.
+Drawlatch is a config-driven proxy that gives AI agents authenticated access to external APIs. Define your connections and secrets in a single config file — agents get structured, allowlisted access to 23 pre-built APIs without ever seeing your credentials.
 
 **Using [Callboard](https://github.com/WolpertingerLabs/callboard)?** Drawlatch is built in — Callboard manages connections, secrets, and agent identities through its UI. You don't need to set up drawlatch separately.
 
 ## Key Features
 
-- **22 pre-built connections** — GitHub, Slack, Discord, Stripe, Notion, Linear, OpenAI, and [more](CONNECTIONS.md)
+- **23 pre-built connections** — GitHub, Slack, Discord, Stripe, Notion, Linear, OpenAI, and [more](CONNECTIONS.md)
 - **Endpoint allowlisting** — agents can only reach explicitly configured URL patterns
 - **Per-caller access control** — each agent identity sees only its assigned connections
 - **Real-time event ingestion** — WebSocket, webhook, and polling listeners for incoming events ([details](INGESTORS.md))
@@ -286,7 +286,7 @@ Useful for CI environments or running multiple independent setups on the same ma
 
 ## Connections
 
-22 pre-built connection templates ship with drawlatch. Reference them by name in a caller's `connections` list:
+23 pre-built connection templates ship with drawlatch. Reference them by name in a caller's `connections` list:
 
 | Connection | API | Required Env Var(s) |
 |------------|-----|---------------------|
@@ -486,7 +486,7 @@ npm run dev:mcp           # MCP proxy with hot reload
 ```
 src/
 ├── cli/                     # Key generation CLI
-├── connections/             # 22 pre-built route templates (JSON)
+├── connections/             # 23 pre-built route templates (JSON)
 ├── mcp/server.ts            # Local MCP proxy (stdio transport)
 ├── remote/
 │   ├── server.ts            # Remote secure server (Express)

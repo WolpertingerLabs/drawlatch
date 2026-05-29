@@ -23,6 +23,7 @@ Connection templates are loaded when a caller's session is established. Custom c
 
 | Connection      | API                                                                                           | Required Environment Variable(s)           | Auth Method                           |
 | --------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------- |
+| `agentmail`     | [AgentMail API](https://docs.agentmail.to/api-reference)                                      | `AGENTMAIL_API_KEY`                        | Bearer token header (see note)        |
 | `anthropic`     | [Anthropic Claude API](https://docs.anthropic.com/en/api)                                     | `ANTHROPIC_API_KEY`                        | x-api-key header (see note)           |
 | `bluesky`       | [Bluesky API (AT Protocol)](https://docs.bsky.app/)                                           | `BLUESKY_ACCESS_TOKEN`                     | Bearer token header (see note)        |
 | `devin`         | [Devin AI API](https://docs.devin.ai/api-reference/overview)                                  | `DEVIN_API_KEY`                            | Bearer token header                   |
@@ -45,6 +46,8 @@ Connection templates are loaded when a caller's session is established. Custom c
 | `trello`        | [Trello Boards API](https://developer.atlassian.com/cloud/trello/rest/)                       | `TRELLO_API_KEY`, `TRELLO_TOKEN`, `TRELLO_API_SECRET`, `TRELLO_CALLBACK_URL` | Query parameters (see note) |
 | `twitch`        | [Twitch Helix API](https://dev.twitch.tv/docs/api/reference/)                                 | `TWITCH_ACCESS_TOKEN`, `TWITCH_CLIENT_ID`  | Bearer + Client-Id headers (see note) |
 | `x`             | [X (Twitter) API v2](https://developer.x.com/en/docs/x-api)                                   | `X_BEARER_TOKEN`                           | Bearer token header (see note)        |
+
+> **AgentMail note:** AgentMail provides email infrastructure for AI agents (inboxes, messages, threads, drafts). All endpoints live under the `/v0` path on `api.agentmail.to` and use a standard `Authorization: Bearer ${AGENTMAIL_API_KEY}` header. Create an API key in the [AgentMail Console](https://console.agentmail.to). AgentMail can deliver inbound email in real time via Svix-signed webhooks, but that is not yet wired up as a drawlatch ingestor — this connection currently covers the REST API only.
 
 > **Anthropic note:** The Anthropic API uses a custom `x-api-key` header instead of the standard `Authorization: Bearer` pattern. The `anthropic-version` header is pinned to `2023-06-01`. To use a different API version, override with a custom route.
 
