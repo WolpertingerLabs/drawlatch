@@ -330,9 +330,20 @@ describe('bundled connection templates', () => {
     expect(route.openApiUrl).toBeTruthy();
   });
 
+  it('should load agentmail connection template', () => {
+    const route = loadConnection('agentmail');
+
+    expect(route.name).toBe('AgentMail API');
+    expect(route.allowedEndpoints).toEqual(['https://api.agentmail.to/**']);
+    expect(route.secrets).toHaveProperty('AGENTMAIL_API_KEY');
+    expect(route.headers).toHaveProperty('Authorization');
+    expect(route.docsUrl).toBeTruthy();
+  });
+
   it('should list all bundled connections', () => {
     const available = listAvailableConnections();
 
+    expect(available).toContain('agentmail');
     expect(available).toContain('anthropic');
     expect(available).toContain('devin');
     expect(available).toContain('discord-bot');
@@ -718,7 +729,7 @@ describe('listConnectionTemplates — new boolean fields (unit)', () => {
 
 describe('listConnectionTemplates — new boolean fields (integration)', () => {
   it('should report hasTestConnection=true for all bundled templates', () => {
-    // All 22 templates now have testConnection
+    // All bundled templates now have testConnection
     const templates = listConnectionTemplates();
     for (const t of templates) {
       expect(t.hasTestConnection).toBe(true);
