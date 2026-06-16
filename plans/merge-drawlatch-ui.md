@@ -73,7 +73,7 @@ Pure relocation, nothing wired into the running app yet. Must build & lint clean
   compatible). Do **not** add them yet to any code path; just declare + install.
 - Verify: `npm run build` and `npm run lint` clean. No behavior change to the running daemon yet.
 
-### [ ] Step 2 — Wire auth + admin + SPA into the daemon (SECURITY-CRITICAL)
+### [x] Step 2 — Wire auth + admin + SPA into the daemon (SECURITY-CRITICAL)
 In `src/remote/server.ts` `createApp()` (the existing app factory):
 - Add `cookie-parser`; mount a scoped `express.json()` only on the `/api/auth/*` routes (keep the
   daemon's per-route body-parser pattern — do not add a global JSON parser).
