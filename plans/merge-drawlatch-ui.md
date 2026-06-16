@@ -47,7 +47,7 @@ carried over — their logic folds into the daemon.
 
 ## Steps
 
-### [ ] Step 1 — Port admin DTO types + auth layer (no wiring)
+### [x] Step 1 — Port admin DTO types + auth layer (no wiring)
 Pure relocation, nothing wired into the running app yet. Must build & lint clean.
 - **New** `src/remote/admin-types.ts`: pure interfaces ported verbatim from
   `/home/cybil/drawlatch-ui/shared/types/admin.ts` (`AdminMeta`, `AdminHealth`,
