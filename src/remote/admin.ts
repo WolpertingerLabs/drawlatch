@@ -1,5 +1,12 @@
 /**
- * Loopback-only, read-only admin HTTP API for the drawlatch-ui dashboard.
+ * Read-only admin HTTP API for the merged dashboard, served at `/api/admin/*`.
+ *
+ * Trust boundary: the scrypt password gate (the admin router is mounted behind
+ * `requireAuth` in server.ts, wired in Step 2). This replaces the old
+ * loopback-only posture, so the dashboard can be exposed on a host bind
+ * (DRAWLATCH_HOST=0.0.0.0) while still being password-protected.
+ *
+ * This file is the type authority for the admin DTOs — see `admin-types.ts`.
  *
  * SECURITY non-negotiables (mirrored in /admin.test.ts):
  *   - Never serializes Session.channel (AES keys) or ResolvedRoute.secrets.
@@ -8,7 +15,7 @@
  *   - Caller `env` mappings (e.g. "GITHUB_TOKEN": "${ACME_GITHUB_TOKEN}") are
  *     reduced to key-name lists — the value strings are NOT returned.
  *   - No mutations: every endpoint is GET.
- *   - No CORS. Loopback IS the trust boundary; the UI's local backend proxies.
+ *   - No CORS.
  */
 
 import express from 'express';
@@ -28,6 +35,18 @@ import { callerFingerprint } from '../shared/crypto/key-manager.js';
 import type { IngestorManager } from './ingestors/index.js';
 import type { IngestorStatus } from './ingestors/types.js';
 import type { SessionSnapshot } from './server.js';
+import type {
+  AdminMeta,
+  AdminHealth,
+  AdminIngestorCounts,
+  AdminCaller,
+  AdminConnectionTemplate,
+  AdminCallerConnection,
+  AdminSecretRef,
+  AdminListenerInstance,
+  AdminIngestor,
+  AdminSecret,
+} from './admin-types.js';
 import path from 'node:path';
 
 export interface AdminRouterDeps {
@@ -47,7 +66,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
 
   // ── /admin/meta ────────────────────────────────────────────────────────
   router.get('/meta', (_req, res) => {
-    res.json({
+    const body: AdminMeta = {
       version: deps.version,
       port: deps.port,
       pid: process.pid,
@@ -57,25 +76,27 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       callerKeysDir: getCallerKeysDir(),
       serverKeysDir: getServerKeysDir(),
       envFilePath: getEnvFilePath(),
-    });
+    };
+    res.json(body);
   });
 
   // ── /admin/health ──────────────────────────────────────────────────────
   router.get('/health', (_req, res) => {
     const statuses = deps.ingestorManager().getAllStatuses();
-    const counts = { connected: 0, error: 0, starting: 0, stopped: 0 };
+    const counts: AdminIngestorCounts = { connected: 0, error: 0, starting: 0, stopped: 0 };
     for (const s of statuses) {
       if (s.state === 'connected') counts.connected++;
       else if (s.state === 'error') counts.error++;
       else if (s.state === 'starting' || s.state === 'reconnecting') counts.starting++;
       else counts.stopped++;
     }
-    res.json({
+    const body: AdminHealth = {
       status: 'ok',
       activeSessions: deps.getSessionsSnapshot().length,
       ingestorCounts: counts,
       uptimeSec: Math.floor((Date.now() - deps.startedAt) / 1000),
-    });
+    };
+    res.json(body);
   });
 
   // ── /admin/callers ─────────────────────────────────────────────────────
@@ -83,7 +104,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
   router.get('/callers', (_req, res) => {
     const config = deps.loadConfig();
     const callersKeysDir = getCallerKeysDir();
-    const out = Object.entries(config.callers).map(([alias, caller]) => {
+    const out: AdminCaller[] = Object.entries(config.callers).map(([alias, caller]) => {
       const keysDirExists = fs.existsSync(path.join(callersKeysDir, alias));
       let fingerprint: string | null = null;
       try {
@@ -107,7 +128,8 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
   // ── /admin/connections ─────────────────────────────────────────────────
   // listConnectionTemplates already returns names-only — safe as-is.
   router.get('/connections', (_req, res) => {
-    res.json(listConnectionTemplates());
+    const out: AdminConnectionTemplate[] = listConnectionTemplates();
+    res.json(out);
   });
 
   // ── /admin/callers/:alias/connections ──────────────────────────────────
@@ -123,18 +145,18 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     const tplMap = new Map(templates.map((t) => [t.alias, t]));
     const customMap = new Map((config.connectors ?? []).map((c) => [c.alias, c]));
 
-    const out = caller.connections.map((connectionAlias) => {
+    const out: AdminCallerConnection[] = caller.connections.map((connectionAlias) => {
       const tpl = tplMap.get(connectionAlias);
       const customRoute = customMap.get(connectionAlias);
       const isCustom = !tpl;
       const requiredNames = tpl?.requiredSecrets ?? [];
       const optionalNames = tpl?.optionalSecrets ?? [];
 
-      const requiredSecrets = requiredNames.map((name) => ({
+      const requiredSecrets: AdminSecretRef[] = requiredNames.map((name) => ({
         name,
         present: isSecretSetForCaller(name, req.params.alias, caller.env),
       }));
-      const optionalSecrets = optionalNames.map((name) => ({
+      const optionalSecrets: AdminSecretRef[] = optionalNames.map((name) => ({
         name,
         present: isSecretSetForCaller(name, req.params.alias, caller.env),
       }));
@@ -159,30 +181,34 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
 
       // Multi-instance projection — drop anything that could carry secrets.
       const instancesMap = caller.listenerInstances?.[connectionAlias] ?? {};
-      const instances = Object.entries(instancesMap).map(([instanceId, ov]) => {
-        const safeParams =
-          ov.params !== undefined
-            ? Object.fromEntries(Object.entries(ov.params).filter(([k]) => !secretFieldKeys.has(k)))
-            : undefined;
-        return {
-          instanceId,
-          enabled: ov.disabled !== true,
-          params: {
-            ...(ov.intents !== undefined && { intents: ov.intents }),
-            ...(ov.eventFilter !== undefined && { eventFilter: ov.eventFilter }),
-            ...(ov.guildIds !== undefined && { guildIds: ov.guildIds }),
-            ...(ov.channelIds !== undefined && { channelIds: ov.channelIds }),
-            ...(ov.userIds !== undefined && { userIds: ov.userIds }),
-            ...(ov.bufferSize !== undefined && { bufferSize: ov.bufferSize }),
-            ...(ov.intervalMs !== undefined && { intervalMs: ov.intervalMs }),
-            ...(ov.disabled !== undefined && { disabled: ov.disabled }),
-            // Listener params (board IDs, subreddit names, etc.) are user-set
-            // configuration, not secrets. Pass through verbatim — except for any
-            // field whose schema marks it as type: 'secret', which is filtered above.
-            ...(safeParams !== undefined && safeParams),
-          },
-        };
-      });
+      const instances: AdminListenerInstance[] = Object.entries(instancesMap).map(
+        ([instanceId, ov]) => {
+          const safeParams =
+            ov.params !== undefined
+              ? Object.fromEntries(
+                  Object.entries(ov.params).filter(([k]) => !secretFieldKeys.has(k)),
+                )
+              : undefined;
+          return {
+            instanceId,
+            enabled: ov.disabled !== true,
+            params: {
+              ...(ov.intents !== undefined && { intents: ov.intents }),
+              ...(ov.eventFilter !== undefined && { eventFilter: ov.eventFilter }),
+              ...(ov.guildIds !== undefined && { guildIds: ov.guildIds }),
+              ...(ov.channelIds !== undefined && { channelIds: ov.channelIds }),
+              ...(ov.userIds !== undefined && { userIds: ov.userIds }),
+              ...(ov.bufferSize !== undefined && { bufferSize: ov.bufferSize }),
+              ...(ov.intervalMs !== undefined && { intervalMs: ov.intervalMs }),
+              ...(ov.disabled !== undefined && { disabled: ov.disabled }),
+              // Listener params (board IDs, subreddit names, etc.) are user-set
+              // configuration, not secrets. Pass through verbatim — except for any
+              // field whose schema marks it as type: 'secret', which is filtered above.
+              ...(safeParams !== undefined && safeParams),
+            },
+          };
+        },
+      );
 
       // `enabled`: a connection is enabled by default; explicit disabled
       // override (single-instance) toggles it off.
@@ -207,7 +233,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     const statuses = deps.ingestorManager().getAllStatuses();
     // getAllStatuses already augments with callerAlias; connection and
     // instanceId come from base IngestorStatus.
-    const out = statuses.map((s: IngestorStatus & { callerAlias: string }) => ({
+    const out: AdminIngestor[] = statuses.map((s: IngestorStatus & { callerAlias: string }) => ({
       callerAlias: s.callerAlias,
       connection: s.connection,
       ...(s.instanceId !== undefined && { instanceId: s.instanceId }),
@@ -236,13 +262,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
   router.get('/secrets', (_req, res) => {
     const config = deps.loadConfig();
     const tplMap = new Map(listConnectionTemplates().map((t) => [t.alias, t]));
-    const out: {
-      callerAlias: string;
-      connection: string;
-      name: string;
-      required: boolean;
-      present: boolean;
-    }[] = [];
+    const out: AdminSecret[] = [];
 
     for (const [callerAlias, caller] of Object.entries(config.callers)) {
       for (const connectionAlias of caller.connections) {
