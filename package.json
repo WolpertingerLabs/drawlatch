@@ -3,6 +3,9 @@
   "version": "1.0.0-alpha.19",
   "description": "Encrypted MCP proxy with mutual authentication. Local MCP server forwards requests through an encrypted channel to a remote secrets-holding server.",
   "type": "module",
+  "workspaces": [
+    "frontend"
+  ],
   "main": "./dist/mcp/server.js",
   "types": "./dist/mcp/server.d.ts",
   "bin": {
@@ -61,7 +64,8 @@
     }
   },
   "scripts": {
-    "build": "tsc && rm -rf dist/connections && cp -r src/connections dist/connections",
+    "build": "tsc && rm -rf dist/connections && cp -r src/connections dist/connections && npm run build:frontend",
+    "build:frontend": "npm -w frontend run build",
     "prepare": "npm run build",
     "dev:remote": "MCP_CONFIG_DIR=~/.drawlatch-dev tsx src/remote/server.ts",
     "dev:mcp": "MCP_CONFIG_DIR=~/.drawlatch-dev tsx src/mcp/server.ts",
@@ -101,12 +105,15 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
+    "cookie-parser": "^1.4.7",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
+    "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
     "@types/node": "^25.3.3",
     "@vitest/coverage-v8": "^4.0.18",

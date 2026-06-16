@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # NODE_ENV=development so npm does not strip devDependencies (tsc, eslint,
+      # vitest, vite). --include=dev belt-and-braces for the same reason.
+      - name: Install
+        run: NODE_ENV=development npm ci --include=dev
+
+      # Builds the daemon (tsc) AND the frontend (vite) so frontend/dist exists.
+      - name: Build
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
