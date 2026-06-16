@@ -137,6 +137,35 @@ drawlatch start
 drawlatch doctor    # Validate full setup
 ```
 
+## Dashboard
+
+`drawlatch start` serves a built-in web dashboard from the **same process and port** as the daemon (default `http://127.0.0.1:9999/`). There is no separate UI service to run — the React app, the `/api/admin/*` read-only API, and the MCP protocol endpoints all live in one daemon.
+
+**1. Set a password** (required — the dashboard is locked until one is set):
+
+```bash
+drawlatch set-password          # prompts on a TTY, or reads a password piped on stdin
+# echo 'my-strong-password' | drawlatch set-password   # non-interactive
+```
+
+The scrypt hash + salt are written to `~/.drawlatch/.env` (`AUTH_PASSWORD_HASH` / `AUTH_PASSWORD_SALT`, mode `0600`). Your plaintext password is never stored. Use `drawlatch change-password` (an alias of the same command) to rotate it later — rotating signs out every other session.
+
+**2. Open the dashboard** at `http://127.0.0.1:9999/`, log in, and browse Overview / Connections / Callers / Ingestors / Sessions / Secrets. `drawlatch status` prints the dashboard URL and whether a password is configured.
+
+### Security model
+
+The **password is the trust boundary** for the dashboard and `/api/admin/*` — not loopback. That lets you expose the dashboard to a LAN by binding a non-loopback host:
+
+```bash
+DRAWLATCH_HOST=0.0.0.0 drawlatch start    # or: drawlatch start --host 0.0.0.0
+```
+
+The admin surface is read-only (no secret values are ever returned), gated by an `httpOnly`, `sameSite=strict` session cookie with a 7-day rolling expiry, and rate-limited. If **no** password is configured, the daemon still starts and serves MCP normally — only the dashboard is locked: `/api/admin/*` returns `503` and the SPA shows a locked state. The daemon never exits just because the dashboard is unconfigured.
+
+> **Cookies run over plain HTTP** on loopback/LAN (no `secure` flag). Put the daemon behind a TLS-terminating reverse proxy if you expose it beyond a trusted network.
+
+> **Migrating from `drawlatch-ui`?** The standalone `drawlatch-ui` service and its `~/.drawlatch-ui/` config directory are abandoned — its dashboard, auth gate, and password now live inside drawlatch. There is no automatic migration: just run `drawlatch set-password` once to set the password in `~/.drawlatch/.env`.
+
 ## MCP Tools
 
 Once connected, agents get these tools:
@@ -382,10 +411,11 @@ Commands:
   start              Start the remote server (background daemon)
   stop               Stop the remote server
   restart            Restart the remote server
-  status             Show server status (PID, port, uptime, health, sessions)
+  status             Show server status (PID, port, uptime, health, sessions, dashboard URL)
   logs               View server logs
   config             Show effective configuration and secret status
   doctor             Validate setup and diagnose issues
+  set-password       Set/change the dashboard password (alias: change-password)
   generate-keys      Generate Ed25519 + X25519 keypairs
   sync               Exchange keys with a callboard instance
 
