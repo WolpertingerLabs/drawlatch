@@ -4,7 +4,7 @@ import { ExternalLink } from "lucide-react";
 import type { AdminConnectionTemplate } from "drawlatch-admin-types";
 import { api, isDaemonDown } from "../api";
 import { useDaemon } from "../contexts/DaemonContext";
-import { StabilityBadge } from "./ConnectionList";
+import StabilityBadge from "../components/StabilityBadge";
 
 type FetchState =
   | { status: "loading" }

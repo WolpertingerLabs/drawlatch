@@ -3,8 +3,9 @@ import { Route, Routes, useNavigate } from "react-router-dom";
 import DashboardLayout from "./components/DashboardLayout";
 import { DaemonProvider } from "./contexts/DaemonContext";
 import Overview from "./pages/Overview";
-import ConnectionList from "./pages/ConnectionList";
+import ConnectionsPage from "./pages/ConnectionsPage";
 import ConnectionDetail from "./pages/ConnectionDetail";
+import EventsView from "./pages/EventsView";
 import CallerList from "./pages/CallerList";
 import CallerDetail from "./pages/CallerDetail";
 import IngestorTable from "./pages/IngestorTable";
@@ -52,14 +53,14 @@ export default function App() {
       <Routes>
         <Route element={<DashboardLayout onLogout={() => setAuthed(false)} />}>
           <Route index element={<Overview />} />
-          <Route path="connections" element={<ConnectionList />} />
+          <Route path="connections" element={<ConnectionsPage />} />
           <Route path="connections/:alias" element={<ConnectionDetail />} />
           <Route path="callers" element={<CallerList />} />
           <Route path="callers/:alias" element={<CallerDetail />} />
           <Route path="ingestors" element={<IngestorTable />} />
           <Route path="sessions" element={<SessionTable />} />
           <Route path="secrets" element={<SecretMatrix />} />
-          <Route path="logs" element={<ComingSoon title="Logs" />} />
+          <Route path="logs" element={<EventsView />} />
           <Route path="settings/password" element={<ChangePassword />} />
           <Route path="*" element={<ComingSoon title="Not found" />} />
         </Route>
