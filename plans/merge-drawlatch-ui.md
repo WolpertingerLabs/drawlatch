@@ -113,7 +113,7 @@ In `src/remote/server.ts` `createApp()` (the existing app factory):
 - Verify: `npm install` resolves the workspace; `npm run build` produces `frontend/dist`;
   `npm run lint` clean.
 
-### [ ] Step 4 — Fold the CLI
+### [x] Step 4 — Fold the CLI
 In `bin/drawlatch.js`:
 - Add `drawlatch set-password` and `drawlatch change-password` subcommands — port the TTY + piped
   interactive logic from `/home/cybil/drawlatch-ui/bin/drawlatch-ui.js`; write to
