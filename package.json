@@ -1,6 +1,6 @@
 {
   "name": "@wolpertingerlabs/drawlatch",
-  "version": "1.0.0-alpha.28",
+  "version": "1.0.0-alpha.29",
   "description": "Encrypted MCP proxy with mutual authentication. Local MCP server forwards requests through an encrypted channel to a remote secrets-holding server.",
   "type": "module",
   "workspaces": [
@@ -53,6 +53,22 @@
     "./remote/server": {
       "types": "./dist/remote/server.d.ts",
       "import": "./dist/remote/server.js"
+    },
+    "./remote/tool-dispatch": {
+      "types": "./dist/remote/tool-dispatch.d.ts",
+      "import": "./dist/remote/tool-dispatch.js"
+    },
+    "./remote/caller-bootstrap": {
+      "types": "./dist/remote/caller-bootstrap.d.ts",
+      "import": "./dist/remote/caller-bootstrap.js"
+    },
+    "./remote/admin-types": {
+      "types": "./dist/remote/admin-types.d.ts",
+      "import": "./dist/remote/admin-types.js"
+    },
+    "./shared/migrations": {
+      "types": "./dist/shared/migrations.d.ts",
+      "import": "./dist/shared/migrations.js"
     },
     "./remote/ingestors": {
       "types": "./dist/remote/ingestors/index.d.ts",

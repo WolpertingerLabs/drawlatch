@@ -139,7 +139,7 @@ drawlatch doctor    # Validate full setup
 
 ## Admin Dashboard
 
-`drawlatch start` serves a built-in web dashboard — a React single-page app — for inspecting your running daemon: which connections exist, who can call them, which secrets are wired up, and what's happening live (sessions and event ingestors). It is a **read-only observability surface**: you browse and diagnose here, but you still edit config and secrets in `~/.drawlatch/` and via the CLI.
+`drawlatch start` serves a built-in web dashboard — a React single-page app — that **fully manages** your running daemon: enable/disable connections per caller, set and clear secrets, create and delete callers, configure and control event listeners (start/stop/restart, multi-instance management), and watch the live event/log feed — all from the browser, no config-file editing required. Every change is applied with a **live reload** (the daemon re-resolves routes and ingestors in place), so there is no "restart to apply" step. drawlatch owns 100% of its own state through this password-gated surface; nothing external writes its config.
 
 ### Architecture
 
@@ -149,9 +149,9 @@ There is no separate UI service to run. The React app, the `/api/admin/*` API, a
 ┌────────────────────────────── drawlatch daemon (one process, port 9999) ──────────────────────────────┐
 │                                                                                                        │
 │   GET /                 →  React SPA (served from frontend/dist in production)                          │
-│   GET /api/admin/*      →  read-only JSON API  ──┐                                                      │
-│   POST /api/auth/*      →  login / logout / check ├─ password-gated (session cookie)                    │
-│   /handshake /request … →  MCP protocol (E2EE)   ─┘  ← unaffected by dashboard auth                     │
+│   /api/admin/*          →  read + mutating JSON API  ──┐                                                │
+│   POST /api/auth/*      →  login / logout / check       ├─ password-gated (session cookie)              │
+│   /handshake /request … →  MCP protocol (E2EE)         ─┘  ← unaffected by dashboard auth               │
 │                                                                                                        │
 └────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -176,7 +176,8 @@ The password is hashed with **scrypt** (random 16-byte salt, verified with a con
 | Page | Route | What it shows | Refresh |
 |------|-------|---------------|---------|
 | **Overview** | `/` | Daemon health at a glance: status, PID, port, version, uptime, active session count, ingestor state breakdown, and secrets-configured progress. | on load |
-| **Connections** | `/connections` | All built-in + custom connection templates — name, category, stability, ingestor type, required-secret count. Click through for per-connection detail. | on load |
+| **Connections** | `/connections` | Full management: connections grouped by category with search + a stable/beta/dev filter; a caller selector with create/delete-caller; per-connection enable toggle, secrets modal, test connection/listener, listener config panel (all field types + multi-instance), and quick start/stop/restart — with live ingestor state dots and secret-status badges. | live (5s) |
+| **Logs** | `/logs` | Live event/log feed per caller — ingestor status cards, source filter pills, and expandable event rows (eventType, ids, timestamps, pretty-printed JSON payload). | every 5s |
 | **Callers** | `/callers` | Registered MCP callers — alias, name, connection count, key fingerprint, and whether their keys directory exists. Click through for a caller's connections and secret status. | on load |
 | **Ingestors** | `/ingestors` | Live table of every running ingestor (WebSocket / webhook / poll) — state, buffered event count, total events received, last activity, and any error. | every 2s |
 | **Sessions** | `/sessions` | Active MCP proxy sessions — caller alias, created/last-active times, request count, and current per-window request rate. | every 5s |
@@ -184,7 +185,23 @@ The password is hashed with **scrypt** (random 16-byte salt, verified with a con
 
 ### The `/api/admin/*` API
 
-The pages are thin views over a small read-only JSON API (`/api/admin/meta`, `/health`, `/connections`, `/callers`, `/callers/:alias/connections`, `/ingestors`, `/sessions`, `/secrets`). Every endpoint is **GET-only and never returns a secret value** — caller `env` maps are reduced to key *names*, secret state is reported as booleans via a presence check, and session crypto material is never serialized. There are no mutating admin endpoints, by design.
+The pages are views over the `/api/admin/*` JSON API. **Read** endpoints (`/meta`, `/health`, `/connections`, `/callers`, `/callers/:alias/connection-status`, `/callers/:alias/connections`, `/callers/:alias/ingestors`, `/callers/:alias/events`, `/ingestors`, `/sessions`, `/secrets`) **never return a secret value** — caller `env` maps are reduced to key *names*, secret state is reported as booleans, and session crypto material is never serialized.
+
+**Mutating** endpoints (all behind the password gate) let the dashboard own management end-to-end:
+
+| Method + path | Action |
+|---|---|
+| `POST /callers` | Create a caller **with a fresh keypair** (no interactive sync) |
+| `DELETE /callers/:alias` | Delete a caller (its keys + prefixed env vars); `default` is protected |
+| `POST /callers/:alias/connections/:connection` `{enabled}` | Enable/disable a connection |
+| `PUT  /callers/:alias/connections/:connection/secrets` `{secrets}` | Set/clear secrets (empty string = delete) — **write-only**, read back as booleans |
+| `POST /callers/:alias/connections/:connection/test` · `/test-ingestor` | Run a connection / listener test |
+| `POST /callers/:alias/connections/:connection/listener/control` `{action,instance_id?}` | Start/stop/restart a listener |
+| `GET/PUT /…/listener/params`, `GET/POST/DELETE /…/listener/instances[/:id]`, `POST /…/listener/resolve-options` | Listener params + multi-instance management |
+
+Secrets are **write-only** through this API: you `PUT` values, and every read path reports only booleans. After any mutation the daemon live-reloads routes/ingestors for the affected caller. The same logic powers the encrypted MCP tools and the admin API through a single shared `tool-dispatch` module, so the two surfaces can never drift.
+
+A loopback-only `POST /sync/auto-enroll` lets a **co-located** client (one that shares drawlatch's filesystem) provision a caller with zero interaction by presenting the one-time token drawlatch writes to `~/.drawlatch/enroll.token` at startup.
 
 ### Security model
 
@@ -337,7 +354,7 @@ Key paths are derived automatically — no configuration needed:
 
 ### Advanced Configuration
 
-#### `MCP_CONFIG_DIR`
+#### `MCP_CONFIG_DIR` — the config-dir contract
 
 By default, all config and key files live in `~/.drawlatch/`. Override with:
 
@@ -345,7 +362,28 @@ By default, all config and key files live in `~/.drawlatch/`. Override with:
 export MCP_CONFIG_DIR=/custom/path/to/config
 ```
 
-Useful for CI environments or running multiple independent setups on the same machine.
+Useful for CI environments or running multiple independent setups on the same machine. drawlatch **owns this layout as a stable contract** (and migrates legacy key layouts into it automatically on startup):
+
+```
+$MCP_CONFIG_DIR/                 (default: ~/.drawlatch)
+  remote.config.json    — RemoteServerConfig (callers, connectors, port, tunnel flag)
+  proxy.config.json     — ProxyConfig (local MCP proxy → remote URL)
+  .env                  — secret values, prefixed per caller (mode 0600)
+  enroll.token          — one-time loopback auto-enroll token (mode 0600)
+  keys/
+    server/             — the daemon's own Ed25519 + X25519 keypair
+    callers/<alias>/    — one keypair per caller alias
+```
+
+Legacy `keys/local`, `keys/remote`, and `keys/peers/*` directories are migrated to `keys/callers` / `keys/server` on first start — idempotent and safe to re-run.
+
+#### Self-managed tunnel
+
+Set `"tunnel": true` in `remote.config.json` (or `DRAWLATCH_TUNNEL=1` / `drawlatch start --tunnel`) and drawlatch brings up and supervises its own Cloudflare quick tunnel on startup: it learns the public URL, injects it into callback-dependent connection configs (e.g. `TRELLO_CALLBACK_URL`) **before** secret resolution and ingestor start, and surfaces it in `drawlatch status`, the Overview page, and `/api/admin/meta`. It is a config flag, not a runtime control surface.
+
+#### Daemon lifecycle
+
+`drawlatch start` runs the **whole** daemon in one process (MCP protocol + admin API + dashboard UI + optional tunnel). It is daemon-first and cleanly supervisable: a PID file, a deterministic `start` / `stop` / `restart` / `status`, an unauthenticated `/health` endpoint, and `drawlatch start --foreground` for running under a process manager. Local and remote deployments differ only by host binding (`DRAWLATCH_HOST`) and the dashboard password.
 
 ## Connections
 
