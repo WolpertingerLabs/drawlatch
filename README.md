@@ -137,9 +137,28 @@ drawlatch start
 drawlatch doctor    # Validate full setup
 ```
 
-## Dashboard
+## Admin Dashboard
 
-`drawlatch start` serves a built-in web dashboard from the **same process and port** as the daemon (default `http://127.0.0.1:9999/`). There is no separate UI service to run — the React app, the `/api/admin/*` read-only API, and the MCP protocol endpoints all live in one daemon.
+`drawlatch start` serves a built-in web dashboard — a React single-page app — for inspecting your running daemon: which connections exist, who can call them, which secrets are wired up, and what's happening live (sessions and event ingestors). It is a **read-only observability surface**: you browse and diagnose here, but you still edit config and secrets in `~/.drawlatch/` and via the CLI.
+
+### Architecture
+
+There is no separate UI service to run. The React app, the `/api/admin/*` API, and the MCP protocol endpoints (`/handshake`, `/request`, `/events`, `/webhooks`, …) are all served by the **same Express process on the same port** as the daemon (default `http://127.0.0.1:9999/`):
+
+```
+┌────────────────────────────── drawlatch daemon (one process, port 9999) ──────────────────────────────┐
+│                                                                                                        │
+│   GET /                 →  React SPA (served from frontend/dist in production)                          │
+│   GET /api/admin/*      →  read-only JSON API  ──┐                                                      │
+│   POST /api/auth/*      →  login / logout / check ├─ password-gated (session cookie)                    │
+│   /handshake /request … →  MCP protocol (E2EE)   ─┘  ← unaffected by dashboard auth                     │
+│                                                                                                        │
+└────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Any unmatched non-API GET falls back to `index.html` so client-side routing works. The MCP protocol endpoints are independent of the dashboard — they keep serving agents even when the dashboard is locked (see below).
+
+### Setup
 
 **1. Set a password** (required — the dashboard is locked until one is set):
 
@@ -148,9 +167,24 @@ drawlatch set-password          # prompts on a TTY, or reads a password piped on
 # echo 'my-strong-password' | drawlatch set-password   # non-interactive
 ```
 
-The scrypt hash + salt are written to `~/.drawlatch/.env` (`AUTH_PASSWORD_HASH` / `AUTH_PASSWORD_SALT`, mode `0600`). Your plaintext password is never stored. Use `drawlatch change-password` (an alias of the same command) to rotate it later — rotating signs out every other session.
+The password is hashed with **scrypt** (random 16-byte salt, verified with a constant-time compare); the hash + salt are written to `~/.drawlatch/.env` (`AUTH_PASSWORD_HASH` / `AUTH_PASSWORD_SALT`, mode `0600`). Your plaintext password is never stored. Use `drawlatch change-password` (an alias of the same command) to rotate it later — rotating signs out every other session.
 
-**2. Open the dashboard** at `http://127.0.0.1:9999/`, log in, and browse Overview / Connections / Callers / Ingestors / Sessions / Secrets. `drawlatch status` prints the dashboard URL and whether a password is configured.
+**2. Open the dashboard** at `http://127.0.0.1:9999/` and log in. `drawlatch status` prints the dashboard URL and whether a password is configured.
+
+### Pages
+
+| Page | Route | What it shows | Refresh |
+|------|-------|---------------|---------|
+| **Overview** | `/` | Daemon health at a glance: status, PID, port, version, uptime, active session count, ingestor state breakdown, and secrets-configured progress. | on load |
+| **Connections** | `/connections` | All built-in + custom connection templates — name, category, stability, ingestor type, required-secret count. Click through for per-connection detail. | on load |
+| **Callers** | `/callers` | Registered MCP callers — alias, name, connection count, key fingerprint, and whether their keys directory exists. Click through for a caller's connections and secret status. | on load |
+| **Ingestors** | `/ingestors` | Live table of every running ingestor (WebSocket / webhook / poll) — state, buffered event count, total events received, last activity, and any error. | every 2s |
+| **Sessions** | `/sessions` | Active MCP proxy sessions — caller alias, created/last-active times, request count, and current per-window request rate. | every 5s |
+| **Secrets** | `/secrets` | A (caller × connection × secret) matrix showing required/optional and present/missing — with a "only missing" filter. **Never shows secret values**, only whether each is set. | every 10s |
+
+### The `/api/admin/*` API
+
+The pages are thin views over a small read-only JSON API (`/api/admin/meta`, `/health`, `/connections`, `/callers`, `/callers/:alias/connections`, `/ingestors`, `/sessions`, `/secrets`). Every endpoint is **GET-only and never returns a secret value** — caller `env` maps are reduced to key *names*, secret state is reported as booleans via a presence check, and session crypto material is never serialized. There are no mutating admin endpoints, by design.
 
 ### Security model
 
@@ -160,7 +194,7 @@ The **password is the trust boundary** for the dashboard and `/api/admin/*` — 
 DRAWLATCH_HOST=0.0.0.0 drawlatch start    # or: drawlatch start --host 0.0.0.0
 ```
 
-The admin surface is read-only (no secret values are ever returned), gated by an `httpOnly`, `sameSite=strict` session cookie with a 7-day rolling expiry, and rate-limited. If **no** password is configured, the daemon still starts and serves MCP normally — only the dashboard is locked: `/api/admin/*` returns `503` and the SPA shows a locked state. The daemon never exits just because the dashboard is unconfigured.
+Auth uses a `drawlatch_session` cookie that is `httpOnly` and `sameSite=strict`, with a **7-day rolling expiry** (every authenticated request extends it). Login, password-change, and auth-check endpoints are rate-limited per IP (5/min for login & change-password, 20/min for checks). If **no** password is configured, the daemon still starts and serves MCP normally — only the dashboard is locked: `/api/auth/*` and `/api/admin/*` return `503` and the SPA shows a locked state prompting `drawlatch set-password`. The daemon never exits just because the dashboard is unconfigured.
 
 > **Cookies run over plain HTTP** on loopback/LAN (no `secure` flag). Put the daemon behind a TLS-terminating reverse proxy if you expose it beyond a trusted network.
 
@@ -517,9 +551,11 @@ npm run dev:mcp           # MCP proxy with hot reload
 src/
 ├── cli/                     # Key generation CLI
 ├── connections/             # 23 pre-built route templates (JSON)
+├── auth/                    # Dashboard auth (scrypt password, session cookies)
 ├── mcp/server.ts            # Local MCP proxy (stdio transport)
 ├── remote/
-│   ├── server.ts            # Remote secure server (Express)
+│   ├── server.ts            # Remote secure server (Express) — also serves the dashboard
+│   ├── admin.ts             # Read-only /api/admin/* API
 │   └── ingestors/           # Event ingestion system
 │       ├── discord/         # Discord Gateway WebSocket
 │       ├── slack/           # Slack Socket Mode WebSocket
@@ -531,6 +567,9 @@ src/
     ├── env-utils.ts         # Environment variable utilities
     ├── crypto/              # Ed25519/X25519 keys, AES-256-GCM channel
     └── protocol/            # Handshake, message types
+
+frontend/                    # React + Vite dashboard SPA (built to frontend/dist)
+└── src/pages/               # Overview, Connections, Callers, Ingestors, Sessions, Secrets
 ```
 
 ## License
