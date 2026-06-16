@@ -186,6 +186,14 @@ switch (subcommand) {
       await cmdSync();
     }
     break;
+  case "set-password":
+  case "change-password":
+    if (values.help) {
+      printSetPasswordHelp(subcommand);
+    } else {
+      await cmdSetPassword();
+    }
+    break;
   case "watch":
     if (values.help) {
       printWatchHelp();
@@ -464,6 +472,10 @@ async function cmdStatus() {
   console.log("Drawlatch remote server is running.");
   console.log(`  PID:             ${pid}`);
   console.log(`  Listening:       ${host}:${port}`);
+  console.log(`  Dashboard:       http://${connectHost(host)}:${port}/`);
+  console.log(
+    `  Password:        ${isPasswordConfigured() ? "configured" : "not set (run: drawlatch set-password)"}`,
+  );
   console.log(`  Uptime:          ${uptime}`);
   console.log(
     `  Health:          ${healthData ? "healthy" : "unhealthy (not responding)"}`,
@@ -978,6 +990,131 @@ async function promptInput(prompt) {
   });
 }
 
+// ── set-password / change-password ────────────────────────────────
+//
+// Sets the dashboard/admin password. The scrypt hash + salt are written to
+// ~/.drawlatch/.env (AUTH_PASSWORD_HASH / AUTH_PASSWORD_SALT) using the same
+// env-writer the daemon's change-password handler uses, so both stay in sync.
+async function cmdSetPassword() {
+  ensureConfigDir();
+
+  const { hashPassword, generateSalt } = await import(
+    join(PKG_ROOT, "dist/auth/password.js")
+  );
+  const { updateEnvFile } = await import(
+    join(PKG_ROOT, "dist/auth/env-writer.js")
+  );
+
+  let password, confirm;
+  if (process.stdin.isTTY) {
+    password = await promptPasswordTTY("Enter new password: ");
+    if (!password) {
+      console.error("Error: password cannot be empty.");
+      process.exit(1);
+    }
+    if (password.length < 8) {
+      console.error("Error: password must be at least 8 characters.");
+      process.exit(1);
+    }
+    confirm = await promptPasswordTTY("Confirm new password: ");
+  } else {
+    // Piped input — read both lines from a single readline interface so
+    // closing it doesn't break the second prompt.
+    const { createInterface } = await import("node:readline");
+    const rl = createInterface({ input: process.stdin });
+    [password, confirm] = await readTwoLines(rl);
+    rl.close();
+    if (!password) {
+      console.error("Error: password cannot be empty.");
+      process.exit(1);
+    }
+    if (password.length < 8) {
+      console.error("Error: password must be at least 8 characters.");
+      process.exit(1);
+    }
+  }
+
+  if (password !== confirm) {
+    console.error("Error: passwords do not match.");
+    process.exit(1);
+  }
+
+  const salt = generateSalt();
+  const hash = await hashPassword(password, salt);
+
+  updateEnvFile(
+    { AUTH_PASSWORD_HASH: hash, AUTH_PASSWORD_SALT: salt },
+    ["AUTH_PASSWORD"], // strip any plaintext leftover, just in case
+  );
+
+  console.log("\nPassword set successfully.");
+  console.log(`  Stored in: ${ENV_FILE}`);
+
+  const pid = readPid();
+  if (pid) {
+    console.log("  Restart the server to apply: drawlatch restart");
+  }
+}
+
+function readTwoLines(rl) {
+  return new Promise((resolveP) => {
+    const lines = [];
+    const onLine = (line) => {
+      lines.push(line);
+      if (lines.length >= 2) {
+        rl.removeListener("line", onLine);
+        resolveP(lines);
+      }
+    };
+    rl.on("line", onLine);
+    rl.once("close", () => {
+      while (lines.length < 2) lines.push("");
+      resolveP(lines);
+    });
+  });
+}
+
+function promptPasswordTTY(prompt) {
+  return new Promise((resolveP) => {
+    process.stdout.write(prompt);
+    const stdin = process.stdin;
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+    let password = "";
+    const onData = (ch) => {
+      ch = ch.toString();
+      if (ch === "\n" || ch === "\r" || ch === "\u0004") {
+        stdin.setRawMode(false);
+        stdin.pause();
+        stdin.removeListener("data", onData);
+        process.stdout.write("\n");
+        resolveP(password);
+      } else if (ch === "\u0003") {
+        // Ctrl+C
+        stdin.setRawMode(false);
+        process.stdout.write("\n");
+        process.exit(0);
+      } else if (ch === "\u007F" || ch === "\b") {
+        if (password.length > 0) password = password.slice(0, -1);
+      } else {
+        password += ch;
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
+/** Read ~/.drawlatch/.env and report whether a dashboard password hash is set. */
+function isPasswordConfigured() {
+  try {
+    const envVars = loadEnvFileVars();
+    return !!envVars.AUTH_PASSWORD_HASH;
+  } catch {
+    return false;
+  }
+}
+
 // ── PID utilities ─────────────────────────────────────────────────
 
 function isProcessAlive(pid) {
@@ -1253,6 +1390,7 @@ Commands:
   doctor             Validate setup and diagnose issues
   generate-keys      Generate Ed25519 + X25519 keypairs
   sync               Exchange keys with a callboard instance
+  set-password       Set/change the dashboard password (alias: change-password)
 
 Options:
   -h, --help         Show this help message
@@ -1454,6 +1592,26 @@ Flow:
   6. Keys are exchanged automatically
 
 The server must be running (drawlatch start) before using this command.
+`);
+}
+
+function printSetPasswordHelp(cmd = "set-password") {
+  console.log(`
+drawlatch ${cmd}
+
+Set or change the password that gates the admin dashboard and /api/admin/*.
+
+Usage: drawlatch ${cmd} [options]
+
+Options:
+  -h, --help   Show this help message
+
+Prompts for a new password (hidden in a TTY; reads two lines when piped),
+hashes it with scrypt, and stores AUTH_PASSWORD_HASH / AUTH_PASSWORD_SALT in
+${ENV_FILE}.
+
+The password must be at least 8 characters. 'change-password' is an alias.
+Restart the server afterwards (drawlatch restart) to apply the new password.
 `);
 }
 
