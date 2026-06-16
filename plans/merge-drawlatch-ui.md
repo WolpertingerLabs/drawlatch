@@ -125,7 +125,7 @@ In `bin/drawlatch.js`:
 - Verify: `drawlatch set-password` (both TTY and piped) writes the hash; `drawlatch status` shows
   the URL + password state.
 
-### [ ] Step 5 — Tests + CI
+### [x] Step 5 — Tests + CI
 - Port `/home/cybil/drawlatch-ui/backend/src/auth.test.ts` into the daemon's vitest suite
   (supertest against `createApp()`): login/logout/check/change-password, both rate limits, session
   rolling, and the 503-when-unconfigured path.
