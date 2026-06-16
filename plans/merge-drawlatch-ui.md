@@ -96,7 +96,7 @@ In `src/remote/server.ts` `createApp()` (the existing app factory):
 - Verify: `npm run build`, `npm run lint`, `npm test` clean. Manually confirm `/api/admin/meta`
   returns 401 without a session cookie and the daemon still boots with no password set.
 
-### [ ] Step 3 — Move the frontend in as a workspace
+### [x] Step 3 — Move the frontend in as a workspace
 - Move `/home/cybil/drawlatch-ui/frontend/**` → `frontend/**` in this repo.
 - Root `package.json`: add `"workspaces": ["frontend"]`; add `build:frontend`
   (`npm -w frontend run build`); extend the root `build` so it builds the daemon **and** the
