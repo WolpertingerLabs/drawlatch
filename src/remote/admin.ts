@@ -32,6 +32,8 @@ import { listConnectionTemplates, loadConnection } from '../shared/connections.j
 import type { ListenerConfigSchema } from '../shared/listener-config.js';
 import { isSecretSetForCaller } from '../shared/env-utils.js';
 import { callerFingerprint } from '../shared/crypto/key-manager.js';
+import { getTunnelUrl } from './tunnel-state.js';
+import { mountAdminMutations, type AdminMutationDeps } from './admin-mutations.js';
 import type { IngestorManager } from './ingestors/index.js';
 import type { IngestorStatus } from './ingestors/types.js';
 import type { SessionSnapshot } from './server.js';
@@ -46,10 +48,12 @@ import type {
   AdminListenerInstance,
   AdminIngestor,
   AdminSecret,
+  AdminEvent,
+  AdminConnectionStatus,
 } from './admin-types.js';
 import path from 'node:path';
 
-export interface AdminRouterDeps {
+export interface AdminRouterDeps extends AdminMutationDeps {
   /** Sanitized session snapshot — see Session in server.ts. */
   getSessionsSnapshot: () => SessionSnapshot[];
   /** Late-bound so tests can swap the manager without rebuilding the router. */
@@ -76,6 +80,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       callerKeysDir: getCallerKeysDir(),
       serverKeysDir: getServerKeysDir(),
       envFilePath: getEnvFilePath(),
+      tunnelUrl: getTunnelUrl(),
     };
     res.json(body);
   });
@@ -129,6 +134,36 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
   // listConnectionTemplates already returns names-only — safe as-is.
   router.get('/connections', (_req, res) => {
     const out: AdminConnectionTemplate[] = listConnectionTemplates();
+    res.json(out);
+  });
+
+  // ── /admin/callers/:alias/connection-status ─────────────────────────────
+  // Every connection template + this caller's enabled flag + secret presence
+  // (booleans only). The Connections page renders from this single payload.
+  router.get('/callers/:alias/connection-status', (req, res) => {
+    const config = deps.loadConfig();
+    if (!(req.params.alias in config.callers)) {
+      res.status(404).json({ error: `Unknown caller: ${req.params.alias}` });
+      return;
+    }
+    const caller = config.callers[req.params.alias];
+    const enabled = new Set(caller.connections);
+    const out: AdminConnectionStatus[] = listConnectionTemplates().map((t) => {
+      const requiredSecretsSet: Record<string, boolean> = {};
+      for (const s of t.requiredSecrets) {
+        requiredSecretsSet[s] = isSecretSetForCaller(s, req.params.alias, caller.env);
+      }
+      const optionalSecretsSet: Record<string, boolean> = {};
+      for (const s of t.optionalSecrets) {
+        optionalSecretsSet[s] = isSecretSetForCaller(s, req.params.alias, caller.env);
+      }
+      return {
+        ...t,
+        enabled: enabled.has(t.alias),
+        requiredSecretsSet,
+        optionalSecretsSet,
+      };
+    });
     res.json(out);
   });
 
@@ -250,6 +285,45 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     res.json(out);
   });
 
+  // ── /admin/callers/:alias/ingestors ──────────────────────────────────────
+  // Per-caller ingestor statuses (the Logs viewer's status cards).
+  router.get('/callers/:alias/ingestors', (req, res) => {
+    if (!(req.params.alias in deps.loadConfig().callers)) {
+      res.status(404).json({ error: `Unknown caller: ${req.params.alias}` });
+      return;
+    }
+    const statuses = deps.ingestorManager().getStatuses(req.params.alias);
+    const out: AdminIngestor[] = statuses.map((s: IngestorStatus) => ({
+      callerAlias: req.params.alias,
+      connection: s.connection,
+      ...(s.instanceId !== undefined && { instanceId: s.instanceId }),
+      type: s.type,
+      state: s.state,
+      bufferedEvents: s.bufferedEvents,
+      totalEventsReceived: s.totalEventsReceived,
+      lastEventAt: s.lastEventAt,
+      ...(s.error !== undefined && { error: s.error }),
+      ...(s.webhookRegistration !== undefined && { webhookRegistration: s.webhookRegistration }),
+    }));
+    res.json(out);
+  });
+
+  // ── /admin/callers/:alias/events ──────────────────────────────────────────
+  // Buffered ingestor events for the Logs viewer. These are external-service
+  // payloads (Discord messages, webhooks, …), never drawlatch secrets.
+  router.get('/callers/:alias/events', (req, res) => {
+    if (!(req.params.alias in deps.loadConfig().callers)) {
+      res.status(404).json({ error: `Unknown caller: ${req.params.alias}` });
+      return;
+    }
+    const afterRaw = req.query.after_id;
+    const afterId = typeof afterRaw === 'string' ? parseInt(afterRaw, 10) : -1;
+    const events: AdminEvent[] = deps
+      .ingestorManager()
+      .getAllEvents(req.params.alias, Number.isNaN(afterId) ? -1 : afterId);
+    res.json(events);
+  });
+
   // ── /admin/sessions ────────────────────────────────────────────────────
   // SessionSnapshot already strips channel + resolvedRoutes — pass it through.
   router.get('/sessions', (_req, res) => {
@@ -291,6 +365,11 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
 
     res.json(out);
   });
+
+  // ── Mutating endpoints (item A) ──────────────────────────────────────────
+  // Connections enable/secrets/test, caller create/delete, and listener/ingestor
+  // control. Mounted on the same router (already behind requireAuth in server.ts).
+  mountAdminMutations(router, deps);
 
   return router;
 }

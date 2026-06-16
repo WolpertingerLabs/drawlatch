@@ -249,6 +249,12 @@ export interface RemoteServerConfig {
   callers: Record<string, CallerConfig>;
   /** Rate limit: max requests per minute per session */
   rateLimitPerMinute: number;
+  /** When true, drawlatch brings up and supervises its own cloudflared quick
+   *  tunnel on startup, injecting the public URL into callback-dependent
+   *  connection configs before secret resolution and ingestor start (item C).
+   *  Equivalent to setting DRAWLATCH_TUNNEL=1. Not a control surface — just a
+   *  config flag. Default: false. */
+  tunnel?: boolean;
 }
 
 // ── Defaults ─────────────────────────────────────────────────────────────────
