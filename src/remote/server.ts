@@ -13,10 +13,13 @@
  *   - Rate-limits requests per session
  */
 
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   loadRemoteConfig,
@@ -65,6 +68,13 @@ import { IngestorManager } from './ingestors/index.js';
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller, setCallerSecrets } from '../shared/env-utils.js';
 import { createAdminRouter } from './admin.js';
+import {
+  loginHandler,
+  logoutHandler,
+  checkAuthHandler,
+  changePasswordHandler,
+  requireAuth,
+} from '../auth/auth.js';
 
 // ── Environment loading ─────────────────────────────────────────────────────
 
@@ -1451,6 +1461,14 @@ export function createApp(options: CreateAppOptions = {}) {
   // Raw buffer for webhook endpoints (needed for signature verification)
   app.use('/webhooks', express.raw({ type: 'application/json', limit: '1mb' }));
 
+  // ── Dashboard auth body/cookie parsers ───────────────────────────────────
+  // Scoped to the dashboard surface only — the daemon keeps its per-route
+  // body-parser pattern, so no global JSON parser is introduced. cookie-parser
+  // is needed by requireAuth on both /api/auth and /api/admin to read the
+  // session cookie; JSON parsing is needed only by the auth handlers.
+  app.use('/api', cookieParser());
+  app.use('/api/auth', express.json({ limit: '1mb' }));
+
   // ── Per-IP rate limiting for pre-auth endpoints ──────────────────────────
   // The per-session rate limit (checkRateLimit) only applies to authenticated
   // /request calls. These limiters protect unauthenticated endpoints against
@@ -1497,8 +1515,8 @@ export function createApp(options: CreateAppOptions = {}) {
     app.use('/sync', ipRateLimiter(60_000, 10));
     app.use('/webhooks', ipRateLimiter(60_000, 120));
     app.use('/health', ipRateLimiter(60_000, 60));
-    // /admin is loopback-only but the dashboard polls — give it more headroom than /health
-    app.use('/admin', ipRateLimiter(60_000, 300));
+    // /api/admin is password-gated but the dashboard polls — give it more headroom than /health
+    app.use('/api/admin', ipRateLimiter(60_000, 300));
   }
 
   const config = options.config ?? loadRemoteConfig();
@@ -1944,11 +1962,44 @@ export function createApp(options: CreateAppOptions = {}) {
     });
   });
 
-  // ── Admin API (loopback-only, read-only) ─────────────────────────────
-  // Powers the drawlatch-ui dashboard. No mutations, no secrets, no CORS.
+  // ── Dashboard auth routes ────────────────────────────────────────────
+  // Public login/logout/check + auth-gated change-password. The scrypt
+  // password is the trust boundary for the dashboard surface, replacing the
+  // old loopback-only posture so it can be host-bound (DRAWLATCH_HOST=0.0.0.0)
+  // while staying password-protected.
+  //
+  // Two rate limiters (same config as the former drawlatch-ui backend):
+  //   - 3/min for the auth-mutating endpoints (login + change-password)
+  //   - 20/min for the cheap, polling-friendly endpoints (check + logout)
+  const loginLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 3,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many attempts. Try again in a minute.' },
+  });
+  const checkLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Try again in a minute.' },
+  });
+
+  app.post('/api/auth/login', loginLimiter, loginHandler);
+  app.post('/api/auth/logout', checkLimiter, logoutHandler);
+  app.get('/api/auth/check', checkLimiter, checkAuthHandler);
+  app.post('/api/auth/change-password', loginLimiter, requireAuth, changePasswordHandler);
+
+  // ── Admin API (password-gated, read-only) ────────────────────────────
+  // Powers the merged dashboard at /api/admin/* (the path the frontend uses).
+  // Mounted behind requireAuth — the password gate replaces the old loopback
+  // guard. No mutations, no secrets, no CORS. When no password is configured,
+  // requireAuth returns 503 and the SPA shows a locked state (the daemon must
+  // never exit just because the dashboard is unconfigured).
   app.use(
-    '/admin',
-    requireLoopback,
+    '/api/admin',
+    requireAuth,
     createAdminRouter({
       getSessionsSnapshot,
       ingestorManager: () => app.locals.ingestorManager as IngestorManager,
@@ -2015,6 +2066,41 @@ export function createApp(options: CreateAppOptions = {}) {
       res.status(403).json({ error: 'Webhook rejected' });
     }
   });
+
+  // ── SPA serving (production only — Vite serves the dashboard in dev) ──────
+  // Mounted LAST, after every API and protocol route. Static assets are served
+  // from frontend/dist; any unmatched GET/HEAD falls back to index.html so
+  // client-side deep links resolve on reload.
+  //
+  // Express 5 removed string-pattern wildcards (`app.get("*", …)` throws), so
+  // the SPA fallback is a terminal middleware instead. It skips the API and
+  // protocol prefixes so unmatched routes there return their own status (e.g.
+  // a JSON 404 from the admin router) rather than index.html.
+  if (process.env.NODE_ENV === 'production') {
+    const distDir = fileURLToPath(new URL('../../frontend/dist', import.meta.url));
+    const apiPrefixes = [
+      '/api',
+      '/handshake',
+      '/request',
+      '/sync',
+      '/events',
+      '/webhooks',
+      '/health',
+    ];
+
+    app.use(express.static(distDir));
+    app.use((req, res, next) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        next();
+        return;
+      }
+      if (apiPrefixes.some((p) => req.path === p || req.path.startsWith(`${p}/`))) {
+        next();
+        return;
+      }
+      res.sendFile(path.join(distDir, 'index.html'));
+    });
+  }
 
   return app;
 }
