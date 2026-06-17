@@ -1075,7 +1075,7 @@ export function createApp(options: CreateAppOptions = {}) {
     }
   });
 
-  // ── SPA serving (production only — Vite serves the dashboard in dev) ──────
+  // ── SPA serving ───────────────────────────────────────────────────────────
   // Mounted LAST, after every API and protocol route. Static assets are served
   // from frontend/dist; any unmatched GET/HEAD falls back to index.html so
   // client-side deep links resolve on reload.
@@ -1084,8 +1084,16 @@ export function createApp(options: CreateAppOptions = {}) {
   // the SPA fallback is a terminal middleware instead. It skips the API and
   // protocol prefixes so unmatched routes there return their own status (e.g.
   // a JSON 404 from the admin router) rather than index.html.
-  if (process.env.NODE_ENV === 'production') {
-    const distDir = fileURLToPath(new URL('../../frontend/dist', import.meta.url));
+  //
+  // The mount is gated on the bundle existing on disk (rather than NODE_ENV),
+  // so it works in any context where the SPA has been built — production
+  // installs, local `npm start`, or a dev clone after `npm run build:frontend`.
+  // In a pure dev workflow you should still use `vite` on its own port for
+  // hot reload; this mount just makes hitting the daemon port directly do
+  // something useful.
+  const distDir = fileURLToPath(new URL('../../frontend/dist', import.meta.url));
+  const indexHtml = path.join(distDir, 'index.html');
+  if (fs.existsSync(indexHtml)) {
     const apiPrefixes = [
       '/api',
       '/handshake',
@@ -1106,8 +1114,14 @@ export function createApp(options: CreateAppOptions = {}) {
         next();
         return;
       }
-      res.sendFile(path.join(distDir, 'index.html'));
+      res.sendFile(indexHtml);
     });
+  } else {
+    console.warn(
+      `[remote] Dashboard bundle not found at ${distDir}. ` +
+        `Run \`npm run build:frontend\` (or reinstall drawlatch) to enable the dashboard UI; ` +
+        `the daemon API will still work.`,
+    );
   }
 
   return app;

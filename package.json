@@ -16,6 +16,8 @@
     "!dist/**/*.test.*",
     "!dist/**/*.js.map",
     "!dist/**/*.d.ts.map",
+    "frontend/dist",
+    "!frontend/dist/**/*.map",
     "bin",
     "README.md",
     "CONNECTIONS.md",
