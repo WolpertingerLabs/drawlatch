@@ -19,6 +19,8 @@ export interface AdminMeta {
   callerKeysDir: string;
   serverKeysDir: string;
   envFilePath: string;
+  /** Public URL of the self-managed cloudflared tunnel, when active (item C). */
+  tunnelUrl: string | null;
 }
 
 // ── /admin/health ────────────────────────────────────────────────────────
@@ -74,6 +76,16 @@ export interface AdminConnectionTemplate {
   allowedEndpoints: string[];
 }
 
+// ── /admin/callers/:alias/connection-status ──────────────────────────────
+/** Per-caller status for EVERY connection template — whether the caller has it
+ *  enabled, and which secrets are configured (booleans only, never values).
+ *  This is the one-call payload the dashboard Connections page renders from. */
+export interface AdminConnectionStatus extends AdminConnectionTemplate {
+  enabled: boolean;
+  requiredSecretsSet: Record<string, boolean>;
+  optionalSecretsSet: Record<string, boolean>;
+}
+
 // ── /admin/callers/:alias/connections ────────────────────────────────────
 export interface AdminSecretRef {
   name: string;
@@ -125,6 +137,22 @@ export interface AdminSession {
   requestCount: number;
   windowRequests: number;
   windowStart: number;
+}
+
+// ── /admin/callers/:alias/events ─────────────────────────────────────────
+/** A buffered ingestor event, as surfaced to the dashboard Logs viewer.
+ *  This is the ingested payload from an external service (e.g. a Discord
+ *  message) — never a drawlatch secret. */
+export interface AdminEvent {
+  id: number;
+  idempotencyKey: string;
+  receivedAt: string;
+  receivedAtMs: number;
+  callerAlias: string;
+  source: string;
+  instanceId?: string;
+  eventType: string;
+  data: unknown;
 }
 
 // ── /admin/secrets ───────────────────────────────────────────────────────

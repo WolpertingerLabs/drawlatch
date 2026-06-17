@@ -1,7 +1,9 @@
 import type {
   AdminCaller,
   AdminCallerConnection,
+  AdminConnectionStatus,
   AdminConnectionTemplate,
+  AdminEvent,
   AdminHealth,
   AdminIngestor,
   AdminMeta,
@@ -12,6 +14,11 @@ import type {
 import { notifyAuthRequired } from "./auth";
 
 export type DaemonResponse<T> = T | DaemonOfflineEnvelope;
+
+/** Result of a mutating call — never an "offline" envelope; errors are explicit. */
+export type MutationResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string };
 
 export function isDaemonDown<T>(
   body: DaemonResponse<T>,
@@ -39,7 +46,47 @@ async function getJson<T>(path: string): Promise<DaemonResponse<T>> {
   return (await res.json()) as DaemonResponse<T>;
 }
 
+async function mutate<T>(
+  method: "POST" | "PUT" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<MutationResult<T>> {
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      credentials: "include",
+      headers: {
+        accept: "application/json",
+        ...(body !== undefined ? { "content-type": "application/json" } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  if (res.status === 401) {
+    notifyAuthRequired();
+    return { ok: false, error: "Not authenticated" };
+  }
+  let parsed: unknown = null;
+  try {
+    parsed = await res.json();
+  } catch {
+    // empty / non-JSON body
+  }
+  if (!res.ok) {
+    const error =
+      (parsed as { error?: string } | null)?.error ?? `HTTP ${res.status}`;
+    return { ok: false, error };
+  }
+  return { ok: true, data: parsed as T };
+}
+
+const enc = encodeURIComponent;
+
 export const api = {
+  // ── Reads ────────────────────────────────────────────────────────────
   meta: () => getJson<AdminMeta>("/api/admin/meta"),
   health: () => getJson<AdminHealth>("/api/admin/health"),
   secrets: () => getJson<AdminSecret[]>("/api/admin/secrets"),
@@ -48,8 +95,198 @@ export const api = {
   callers: () => getJson<AdminCaller[]>("/api/admin/callers"),
   callerConnections: (alias: string) =>
     getJson<AdminCallerConnection[]>(
-      `/api/admin/callers/${encodeURIComponent(alias)}/connections`,
+      `/api/admin/callers/${enc(alias)}/connections`,
+    ),
+  connectionStatus: (alias: string) =>
+    getJson<AdminConnectionStatus[]>(
+      `/api/admin/callers/${enc(alias)}/connection-status`,
     ),
   ingestors: () => getJson<AdminIngestor[]>("/api/admin/ingestors"),
+  callerIngestors: (alias: string) =>
+    getJson<AdminIngestor[]>(`/api/admin/callers/${enc(alias)}/ingestors`),
+  callerEvents: (alias: string, afterId = -1) =>
+    getJson<AdminEvent[]>(
+      `/api/admin/callers/${enc(alias)}/events?after_id=${afterId}`,
+    ),
   sessions: () => getJson<AdminSession[]>("/api/admin/sessions"),
+
+  // ── Caller create / delete (item E) ───────────────────────────────────
+  createCaller: (alias: string, name?: string) =>
+    mutate<{ alias: string; name: string; fingerprint: string }>(
+      "POST",
+      "/api/admin/callers",
+      { alias, ...(name ? { name } : {}) },
+    ),
+  deleteCaller: (alias: string) =>
+    mutate<{ deleted: string }>("DELETE", `/api/admin/callers/${enc(alias)}`),
+
+  // ── Connection enable / secrets / test ────────────────────────────────
+  setConnectionEnabled: (
+    alias: string,
+    connection: string,
+    enabled: boolean,
+  ) =>
+    mutate<{ success: boolean; connection: string; enabled: boolean }>(
+      "POST",
+      `/api/admin/callers/${enc(alias)}/connections/${enc(connection)}`,
+      { enabled },
+    ),
+  setSecrets: (
+    alias: string,
+    connection: string,
+    secrets: Record<string, string>,
+  ) =>
+    mutate<{ success: boolean; secretsSet: Record<string, boolean> }>(
+      "PUT",
+      `/api/admin/callers/${enc(alias)}/connections/${enc(connection)}/secrets`,
+      { secrets },
+    ),
+  testConnection: (alias: string, connection: string) =>
+    mutate<Record<string, unknown>>(
+      "POST",
+      `/api/admin/callers/${enc(alias)}/connections/${enc(connection)}/test`,
+    ),
+  testIngestor: (alias: string, connection: string) =>
+    mutate<Record<string, unknown>>(
+      "POST",
+      `/api/admin/callers/${enc(alias)}/connections/${enc(connection)}/test-ingestor`,
+    ),
+
+  // ── Listener / ingestor control ───────────────────────────────────────
+  controlListener: (
+    alias: string,
+    connection: string,
+    action: "start" | "stop" | "restart",
+    instanceId?: string,
+  ) =>
+    mutate<Record<string, unknown>>(
+      "POST",
+      `/api/admin/callers/${enc(alias)}/connections/${enc(connection)}/listener/control`,
+      { action, ...(instanceId ? { instance_id: instanceId } : {}) },
+    ),
+  listenerConfigs: (alias: string) =>
+    getJson<ListenerConfigEntry[]>(
+      `/api/admin/callers/${enc(alias)}/listener-configs`,
+    ),
+  getListenerParams: (alias: string, connection: string, instanceId?: string) =>
+    getJson<ListenerParamsResult>(
+      `/api/admin/callers/${enc(alias)}/connections/${enc(connection)}/listener/params${
+        instanceId ? `?instance_id=${enc(instanceId)}` : ""
+      }`,
+    ),
+  setListenerParams: (
+    alias: string,
+    connection: string,
+    params: Record<string, unknown>,
+    opts: { instanceId?: string; createInstance?: boolean } = {},
+  ) =>
+    mutate<Record<string, unknown>>(
+      "PUT",
+      `/api/admin/callers/${enc(alias)}/connections/${enc(connection)}/listener/params`,
+      {
+        params,
+        ...(opts.instanceId ? { instance_id: opts.instanceId } : {}),
+        ...(opts.createInstance ? { create_instance: true } : {}),
+      },
+    ),
+  listListenerInstances: (alias: string, connection: string) =>
+    getJson<ListenerInstancesResult>(
+      `/api/admin/callers/${enc(alias)}/connections/${enc(connection)}/listener/instances`,
+    ),
+  createListenerInstance: (
+    alias: string,
+    connection: string,
+    instanceId: string,
+    params: Record<string, unknown>,
+  ) =>
+    mutate<Record<string, unknown>>(
+      "POST",
+      `/api/admin/callers/${enc(alias)}/connections/${enc(connection)}/listener/instances`,
+      { instance_id: instanceId, params },
+    ),
+  deleteListenerInstance: (
+    alias: string,
+    connection: string,
+    instanceId: string,
+  ) =>
+    mutate<{ success: boolean }>(
+      "DELETE",
+      `/api/admin/callers/${enc(alias)}/connections/${enc(connection)}/listener/instances/${enc(instanceId)}`,
+    ),
+  resolveListenerOptions: (
+    alias: string,
+    connection: string,
+    paramKey: string,
+  ) =>
+    mutate<ResolveOptionsResult>(
+      "POST",
+      `/api/admin/callers/${enc(alias)}/connections/${enc(connection)}/listener/resolve-options`,
+      { paramKey },
+    ),
 };
+
+// ── Listener-config response shapes (mirror tool-dispatch return shapes) ──
+
+/** A single configurable field for a listener (mirrors ListenerConfigField). */
+export interface ListenerField {
+  key: string;
+  label: string;
+  description?: string;
+  required?: boolean;
+  type:
+    | "text"
+    | "number"
+    | "boolean"
+    | "select"
+    | "multiselect"
+    | "secret"
+    | "text[]";
+  default?: string | number | boolean | string[];
+  options?: { value: string | number | boolean; label: string; description?: string }[];
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  pattern?: string;
+  dynamicOptions?: unknown;
+  instanceKey?: boolean;
+  group?: string;
+}
+
+export interface ListenerConfigEntry {
+  connection?: string;
+  name: string;
+  description?: string;
+  fields: ListenerField[];
+  ingestorType?: "websocket" | "webhook" | "poll";
+  supportsMultiInstance: boolean;
+  instanceKeyField?: string;
+}
+
+export interface ListenerParamsResult {
+  success: boolean;
+  connection: string;
+  instance_id?: string;
+  params: Record<string, unknown>;
+  defaults: Record<string, unknown>;
+  instances?: string[];
+  error?: string;
+}
+
+export interface ListenerInstancesResult {
+  success: boolean;
+  connection: string;
+  instances: {
+    instanceId: string;
+    disabled: boolean;
+    params: Record<string, unknown>;
+  }[];
+  error?: string;
+}
+
+export interface ResolveOptionsResult {
+  success: boolean;
+  connection?: string;
+  paramKey?: string;
+  options?: { value: string | number | boolean; label: string }[];
+  error?: string;
+}
