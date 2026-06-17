@@ -5,20 +5,20 @@ import {
   useRef,
   useState,
 } from "react";
+import { Link } from "react-router-dom";
 import {
   AlertTriangle,
+  ArrowRight,
   Check,
   ChevronDown,
   ExternalLink,
   Globe,
   Loader2,
-  Plus,
   Play,
   Radio,
   RotateCw,
   Search,
   Square,
-  Trash2,
   Users,
   Wifi,
 } from "lucide-react";
@@ -54,8 +54,6 @@ const CATEGORY_ORDER = [
   "social-media",
   "other",
 ];
-
-const CALLER_ALIAS_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
 type StabilityFilter = "stable" | "beta" | "dev";
 
@@ -114,12 +112,8 @@ export default function ConnectionsPage() {
   const [listenerFor, setListenerFor] =
     useState<AdminConnectionStatus | null>(null);
 
-  // Caller dropdown + create/delete UI.
+  // Caller dropdown UI. Mutation (create/delete) lives on /callers.
   const [showCallerMenu, setShowCallerMenu] = useState(false);
-  const [showNewCaller, setShowNewCaller] = useState(false);
-  const [newAlias, setNewAlias] = useState("");
-  const [newName, setNewName] = useState("");
-  const [newCallerError, setNewCallerError] = useState<string | null>(null);
 
   const selectedCallerRef = useRef(selectedCaller);
   selectedCallerRef.current = selectedCaller;
@@ -191,47 +185,16 @@ export default function ConnectionsPage() {
   // ── Caller actions ──────────────────────────────────────────────────────
   const handleSelectCaller = (alias: string) => {
     setShowCallerMenu(false);
-    setShowNewCaller(false);
     if (alias !== selectedCaller) setSelectedCaller(alias);
   };
 
-  const handleCreateCaller = async () => {
-    const alias = newAlias.trim();
-    if (!alias) {
-      setNewCallerError("Alias is required");
-      return;
-    }
-    if (!CALLER_ALIAS_RE.test(alias)) {
-      setNewCallerError(
-        "Use letters, numbers, dashes or underscores (must start alphanumeric)",
-      );
-      return;
-    }
-    setNewCallerError(null);
-    const name = newName.trim();
-    const res = await api.createCaller(alias, name || undefined);
-    if (!res.ok) {
-      setNewCallerError(res.error);
-      return;
-    }
-    setNewAlias("");
-    setNewName("");
-    setShowNewCaller(false);
-    setShowCallerMenu(false);
-    setSelectedCaller(alias);
-  };
-
-  const handleDeleteCaller = async (alias: string) => {
-    if (alias === "default") return;
-    const res = await api.deleteCaller(alias);
-    if (!res.ok) return;
-    if (selectedCaller === alias) {
+  // If the selected caller is deleted on the /callers page, fall back to default.
+  useEffect(() => {
+    if (callers.length === 0) return;
+    if (!callers.some((c) => c.alias === selectedCaller)) {
       setSelectedCaller("default");
-    } else {
-      void refetch(selectedCallerRef.current);
     }
-    setCallers((prev) => prev.filter((c) => c.alias !== alias));
-  };
+  }, [callers, selectedCaller]);
 
   // ── Toggle (optimistic) ─────────────────────────────────────────────────
   const handleToggle = async (alias: string, enabled: boolean) => {
@@ -366,11 +329,7 @@ export default function ConnectionsPage() {
             <>
               <div
                 className="dl-conn-overlay"
-                onClick={() => {
-                  setShowCallerMenu(false);
-                  setShowNewCaller(false);
-                  setNewCallerError(null);
-                }}
+                onClick={() => setShowCallerMenu(false)}
               />
               <div className="dl-conn-caller-menu">
                 {callers.map((caller) => (
@@ -397,84 +356,19 @@ export default function ConnectionsPage() {
                         </div>
                       </div>
                     </div>
-                    {caller.alias !== "default" && (
-                      <button
-                        type="button"
-                        className="dl-conn-caller-del"
-                        title={`Delete "${caller.alias}"`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleDeleteCaller(caller.alias);
-                        }}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    )}
                   </div>
                 ))}
 
                 <div className="dl-conn-caller-divider" />
 
-                {showNewCaller ? (
-                  <div className="dl-conn-newcaller">
-                    <input
-                      type="text"
-                      className="dl-conn-newcaller-input mono"
-                      placeholder="alias"
-                      value={newAlias}
-                      autoFocus
-                      onChange={(e) => {
-                        setNewAlias(e.target.value);
-                        setNewCallerError(null);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void handleCreateCaller();
-                        if (e.key === "Escape") {
-                          setShowNewCaller(false);
-                          setNewCallerError(null);
-                        }
-                      }}
-                    />
-                    <input
-                      type="text"
-                      className="dl-conn-newcaller-input"
-                      placeholder="name (optional)"
-                      value={newName}
-                      onChange={(e) => setNewName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void handleCreateCaller();
-                        if (e.key === "Escape") {
-                          setShowNewCaller(false);
-                          setNewCallerError(null);
-                        }
-                      }}
-                    />
-                    {newCallerError && (
-                      <div className="dl-conn-newcaller-error">
-                        {newCallerError}
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      className="dl-conn-newcaller-add"
-                      onClick={() => void handleCreateCaller()}
-                    >
-                      Create caller
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    className="dl-conn-newcaller-trigger"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowNewCaller(true);
-                    }}
-                  >
-                    <Plus size={14} />
-                    Create caller
-                  </button>
-                )}
+                <Link
+                  to="/callers"
+                  className="dl-conn-caller-manage"
+                  onClick={() => setShowCallerMenu(false)}
+                >
+                  <span>Manage callers</span>
+                  <ArrowRight size={12} />
+                </Link>
               </div>
             </>
           )}

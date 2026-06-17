@@ -41,6 +41,7 @@ import type {
   ResolveOptionsResult,
 } from "../api";
 import type { AdminIngestor } from "drawlatch-admin-types";
+import ConfirmDialog from "./ConfirmDialog";
 import "./ListenerConfigPanel.css";
 
 interface ListenerConfigPanelProps {
@@ -588,7 +589,6 @@ export default function ListenerConfigPanel({
                     const busy = instanceBusy[instance.instanceId];
                     const isDeleting = deletingInstance === instance.instanceId;
                     const isEditing = editingInstanceId === instance.instanceId;
-                    const askConfirm = confirmDelete === instance.instanceId;
                     return (
                       <div
                         key={instance.instanceId}
@@ -615,7 +615,7 @@ export default function ListenerConfigPanel({
                               className="dl-lcp-icon-btn dl-lcp-icon-btn-danger"
                               title={`Delete instance "${instance.instanceId}"`}
                               disabled={isDeleting}
-                              onClick={() => setConfirmDelete(askConfirm ? null : instance.instanceId)}
+                              onClick={() => setConfirmDelete(instance.instanceId)}
                             >
                               {isDeleting ? <Loader2 size={12} className="dl-lcp-spin" /> : <Trash2 size={12} />}
                             </button>
@@ -629,23 +629,6 @@ export default function ListenerConfigPanel({
                                 {k}={String(v)}
                               </span>
                             ))}
-                          </div>
-                        )}
-
-                        {askConfirm && (
-                          <div className="dl-lcp-confirm">
-                            <span>Delete this instance?</span>
-                            <button
-                              className="dl-lcp-confirm-yes"
-                              disabled={isDeleting}
-                              onClick={() => void handleDelete(instance.instanceId)}
-                            >
-                              {isDeleting && <Loader2 size={10} className="dl-lcp-spin" />}
-                              Delete
-                            </button>
-                            <button className="dl-lcp-confirm-no" onClick={() => setConfirmDelete(null)}>
-                              Cancel
-                            </button>
                           </div>
                         )}
 
@@ -854,6 +837,24 @@ export default function ListenerConfigPanel({
           </div>
         </div>
       </div>
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Delete listener instance?"
+          description={
+            <>
+              <code>{confirmDelete}</code> will stop and its config will be
+              removed. This cannot be undone.
+            </>
+          }
+          busy={deletingInstance === confirmDelete}
+          onConfirm={() => void handleDelete(confirmDelete)}
+          onCancel={() => {
+            if (deletingInstance === confirmDelete) return;
+            setConfirmDelete(null);
+          }}
+        />
+      )}
     </div>
   );
 }

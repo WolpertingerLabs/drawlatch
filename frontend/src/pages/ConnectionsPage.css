@@ -110,79 +110,27 @@
   color: #8b8b94;
 }
 
-.dl-conn-caller-del {
-  flex-shrink: 0;
-  padding: 4px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: #8b8b94;
-  cursor: pointer;
-}
-.dl-conn-caller-del:hover {
-  color: #f85149;
-  background: rgba(248, 81, 73, 0.12);
-}
-
 .dl-conn-caller-divider {
   height: 1px;
   background: #2a2a30;
   margin: 4px 0;
 }
 
-.dl-conn-newcaller {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 6px;
-}
-.dl-conn-newcaller-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 7px 9px;
-  border-radius: 6px;
-  border: 1px solid #2a2a30;
-  background: #0f0f12;
-  color: #e6e6ea;
-  font-size: 12px;
-  outline: none;
-}
-.dl-conn-newcaller-input:focus {
-  border-color: #5b9dff;
-}
-.dl-conn-newcaller-error {
-  font-size: 11px;
-  color: #f85149;
-}
-.dl-conn-newcaller-add {
-  padding: 7px 10px;
-  border: none;
-  border-radius: 6px;
-  background: #5b9dff;
-  color: #0f0f12;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.dl-conn-newcaller-add:hover {
-  background: #74acff;
-}
-
-.dl-conn-newcaller-trigger {
+.dl-conn-caller-manage {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 6px;
   width: 100%;
+  box-sizing: border-box;
   padding: 8px 10px;
-  border: none;
   border-radius: 6px;
   background: transparent;
   color: #5b9dff;
-  font-size: 13px;
-  cursor: pointer;
-  text-align: left;
+  font-size: 12.5px;
+  text-decoration: none;
 }
-.dl-conn-newcaller-trigger:hover {
+.dl-conn-caller-manage:hover {
   background: #1b1b20;
 }
 
