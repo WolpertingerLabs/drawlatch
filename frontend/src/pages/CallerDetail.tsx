@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { KeyRound, RotateCcw, Ban } from "lucide-react";
 import type {
   AdminCaller,
   AdminCallerConnection,
@@ -7,7 +8,9 @@ import type {
 } from "drawlatch-admin-types";
 import { api, isDaemonDown } from "../api";
 import { useDaemon } from "../contexts/DaemonContext";
-import { KeysDirBadge } from "./CallerList";
+import { KeysDirBadge, SourceBadge } from "./CallerList";
+import IssueCredentialsModal from "../components/IssueCredentialsModal";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 type FetchState =
   | { status: "loading" }
@@ -22,37 +25,77 @@ type FetchState =
 export default function CallerDetail() {
   const { alias } = useParams<{ alias: string }>();
   const { daemon } = useDaemon();
+  const navigate = useNavigate();
   const [state, setState] = useState<FetchState>({ status: "loading" });
+
+  // Credential-lifecycle UI state.
+  const [templates, setTemplates] = useState<string[]>([]);
+  const [defaultEndpoint, setDefaultEndpoint] = useState<string>(
+    window.location.origin,
+  );
+  const [showIssue, setShowIssue] = useState(false);
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [revoking, setRevoking] = useState(false);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!alias) return;
+    const callersRes = await api.callers();
+    if (isDaemonDown(callersRes)) {
+      setState({ status: "error", message: callersRes.error });
+      return;
+    }
+    const caller = callersRes.find((c) => c.alias === alias);
+    if (!caller) {
+      setState({ status: "not-found" });
+      return;
+    }
+    const connsRes = await api.callerConnections(alias);
+    if (isDaemonDown(connsRes)) {
+      setState({ status: "error", message: connsRes.error });
+      return;
+    }
+    setState({ status: "ok", caller, connections: connsRes });
+  }, [alias]);
 
   useEffect(() => {
     if (!alias) return;
     if (daemon !== "up") return;
+    void load();
+  }, [alias, daemon, load]);
 
+  // Load connection templates (for the issue modal) and the default endpoint.
+  useEffect(() => {
+    if (daemon !== "up") return;
     let cancelled = false;
     (async () => {
-      const callersRes = await api.callers();
+      const [tplRes, metaRes] = await Promise.all([
+        api.connections(),
+        api.meta(),
+      ]);
       if (cancelled) return;
-      if (isDaemonDown(callersRes)) {
-        setState({ status: "error", message: callersRes.error });
-        return;
+      if (!isDaemonDown(tplRes)) setTemplates(tplRes.map((t) => t.alias));
+      if (!isDaemonDown(metaRes) && metaRes.tunnelUrl) {
+        setDefaultEndpoint(metaRes.tunnelUrl);
       }
-      const caller = callersRes.find((c) => c.alias === alias);
-      if (!caller) {
-        setState({ status: "not-found" });
-        return;
-      }
-      const connsRes = await api.callerConnections(alias);
-      if (cancelled) return;
-      if (isDaemonDown(connsRes)) {
-        setState({ status: "error", message: connsRes.error });
-        return;
-      }
-      setState({ status: "ok", caller, connections: connsRes });
     })();
     return () => {
       cancelled = true;
     };
-  }, [alias, daemon]);
+  }, [daemon]);
+
+  const handleRevoke = async () => {
+    if (!alias) return;
+    setRevoking(true);
+    setRevokeError(null);
+    const res = await api.deleteCaller(alias);
+    setRevoking(false);
+    if (!res.ok) {
+      setRevokeError(res.error);
+      return;
+    }
+    navigate("/callers");
+  };
 
   if (daemon === "down") {
     return (
@@ -122,6 +165,7 @@ export default function CallerDetail() {
           <div className="title-row">
             <h1 className="page-title">{caller.name ?? caller.alias}</h1>
             <KeysDirBadge exists={caller.keysDirExists} />
+            <SourceBadge source={caller.source} />
           </div>
           <div className="subtitle-meta">
             <span className="mono">{caller.alias}</span>
@@ -136,6 +180,64 @@ export default function CallerDetail() {
           </div>
         </div>
       </header>
+
+      <section className="detail-section">
+        <h2 className="section-title">Credentials</h2>
+        <div className="dl-cred-lifecycle">
+          <p className="detail-note">
+            {caller.source === "local-auto" ? (
+              <>
+                Auto-shared to a co-located callboard over the filesystem
+                (<code>local-auto</code>). Issuing here mints a fresh keypair and
+                hands back a downloadable bundle instead.
+              </>
+            ) : caller.source === "bundle-issued" ? (
+              <>
+                Credentials were issued as a downloadable bundle. drawlatch holds
+                only the public key — rotate to mint a fresh keypair, or revoke to
+                end access.
+              </>
+            ) : (
+              <>
+                No credential bundle has been issued from drawlatch for this
+                caller yet. Issue one to hand a callboard instance its identity.
+              </>
+            )}
+          </p>
+          <div className="dl-cred-actions">
+            <button
+              type="button"
+              className="dl-cred-btn dl-cred-btn-primary"
+              onClick={() => setShowIssue(true)}
+            >
+              {caller.source ? (
+                <>
+                  <RotateCcw size={14} />
+                  Rotate credentials
+                </>
+              ) : (
+                <>
+                  <KeyRound size={14} />
+                  Issue credentials
+                </>
+              )}
+            </button>
+            {caller.alias !== "default" && (
+              <button
+                type="button"
+                className="dl-cred-btn dl-cred-btn-danger"
+                onClick={() => {
+                  setRevokeError(null);
+                  setConfirmRevoke(true);
+                }}
+              >
+                <Ban size={14} />
+                Revoke
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
 
       <section className="detail-section">
         <h2 className="section-title">
@@ -201,6 +303,42 @@ export default function CallerDetail() {
           </div>
         )}
       </section>
+
+      {showIssue && (
+        <IssueCredentialsModal
+          alias={caller.alias}
+          callerConnections={caller.connections}
+          availableConnections={[
+            ...new Set([...templates, ...caller.connections]),
+          ]}
+          defaultEndpoint={defaultEndpoint}
+          isRotation={caller.source !== null}
+          onClose={() => setShowIssue(false)}
+          onIssued={() => void load()}
+        />
+      )}
+
+      {confirmRevoke && (
+        <ConfirmDialog
+          title={`Revoke "${caller.alias}"?`}
+          confirmLabel="Revoke"
+          description={
+            <>
+              This deletes <code>{caller.alias}</code> and its public-key entry,
+              so it can no longer authenticate. Any active sessions are dropped.
+              This cannot be undone.
+            </>
+          }
+          busy={revoking}
+          error={revokeError}
+          onConfirm={handleRevoke}
+          onCancel={() => {
+            if (revoking) return;
+            setConfirmRevoke(false);
+            setRevokeError(null);
+          }}
+        />
+      )}
     </>
   );
 }
