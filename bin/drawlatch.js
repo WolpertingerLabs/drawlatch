@@ -83,6 +83,12 @@ try {
       full: { type: "boolean", default: false },
       requests: { type: "boolean", default: false },
       ttl: { type: "string", default: "300" },
+      name: { type: "string" },
+      connections: { type: "string" },
+      endpoint: { type: "string" },
+      passphrase: { type: "boolean", default: false },
+      output: { type: "string", short: "o" },
+      into: { type: "string" },
     },
     strict: false,
     allowPositionals: true,
@@ -179,7 +185,16 @@ switch (subcommand) {
       await cmdDoctor();
     }
     break;
+  case "issue-caller":
+    if (values.help) {
+      printIssueCallerHelp();
+    } else {
+      await cmdIssueCaller();
+    }
+    break;
   case "sync":
+    // Parked: kept in-tree as a high-assurance escape hatch, undocumented in
+    // the main help (superseded by `issue-caller`).
     if (values.help) {
       printSyncHelp();
     } else {
@@ -307,11 +322,13 @@ async function cmdInit() {
   }
 
   console.log(`\nSetup complete! Next steps:\n`);
-  console.log(`  1. Start the remote server:`);
+  console.log(`  1. Set the dashboard password:`);
+  console.log(`       drawlatch set-password\n`);
+  console.log(`  2. Start the remote server:`);
   console.log(`       drawlatch start\n`);
-  console.log(`  2. Add callers via key sync:`);
-  console.log(`       drawlatch sync\n`);
-  console.log(`  3. Verify your setup:`);
+  console.log(`  3. Issue a caller credential bundle (or use the dashboard Callers page):`);
+  console.log(`       drawlatch issue-caller callboard-prod -o callboard-prod.drawlatch-caller.json\n`);
+  console.log(`  4. Verify your setup:`);
   console.log(`       drawlatch doctor\n`);
 }
 
@@ -976,6 +993,133 @@ async function cmdSync() {
   process.exit(1);
 }
 
+// ── issue-caller ──────────────────────────────────────────────────────────
+//
+// Mint a caller credential bundle using the same primitive as the dashboard
+// "Issue credentials" action. Two delivery modes:
+//   - default / -o file : emit the {alias}.drawlatch-caller.json bundle (the
+//     caller PRIVATE key is in the file; drawlatch keeps only the public key).
+//   - --into <keysDir>  : write the UNPACKED key files straight into a
+//     co-located callboard's keys dir (same-host convenience).
+async function cmdIssueCaller() {
+  const alias = positionals[0];
+  if (!alias) {
+    console.error("Error: caller alias is required.\n  Usage: drawlatch issue-caller <alias> [options]");
+    process.exit(1);
+  }
+
+  ensureConfigDir();
+
+  const { issueCallerBundle, issueLocalCaller, CALLER_ALIAS_REGEX } = await import(
+    join(PKG_ROOT, "dist/remote/caller-bootstrap.js")
+  );
+
+  if (!CALLER_ALIAS_REGEX.test(alias)) {
+    console.error(
+      "Error: invalid alias. Use letters, numbers, dashes or underscores (must start alphanumeric).",
+    );
+    process.exit(1);
+  }
+
+  const connections = values.connections
+    ? values.connections.split(",").map((s) => s.trim()).filter(Boolean)
+    : undefined;
+  const name = values.name;
+
+  try {
+    // ── Mode 2: write unpacked key files directly into callboard's keys dir ──
+    if (values.into) {
+      const keysDir = resolve(values.into);
+      const res = issueLocalCaller({
+        alias,
+        keysDir,
+        ...(connections ? { connections } : {}),
+        ...(name ? { name } : {}),
+      });
+      console.log(`\nIssued local caller "${res.alias}" (write-to-path).`);
+      console.log(`  Key files:   ${res.callerKeysDir}/`);
+      console.log(`  Server keys: ${join(keysDir, "server")}/`);
+      console.log(`  Fingerprint: ${res.fingerprint}`);
+      console.log(`  Connections: ${res.connections.join(", ") || "(none)"}`);
+      notifyDaemonReloadNeeded();
+      return;
+    }
+
+    // ── Mode 1: emit a bundle (file or stdout) ──────────────────────────────
+    const config = loadRemoteConfig();
+    const endpoint = values.endpoint || `http://${connectHost(config.host)}:${config.port}`;
+
+    let passphrase;
+    if (values.passphrase) {
+      let confirm;
+      if (process.stdin.isTTY) {
+        passphrase = await promptPasswordTTY("Passphrase to protect private keys: ");
+        confirm = await promptPasswordTTY("Confirm passphrase: ");
+      } else {
+        // Piped input — read both lines from one readline interface.
+        const { createInterface } = await import("node:readline");
+        const rl = createInterface({ input: process.stdin });
+        [passphrase, confirm] = await readTwoLines(rl);
+        rl.close();
+      }
+      if (!passphrase) {
+        console.error("Error: passphrase cannot be empty.");
+        process.exit(1);
+      }
+      if (passphrase !== confirm) {
+        console.error("Error: passphrases do not match.");
+        process.exit(1);
+      }
+    }
+
+    const bundle = issueCallerBundle({
+      alias,
+      endpointUrl: endpoint,
+      ...(connections ? { connections } : {}),
+      ...(name ? { name } : {}),
+      ...(passphrase ? { passphrase } : {}),
+    });
+
+    const json = JSON.stringify(bundle, null, 2) + "\n";
+
+    if (values.output) {
+      const outPath = resolve(values.output);
+      writeFileSync(outPath, json, { mode: 0o600 });
+      console.error(`\nWrote credential bundle to ${outPath}`);
+      console.error(`  Caller:      ${bundle.callerAlias}`);
+      console.error(`  Fingerprint: ${bundle.fingerprint}`);
+      console.error(`  Endpoint:    ${bundle.endpointUrl}`);
+      console.error(
+        bundle.encryption
+          ? `  Private keys: passphrase-protected (share the passphrase out-of-band).`
+          : `  Private keys: PLAINTEXT in the file — protect it (or use --passphrase).`,
+      );
+      console.error(`  This file contains the caller PRIVATE key and won't be re-issued.`);
+      notifyDaemonReloadNeeded();
+    } else {
+      // Bundle (with private keys) to stdout; notes to stderr.
+      process.stdout.write(json);
+      console.error(`\n# Caller "${bundle.callerAlias}" issued (fingerprint ${bundle.fingerprint}).`);
+      if (!bundle.encryption) {
+        console.error(`# WARNING: private keys are PLAINTEXT above. Use --passphrase or -o to a 0600 file.`);
+      }
+      notifyDaemonReloadNeeded();
+    }
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+/** If the daemon is running, it won't authorize a freshly-issued caller until
+ *  it reloads its peer set — tell the user to restart it. (The dashboard issue
+ *  flow live-reloads peers; the offline CLI path cannot.) */
+function notifyDaemonReloadNeeded() {
+  if (readPid()) {
+    console.error(`\nNote: restart the daemon so it authorizes the new caller — drawlatch restart`);
+  }
+}
+
 async function promptInput(prompt) {
   const { createInterface } = await import("node:readline");
   return new Promise((resolve) => {
@@ -1389,7 +1533,7 @@ Commands:
   watch              Watch ingestor events in real time
   doctor             Validate setup and diagnose issues
   generate-keys      Generate Ed25519 + X25519 keypairs
-  sync               Exchange keys with a callboard instance
+  issue-caller       Issue a caller credential bundle (for a callboard instance)
   set-password       Set/change the dashboard password (alias: change-password)
 
 Options:
@@ -1542,8 +1686,8 @@ drawlatch init
 Set up the drawlatch remote server. Generates server keys, creates
 config files, and scaffolds a .env template.
 
-Callers are added separately via 'drawlatch sync' after the server
-is running.
+Callers are issued separately via 'drawlatch issue-caller' (or the dashboard
+Callers page) after the server is running.
 
 Usage: drawlatch init [options]
 
@@ -1592,6 +1736,36 @@ Flow:
   6. Keys are exchanged automatically
 
 The server must be running (drawlatch start) before using this command.
+`);
+}
+
+function printIssueCallerHelp() {
+  console.log(`
+drawlatch issue-caller
+
+Issue a caller credential bundle that a callboard instance imports to gain a
+caller identity. drawlatch mints the keypair, keeps only the PUBLIC key, and
+hands the private key out in the bundle (shown once — re-issue to rotate).
+
+Usage: drawlatch issue-caller <alias> [options]
+
+Options:
+  --name <name>           Human-readable display name (defaults to the alias)
+  --connections <a,b,c>   Comma-separated connections to authorize
+                          (defaults to cloning the "default" caller)
+  --endpoint <url>        Endpoint URL to pin in the bundle
+                          (defaults to this server's host:port)
+  --passphrase            Prompt for a passphrase and scrypt+AES-256-GCM wrap
+                          the private keys in the bundle (for untrusted transport)
+  -o, --output <file>     Write the bundle to a file (0600) instead of stdout
+  --into <keysDir>        Same-host: write the UNPACKED key files directly into a
+                          co-located callboard's keys dir (no bundle file)
+  -h, --help              Show this help message
+
+Examples:
+  drawlatch issue-caller callboard-prod -o callboard-prod.drawlatch-caller.json
+  drawlatch issue-caller callboard-prod --passphrase -o bundle.json
+  drawlatch issue-caller callboard-local --into ~/.callboard/keys
 `);
 }
 
