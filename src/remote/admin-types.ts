@@ -21,6 +21,10 @@ export interface AdminMeta {
   envFilePath: string;
   /** Public URL of the self-managed cloudflared tunnel, when active (item C). */
   tunnelUrl: string | null;
+  /** Whether the cloudflared tunnel is enabled in config (intent flag).
+   *  Distinct from `tunnelUrl`, which reflects the active runtime state —
+   *  the two disagree until the daemon restarts after a toggle. */
+  tunnelEnabled: boolean;
 }
 
 // ── /admin/health ────────────────────────────────────────────────────────

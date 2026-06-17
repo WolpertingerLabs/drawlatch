@@ -290,4 +290,27 @@ describe('mutating admin API', () => {
     const blocked = await req('DELETE', '/api/admin/callers/default');
     expect(blocked.status).toBe(400);
   });
+
+  it('toggles the tunnel flag (PUT /tunnel) and persists to config', async () => {
+    // Sanity: not set initially.
+    expect(loadRemoteConfig().tunnel).toBeUndefined();
+
+    const on = await req('PUT', '/api/admin/tunnel', { enabled: true });
+    expect(on.status).toBe(200);
+    expect((on.json as { tunnel: boolean }).tunnel).toBe(true);
+    expect(loadRemoteConfig().tunnel).toBe(true);
+
+    const off = await req('PUT', '/api/admin/tunnel', { enabled: false });
+    expect(off.status).toBe(200);
+    expect((off.json as { tunnel: boolean }).tunnel).toBe(false);
+    expect(loadRemoteConfig().tunnel).toBe(false);
+  });
+
+  it('rejects PUT /tunnel without a boolean enabled (400)', async () => {
+    const bad = await req('PUT', '/api/admin/tunnel', { enabled: 'yes' });
+    expect(bad.status).toBe(400);
+
+    const empty = await req('PUT', '/api/admin/tunnel', {});
+    expect(empty.status).toBe(400);
+  });
 });

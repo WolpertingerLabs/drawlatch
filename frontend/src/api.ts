@@ -120,6 +120,12 @@ export const api = {
   deleteCaller: (alias: string) =>
     mutate<{ deleted: string }>("DELETE", `/api/admin/callers/${enc(alias)}`),
 
+  // ── Tunnel (cloudflared) config-only toggle ───────────────────────────
+  // Persists `config.tunnel` to remote.config.json. The daemon reads this at
+  // boot, so a restart is required for the change to take effect.
+  setTunnel: (enabled: boolean) =>
+    mutate<{ tunnel: boolean }>("PUT", "/api/admin/tunnel", { enabled }),
+
   // ── Connection enable / secrets / test ────────────────────────────────
   setConnectionEnabled: (
     alias: string,

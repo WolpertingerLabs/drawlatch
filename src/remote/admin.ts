@@ -81,6 +81,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       serverKeysDir: getServerKeysDir(),
       envFilePath: getEnvFilePath(),
       tunnelUrl: getTunnelUrl(),
+      tunnelEnabled: deps.loadConfig().tunnel === true,
     };
     res.json(body);
   });

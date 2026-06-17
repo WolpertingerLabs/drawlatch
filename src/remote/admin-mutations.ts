@@ -15,7 +15,7 @@
 
 import express from 'express';
 
-import type { RemoteServerConfig, ResolvedRoute } from '../shared/config.js';
+import { saveRemoteConfig, type RemoteServerConfig, type ResolvedRoute } from '../shared/config.js';
 import { dispatchTool, type ToolContext } from './tool-dispatch.js';
 import { createCallerWithKeys, deleteCaller, CALLER_ALIAS_REGEX } from './caller-bootstrap.js';
 import type { IngestorManager } from './ingestors/index.js';
@@ -137,6 +137,26 @@ export function mountAdminMutations(router: express.Router, deps: AdminMutationD
       const message = err instanceof Error ? err.message : String(err);
       res.status(errorStatus(message)).json({ error: message });
     }
+  });
+
+  // ── Tunnel (cloudflared) config-only toggle ────────────────────────────
+  //
+  // Persists `config.tunnel` to remote.config.json. The daemon reads this flag
+  // at boot to decide whether to spawn cloudflared, so a restart is required
+  // for the change to take effect. The dashboard surfaces this expectation via
+  // a banner when `tunnelEnabled` (intent) disagrees with `tunnelUrl` (runtime).
+  //
+  // PUT /api/admin/tunnel  { enabled: boolean }
+  router.put('/tunnel', (req, res) => {
+    const { enabled } = (req.body ?? {}) as { enabled?: boolean };
+    if (typeof enabled !== 'boolean') {
+      res.status(400).json({ error: 'enabled must be a boolean' });
+      return;
+    }
+    const config = deps.loadConfig();
+    config.tunnel = enabled;
+    saveRemoteConfig(config);
+    res.json({ tunnel: enabled });
   });
 
   // ── Connections (enable / secrets / test) ──────────────────────────────
