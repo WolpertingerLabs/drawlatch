@@ -1114,7 +1114,15 @@ export function createApp(options: CreateAppOptions = {}) {
         next();
         return;
       }
-      res.sendFile(indexHtml);
+      // IMPORTANT: pass `root` instead of an absolute path. Express 5 / send 1.x
+      // walk the absolute path components looking for "dotfiles" (segments
+      // starting with "."), and the default dotfile policy is "ignore" — which
+      // turns into a 404. When drawlatch is bundled inside callboard installed
+      // under `~/.nvm/...`, the `.nvm` segment matches the dotfile rule and
+      // every SPA deep-link reload becomes "Not Found". Routing the file
+      // through `root` makes send only inspect the relative path's parts
+      // (`./index.html`), so the dotfile guard never trips.
+      res.sendFile('index.html', { root: distDir });
     });
   } else {
     console.warn(

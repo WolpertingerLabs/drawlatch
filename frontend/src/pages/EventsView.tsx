@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   RefreshCw,
   ChevronRight,
@@ -103,8 +103,21 @@ export default function EventsView() {
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
-  // Highest event id seen for the current caller (after_id cursor).
-  const maxIdRef = useRef(-1);
+  // Merge a server-returned event batch with the existing UI list, deduping by
+  // id. The backend buffer is bounded (default 100 events per ingestor), but
+  // the UI accumulates beyond that so users can scroll back through their
+  // session. Returns a stable identity when nothing new arrived so React
+  // doesn't trigger a needless render.
+  const mergeEvents = (
+    prev: AdminEvent[],
+    incoming: readonly AdminEvent[],
+  ): AdminEvent[] => {
+    if (incoming.length === 0) return prev;
+    const seen = new Set(prev.map((e) => e.id));
+    const novel = incoming.filter((e) => !seen.has(e.id));
+    if (novel.length === 0) return prev;
+    return [...novel.sort((a, b) => b.id - a.id), ...prev];
+  };
 
   // ── Load caller list once the daemon is up ──────────────────────────────
   useEffect(() => {
@@ -132,7 +145,6 @@ export default function EventsView() {
 
   // ── Reset feed state whenever the selected caller changes ───────────────
   useEffect(() => {
-    maxIdRef.current = -1;
     setEvents([]);
     setIngestors([]);
     setActiveSource(null);
@@ -141,6 +153,16 @@ export default function EventsView() {
   }, [selectedCaller]);
 
   // ── Poll events + ingestors for the selected caller ─────────────────────
+  //
+  // We pass `after_id=-1` to the events endpoint and rely on `mergeEvents` to
+  // dedupe by id, rather than maintaining a client-side cursor. The cursor
+  // approach was prone to silent drift — if any earlier poll's `setEvents`
+  // dropped a state update (visibility toggles, React 18 strict-mode mount
+  // cycles, etc.), the cursor advanced past events the UI had never received,
+  // and the table appeared stuck even though the per-ingestor event counters
+  // (driven by `/ingestors`) kept ticking up. With the no-cursor approach the
+  // backend always returns its full buffer (bounded, default 100), so any
+  // missed updates self-heal on the next poll.
   useEffect(() => {
     if (daemon !== "up" || !selectedCaller) return;
     const caller = selectedCaller;
@@ -148,22 +170,13 @@ export default function EventsView() {
     let interval: ReturnType<typeof setInterval> | null = null;
 
     const fetchEvents = async () => {
-      const res = await api.callerEvents(caller, maxIdRef.current);
+      const res = await api.callerEvents(caller, -1);
       if (cancelled) return;
       if (isDaemonDown(res)) {
         setLoading(false);
         return;
       }
-      if (res.length > 0) {
-        let highest = maxIdRef.current;
-        for (const ev of res) {
-          if (ev.id > highest) highest = ev.id;
-        }
-        maxIdRef.current = highest;
-        // Newest first; prepend new events (server may return any order).
-        const incoming = [...res].sort((a, b) => b.id - a.id);
-        setEvents((prev) => [...incoming, ...prev]);
-      }
+      setEvents((prev) => mergeEvents(prev, res));
       setLoading(false);
     };
 
@@ -239,19 +252,11 @@ export default function EventsView() {
     setRefreshing(true);
     try {
       const [evRes, ingRes] = await Promise.all([
-        api.callerEvents(caller, maxIdRef.current),
+        api.callerEvents(caller, -1),
         api.callerIngestors(caller),
       ]);
       if (selectedCaller !== caller) return;
-      if (!isDaemonDown(evRes) && evRes.length > 0) {
-        let highest = maxIdRef.current;
-        for (const ev of evRes) {
-          if (ev.id > highest) highest = ev.id;
-        }
-        maxIdRef.current = highest;
-        const incoming = [...evRes].sort((a, b) => b.id - a.id);
-        setEvents((prev) => [...incoming, ...prev]);
-      }
+      if (!isDaemonDown(evRes)) setEvents((prev) => mergeEvents(prev, evRes));
       if (!isDaemonDown(ingRes)) setIngestors(ingRes);
       setLoading(false);
     } finally {
