@@ -122,3 +122,82 @@
   background: rgba(248, 81, 73, 0.12);
   color: #f85149;
 }
+
+/* ── Source badge (local-auto / bundle-issued) ────────────────────────── */
+
+.dl-source-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.dl-source-bundle-issued {
+  background: rgba(88, 166, 255, 0.12);
+  border-color: rgba(88, 166, 255, 0.35);
+  color: #58a6ff;
+}
+
+.dl-source-local-auto {
+  background: rgba(63, 185, 80, 0.12);
+  border-color: rgba(63, 185, 80, 0.35);
+  color: #3fb950;
+}
+
+/* ── Credential lifecycle (caller detail) ─────────────────────────────── */
+
+.dl-cred-lifecycle {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dl-cred-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dl-cred-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid #2a2a30;
+  background: #0d0d0f;
+  color: #c5c5cd;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.dl-cred-btn:hover {
+  border-color: #3a3a42;
+  color: #e6e6ea;
+}
+
+.dl-cred-btn-primary {
+  background: #58a6ff;
+  border-color: #58a6ff;
+  color: #0d0d0f;
+}
+
+.dl-cred-btn-primary:hover {
+  background: #6cb2ff;
+  border-color: #6cb2ff;
+  color: #0d0d0f;
+}
+
+.dl-cred-btn-danger {
+  color: #f85149;
+}
+
+.dl-cred-btn-danger:hover {
+  border-color: rgba(248, 81, 73, 0.5);
+  background: rgba(248, 81, 73, 0.1);
+  color: #f85149;
+}

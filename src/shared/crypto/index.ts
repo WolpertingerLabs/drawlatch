@@ -28,6 +28,7 @@ export {
   exportCallerPublicKeys,
   exportServerPublicKeys,
   importCallerPublicKeys,
+  saveCallerPublicKeys,
   saveServerPublicKeys,
   listCallers,
   callerExists,

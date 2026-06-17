@@ -8,6 +8,15 @@
  * Type-only — compiles to nothing.
  */
 
+// The issued credential bundle shape is shared with the issuer/importer; re-export
+// it here (type-only) so the frontend can type the issue response without reaching
+// into shared/ runtime modules.
+export type {
+  CallerBundleV1,
+  BundleEncryption,
+  CallerSource,
+} from '../shared/protocol/caller-bundle.js';
+
 // ── /admin/meta ──────────────────────────────────────────────────────────
 export interface AdminMeta {
   version: string;
@@ -50,6 +59,9 @@ export interface AdminCaller {
   envKeys: string[];
   fingerprint: string | null;
   keysDirExists: boolean;
+  /** How this caller's keypair was provisioned (drives the source badge).
+   *  null for callers created before issuance existed. */
+  source: 'local-auto' | 'bundle-issued' | null;
 }
 
 // ── /admin/connections ───────────────────────────────────────────────────

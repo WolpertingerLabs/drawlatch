@@ -1,8 +1,10 @@
 /**
- * Tests for the new self-managed surface:
- *   - caller bootstrap (item E): createCallerWithKeys / deleteCaller / autoEnroll
+ * Tests for the self-managed surface:
+ *   - caller bootstrap: createCallerWithKeys / deleteCaller
+ *   - credential issuance: issueCallerBundle (public-only persist, bundle shape,
+ *     secret non-leakage, passphrase wrap round-trip) + issueLocalCaller
  *   - key-layout migration (item G): migrateKeyLayout
- *   - mutating admin API (item A): create/delete caller, enable/disable, secrets
+ *   - mutating admin API (item A): create/delete/issue caller, enable/disable, secrets
  *
  * Every mutating admin test also asserts the security invariant that secret
  * VALUES never appear in any response body.
@@ -22,6 +24,7 @@ import {
   resolveRoutes,
   resolveSecrets,
   getCallerKeysDir,
+  getServerKeysDir,
   getKeysDir,
   type RemoteServerConfig,
   type ResolvedRoute,
@@ -29,12 +32,18 @@ import {
 import {
   createCallerWithKeys,
   deleteCaller,
-  autoEnroll,
-  writeEnrollToken,
+  issueCallerBundle,
+  issueLocalCaller,
 } from './caller-bootstrap.js';
 import { migrateKeyLayout } from '../shared/migrations.js';
 import { createAdminRouter } from './admin.js';
 import { createCaller } from '../shared/crypto/key-manager.js';
+import { generateKeyBundle, saveKeyBundle } from '../shared/crypto/keys.js';
+import {
+  deriveBundleKey,
+  decryptBundleField,
+} from '../shared/protocol/caller-bundle-crypto.js';
+import type { CallerBundleV1 } from '../shared/protocol/caller-bundle.js';
 import type { IngestorManager } from './ingestors/index.js';
 import type { IngestorStatus } from './ingestors/types.js';
 
@@ -58,6 +67,8 @@ describe('caller bootstrap', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drawlatch-boot-'));
     process.env.MCP_CONFIG_DIR = dir;
     seedConfig();
+    // Issuance embeds the server public keys in the bundle — provision them.
+    saveKeyBundle(generateKeyBundle(), getServerKeysDir());
   });
   afterEach(() => {
     delete process.env.MCP_CONFIG_DIR;
@@ -101,18 +112,156 @@ describe('caller bootstrap', () => {
     expect(() => deleteCaller('default')).toThrow(/Cannot delete/);
   });
 
-  it('auto-enrolls with a valid token and rotates it (single-use)', () => {
-    const token = writeEnrollToken();
-    const res = autoEnroll(token, 'carol');
-    expect(res.alias).toBe('carol');
-    expect('carol' in loadRemoteConfig().callers).toBe(true);
-    // The old token must no longer work (rotated on success).
-    expect(() => autoEnroll(token, 'dave')).toThrow(/Invalid or expired/);
+});
+
+// ── credential issuance primitive ──────────────────────────────────────────
+
+describe('issueCallerBundle', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drawlatch-issue-'));
+    process.env.MCP_CONFIG_DIR = dir;
+    seedConfig();
+    saveKeyBundle(generateKeyBundle(), getServerKeysDir());
+  });
+  afterEach(() => {
+    delete process.env.MCP_CONFIG_DIR;
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('rejects auto-enroll with a wrong token', () => {
-    writeEnrollToken();
-    expect(() => autoEnroll('not-the-token', 'eve')).toThrow(/Invalid or expired/);
+  it('assembles a v1 bundle and persists ONLY the public keys to disk', () => {
+    const bundle = issueCallerBundle({
+      alias: 'cb',
+      endpointUrl: 'https://drawlatch.example.com',
+      connections: ['github'],
+    });
+
+    expect(bundle.version).toBe(1);
+    expect(bundle.callerAlias).toBe('cb');
+    expect(bundle.endpointUrl).toBe('https://drawlatch.example.com');
+    expect(bundle.connections).toEqual(['github']);
+    expect(bundle.fingerprint).toMatch(/.+/);
+    expect(bundle.serverKeyFingerprint).toMatch(/.+/);
+    // Caller priv+pub present; server is public-only (no priv field).
+    expect(bundle.caller.signing.priv).toContain('PRIVATE KEY');
+    expect(bundle.caller.exchange.priv).toContain('PRIVATE KEY');
+    expect(bundle.server.signing.pub).toContain('PUBLIC KEY');
+    expect(bundle.server.exchange.pub).toContain('PUBLIC KEY');
+    expect((bundle.server.signing as Record<string, unknown>).priv).toBeUndefined();
+
+    // Public-only on drawlatch disk — the caller private key is never written.
+    const keyDir = path.join(getCallerKeysDir(), 'cb');
+    expect(fs.existsSync(path.join(keyDir, 'signing.pub.pem'))).toBe(true);
+    expect(fs.existsSync(path.join(keyDir, 'exchange.pub.pem'))).toBe(true);
+    expect(fs.existsSync(path.join(keyDir, 'signing.key.pem'))).toBe(false);
+    expect(fs.existsSync(path.join(keyDir, 'exchange.key.pem'))).toBe(false);
+
+    // Registered with a source badge.
+    expect(loadRemoteConfig().callers.cb.source).toBe('bundle-issued');
+  });
+
+  it('never serializes a connection-secret value into the bundle', () => {
+    // A secret that, if leaked, would appear verbatim in the bundle JSON.
+    process.env.CB_GITHUB_TOKEN = 'ghp_must_not_leak_0123456789';
+    try {
+      const bundle = issueCallerBundle({
+        alias: 'cb',
+        endpointUrl: 'https://x.example',
+        connections: ['github'],
+      });
+      expect(JSON.stringify(bundle)).not.toContain('ghp_must_not_leak_0123456789');
+      // connections is a name list only.
+      expect(bundle.connections).toEqual(['github']);
+    } finally {
+      delete process.env.CB_GITHUB_TOKEN;
+    }
+  });
+
+  it('re-issue mints a fresh keypair and overwrites the stored public key', () => {
+    const first = issueCallerBundle({ alias: 'cb', endpointUrl: 'https://x' });
+    const firstPub = fs.readFileSync(
+      path.join(getCallerKeysDir(), 'cb', 'signing.pub.pem'),
+      'utf-8',
+    );
+    const second = issueCallerBundle({ alias: 'cb', endpointUrl: 'https://x' });
+    const secondPub = fs.readFileSync(
+      path.join(getCallerKeysDir(), 'cb', 'signing.pub.pem'),
+      'utf-8',
+    );
+
+    expect(second.fingerprint).not.toBe(first.fingerprint);
+    expect(secondPub).not.toBe(firstPub);
+    // Connections are preserved across a rotation.
+    expect(second.connections).toEqual(first.connections);
+  });
+
+  it('passphrase-wraps ONLY the caller private keys (round-trip)', () => {
+    const bundle = issueCallerBundle({
+      alias: 'cb',
+      endpointUrl: 'https://x',
+      passphrase: 'correct horse battery staple',
+    });
+
+    expect(bundle.encryption).not.toBeNull();
+    expect(bundle.encryption?.kdf).toBe('scrypt');
+    expect(bundle.encryption?.alg).toBe('aes-256-gcm');
+    // Public halves stay plaintext; private halves are ciphertext.
+    expect(bundle.caller.signing.pub).toContain('PUBLIC KEY');
+    expect(bundle.caller.signing.priv).not.toContain('PRIVATE KEY');
+    expect(bundle.caller.exchange.priv).not.toContain('PRIVATE KEY');
+
+    const key = deriveBundleKey('correct horse battery staple', bundle.encryption!);
+    expect(decryptBundleField(bundle.caller.signing.priv, key)).toContain('PRIVATE KEY');
+    expect(decryptBundleField(bundle.caller.exchange.priv, key)).toContain('PRIVATE KEY');
+
+    // Wrong passphrase fails (GCM auth).
+    const wrong = deriveBundleKey('nope', bundle.encryption!);
+    expect(() => decryptBundleField(bundle.caller.signing.priv, wrong)).toThrow();
+  });
+
+  it('rejects an invalid alias and a missing endpoint', () => {
+    expect(() => issueCallerBundle({ alias: 'bad alias', endpointUrl: 'https://x' })).toThrow(
+      /Invalid alias/,
+    );
+    expect(() => issueCallerBundle({ alias: 'cb', endpointUrl: '' })).toThrow(/endpointUrl/);
+  });
+});
+
+// ── local write-to-path (auto-share) ───────────────────────────────────────
+
+describe('issueLocalCaller', () => {
+  let dir: string;
+  let target: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drawlatch-local-'));
+    target = fs.mkdtempSync(path.join(os.tmpdir(), 'callboard-keys-'));
+    process.env.MCP_CONFIG_DIR = dir;
+    seedConfig();
+    saveKeyBundle(generateKeyBundle(), getServerKeysDir());
+  });
+  afterEach(() => {
+    delete process.env.MCP_CONFIG_DIR;
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+
+  it('writes the UNPACKED key files into the target keys dir, keeping drawlatch public-only', () => {
+    const res = issueLocalCaller({ alias: 'callboard-local', keysDir: target });
+
+    // callboard gets the full keypair (priv+pub) plus server public keys.
+    const cbDir = path.join(target, 'callers', 'callboard-local');
+    expect(fs.existsSync(path.join(cbDir, 'signing.key.pem'))).toBe(true);
+    expect(fs.existsSync(path.join(cbDir, 'exchange.key.pem'))).toBe(true);
+    expect(fs.existsSync(path.join(cbDir, 'signing.pub.pem'))).toBe(true);
+    expect(fs.existsSync(path.join(target, 'server', 'signing.pub.pem'))).toBe(true);
+
+    // drawlatch keeps ONLY the public key.
+    const ownDir = path.join(getCallerKeysDir(), 'callboard-local');
+    expect(fs.existsSync(path.join(ownDir, 'signing.pub.pem'))).toBe(true);
+    expect(fs.existsSync(path.join(ownDir, 'signing.key.pem'))).toBe(false);
+
+    expect(loadRemoteConfig().callers['callboard-local'].source).toBe('local-auto');
+    expect(res.fingerprint).toMatch(/.+/);
   });
 });
 
@@ -178,6 +327,8 @@ describe('mutating admin API', () => {
     // The default caller needs keys so reloadPeer/removePeer have something real
     // to act on; create them directly.
     createCaller('default');
+    // Issuance embeds the server public keys in the bundle.
+    saveKeyBundle(generateKeyBundle(), getServerKeysDir());
 
     const resolveRoutesForCaller = (alias: string): ResolvedRoute[] => {
       const cfg = loadRemoteConfig();
@@ -289,6 +440,37 @@ describe('mutating admin API', () => {
 
     const blocked = await req('DELETE', '/api/admin/callers/default');
     expect(blocked.status).toBe(400);
+  });
+
+  it('issues a caller bundle and never leaks a secret value', async () => {
+    const res = await req('POST', '/api/admin/callers/default/issue', {
+      endpointUrl: 'https://drawlatch.example.com',
+      connections: ['github'],
+    });
+    expect(res.status).toBe(200);
+    const bundle = res.json as CallerBundleV1;
+    expect(bundle.version).toBe(1);
+    expect(bundle.callerAlias).toBe('default');
+    expect(bundle.caller.signing.priv).toContain('PRIVATE KEY');
+    expect(bundle.connections).toEqual(['github']);
+    // A secret was set earlier in this suite — it must not appear in the bundle.
+    expect(res.text.includes(SECRET_VALUE)).toBe(false);
+  });
+
+  it('passphrase-wraps the private keys when requested', async () => {
+    const res = await req('POST', '/api/admin/callers/default/issue', {
+      endpointUrl: 'https://drawlatch.example.com',
+      passphrase: 'pw-from-the-operator',
+    });
+    expect(res.status).toBe(200);
+    const bundle = res.json as CallerBundleV1;
+    expect(bundle.encryption).not.toBeNull();
+    expect(bundle.caller.signing.priv).not.toContain('PRIVATE KEY');
+  });
+
+  it('rejects issue with no endpoint (none supplied, no default) — 400', async () => {
+    const res = await req('POST', '/api/admin/callers/default/issue', {});
+    expect(res.status).toBe(400);
   });
 
   it('toggles the tunnel flag (PUT /tunnel) and persists to config', async () => {

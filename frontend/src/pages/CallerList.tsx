@@ -217,8 +217,8 @@ export default function CallerList() {
         <div className="placeholder">
           <span className="placeholder-title">No callers registered</span>
           <span>
-            Use <strong>New caller</strong> above, or pair a callboard with{" "}
-            <code>drawlatch sync</code>.
+            Use <strong>New caller</strong> above, then open it to{" "}
+            <strong>Issue credentials</strong> for a callboard instance.
           </span>
         </div>
       )}
@@ -231,6 +231,7 @@ export default function CallerList() {
                 <th>Alias</th>
                 <th>Name</th>
                 <th className="num">Connections</th>
+                <th>Source</th>
                 <th>Fingerprint</th>
                 <th>Keys dir</th>
                 <th aria-label="Actions" />
@@ -258,6 +259,9 @@ export default function CallerList() {
                     {c.name ?? <span className="cell-muted">—</span>}
                   </td>
                   <td className="num">{c.connections.length}</td>
+                  <td>
+                    <SourceBadge source={c.source} />
+                  </td>
                   <td>
                     {c.fingerprint ? (
                       <span className="mono" title={c.fingerprint}>
@@ -327,5 +331,18 @@ export function KeysDirBadge({ exists }: { exists: boolean }) {
     >
       {exists ? "ok" : "missing"}
     </span>
+  );
+}
+
+export function SourceBadge({
+  source,
+}: {
+  source: AdminCaller["source"];
+}) {
+  if (!source) {
+    return <span className="cell-muted">—</span>;
+  }
+  return (
+    <span className={`dl-source-badge dl-source-${source}`}>{source}</span>
   );
 }

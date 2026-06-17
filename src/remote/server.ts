@@ -68,7 +68,7 @@ import { isSecretSetForCaller } from '../shared/env-utils.js';
 import { toolHandlers, type ToolContext } from './tool-dispatch.js';
 import { setTunnelUrl, getTunnelUrl } from './tunnel-state.js';
 import { migrateConfigDir } from '../shared/migrations.js';
-import { writeEnrollToken, autoEnroll } from './caller-bootstrap.js';
+import { maybeIssueLocalCaller } from './caller-bootstrap.js';
 import { createAdminRouter } from './admin.js';
 import {
   loginHandler,
@@ -383,8 +383,6 @@ export function createApp(options: CreateAppOptions = {}) {
   app.use('/sync', express.text({ type: 'text/plain', limit: '64kb' }));
   // JSON for sync management endpoints (64kb limit — sync listen messages are tiny)
   app.use('/sync/listen', express.json({ limit: '64kb' }));
-  // JSON for the loopback auto-enroll endpoint (item E).
-  app.use('/sync/auto-enroll', express.json({ limit: '64kb' }));
 
   // Raw buffer for webhook endpoints (needed for signature verification)
   app.use('/webhooks', express.raw({ type: 'application/json', limit: '1mb' }));
@@ -961,41 +959,19 @@ export function createApp(options: CreateAppOptions = {}) {
     }
   };
 
-  // ── Loopback auto-enroll (item E) ─────────────────────────────────────
-  // A co-located client that shares our filesystem proves co-location by
-  // presenting the one-time enroll token drawlatch wrote into the config dir,
-  // and gets a caller provisioned (with keys) without the invite-code dance.
-  // Loopback-only: never reachable from off-box.
-  app.post('/sync/auto-enroll', requireLoopback, (req, res) => {
-    const { token, alias, name } = (req.body ?? {}) as {
-      token?: string;
-      alias?: string;
-      name?: string;
-    };
-    if (!token || !alias) {
-      res.status(400).json({ error: 'Missing token or alias' });
-      return;
-    }
-    try {
-      const result = autoEnroll(token, alias, name !== undefined ? { name } : {});
-      reloadPeer(alias);
-      res.json({
-        alias: result.alias,
-        name: result.name,
-        fingerprint: result.fingerprint,
-        keysDir: result.keysDir,
-        connections: result.connections,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const status = /invalid or expired/i.test(message)
-        ? 403
-        : /already exists/i.test(message)
-          ? 409
-          : 400;
-      res.status(status).json({ error: message });
-    }
-  });
+  // Co-located callboard auto-share now happens at daemon boot via
+  // maybeIssueLocalCaller() (write-to-path over the shared filesystem). The old
+  // loopback `/sync/auto-enroll` enroll-token endpoint has been retired.
+
+  /** Endpoint URL to pin in an issued bundle when the request omits one:
+   *  the public tunnel URL if active, else the daemon's own host:port. */
+  const defaultEndpointUrl = (): string => {
+    const tunnel = getTunnelUrl();
+    if (tunnel) return tunnel;
+    const bindHost = process.env.DRAWLATCH_HOST ?? config.host;
+    const reachable = bindHost === '0.0.0.0' ? '127.0.0.1' : bindHost;
+    return `http://${reachable}:${port}`;
+  };
 
   // JSON body parsing for the mutating admin endpoints (cookie-parser for /api
   // is already installed above; the daemon keeps its per-route parser pattern).
@@ -1012,6 +988,8 @@ export function createApp(options: CreateAppOptions = {}) {
       refreshCaller: refreshCallerSessions,
       reloadPeer,
       removePeer,
+      audit: (action, details) => auditLog('admin', action, details ?? {}),
+      defaultEndpointUrl,
       version: PKG_VERSION,
       port,
       startedAt,
@@ -1183,12 +1161,20 @@ export function main(): void {
     console.log('[remote] To add callers, run: drawlatch sync');
   }
 
-  // Drop a one-time enroll token into the config dir so a co-located client
-  // that shares our filesystem can auto-enroll a caller (item E).
+  // First-boot auto-share: when supervised by a co-located callboard (which sets
+  // DRAWLATCH_LOCAL_CALLER_KEYS_DIR), mint a default caller and write the unpacked
+  // key files straight into callboard's keys dir. Idempotent (skipped once the
+  // caller exists). Replaces the retired enroll-token / /sync/auto-enroll path.
   try {
-    writeEnrollToken();
+    const local = maybeIssueLocalCaller();
+    if (local) {
+      console.log(
+        `[remote] Auto-shared local caller "${local.alias}" → ${local.callerKeysDir} ` +
+          `(fingerprint ${local.fingerprint})`,
+      );
+    }
   } catch (err) {
-    console.warn('[remote] Could not write enroll token:', err);
+    console.warn('[remote] Could not auto-share local caller:', err);
   }
 
   const port = resolvePort(process.env.DRAWLATCH_PORT, config.port);

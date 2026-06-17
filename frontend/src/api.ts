@@ -9,6 +9,7 @@ import type {
   AdminMeta,
   AdminSecret,
   AdminSession,
+  CallerBundleV1,
   DaemonOfflineEnvelope,
 } from "drawlatch-admin-types";
 import { notifyAuthRequired } from "./auth";
@@ -119,6 +120,24 @@ export const api = {
     ),
   deleteCaller: (alias: string) =>
     mutate<{ deleted: string }>("DELETE", `/api/admin/callers/${enc(alias)}`),
+
+  // ── Credential issuance (caller credential bundle) ────────────────────
+  // Returns the bundle ONCE (it contains the caller PRIVATE key). Re-issuing
+  // mints a fresh keypair and invalidates the prior credential.
+  issueCaller: (
+    alias: string,
+    body: {
+      connections?: string[];
+      endpointUrl?: string;
+      passphrase?: string;
+      name?: string;
+    },
+  ) =>
+    mutate<CallerBundleV1>(
+      "POST",
+      `/api/admin/callers/${enc(alias)}/issue`,
+      body,
+    ),
 
   // ── Tunnel (cloudflared) config-only toggle ───────────────────────────
   // Persists `config.tunnel` to remote.config.json. The daemon reads this at

@@ -126,6 +126,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         envKeys: Object.keys(caller.env ?? {}),
         fingerprint,
         keysDirExists,
+        source: caller.source ?? null,
       };
     });
     res.json(out);

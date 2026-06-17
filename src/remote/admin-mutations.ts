@@ -14,10 +14,16 @@
  */
 
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 
 import { saveRemoteConfig, type RemoteServerConfig, type ResolvedRoute } from '../shared/config.js';
 import { dispatchTool, type ToolContext } from './tool-dispatch.js';
-import { createCallerWithKeys, deleteCaller, CALLER_ALIAS_REGEX } from './caller-bootstrap.js';
+import {
+  createCallerWithKeys,
+  deleteCaller,
+  issueCallerBundle,
+  CALLER_ALIAS_REGEX,
+} from './caller-bootstrap.js';
 import type { IngestorManager } from './ingestors/index.js';
 
 export interface AdminMutationDeps {
@@ -31,6 +37,12 @@ export interface AdminMutationDeps {
   reloadPeer: (alias: string) => void;
   /** Drop the authorized peer + active sessions for a deleted caller. */
   removePeer: (alias: string) => void;
+  /** Audit-log a sensitive admin mutation (credential issuance). Optional so
+   *  tests can omit it; the daemon wires it to the request audit log. */
+  audit?: (action: string, details?: Record<string, unknown>) => void;
+  /** Endpoint URL to pin in an issued bundle when the request omits one
+   *  (the public tunnel URL, or the daemon's own host:port). */
+  defaultEndpointUrl?: () => string;
 }
 
 /** Translate a thrown error into an HTTP status + message. */
@@ -121,6 +133,87 @@ export function mountAdminMutations(router: express.Router, deps: AdminMutationD
         keysDir: result.keysDir,
         connections: result.connections,
       });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(errorStatus(message)).json({ error: message });
+    }
+  });
+
+  // ── Caller credential issuance ─────────────────────────────────────────
+  //
+  // Mint (or rotate) a caller credential bundle and return it ONCE. drawlatch
+  // keeps only the public key, so the private material is unrecoverable after
+  // this response — re-issue to rotate. Rate-limited and audit-logged; the
+  // bundle never carries any connection-secret value (only connection names).
+  const issueLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many issuance requests. Try again in a minute.' },
+  });
+
+  // POST /api/admin/callers/:alias/issue  { connections?, endpointUrl?, passphrase?, name? }
+  router.post('/callers/:alias/issue', issueLimiter, (req, res) => {
+    const alias = req.params.alias as string;
+    if (!CALLER_ALIAS_REGEX.test(alias)) {
+      res.status(400).json({ error: 'Invalid caller alias' });
+      return;
+    }
+    const { connections, endpointUrl, passphrase, name } = (req.body ?? {}) as {
+      connections?: unknown;
+      endpointUrl?: unknown;
+      passphrase?: unknown;
+      name?: unknown;
+    };
+    if (
+      connections !== undefined &&
+      (!Array.isArray(connections) || !connections.every((c) => typeof c === 'string'))
+    ) {
+      res.status(400).json({ error: 'connections must be an array of strings' });
+      return;
+    }
+    if (endpointUrl !== undefined && typeof endpointUrl !== 'string') {
+      res.status(400).json({ error: 'endpointUrl must be a string' });
+      return;
+    }
+    if (passphrase !== undefined && typeof passphrase !== 'string') {
+      res.status(400).json({ error: 'passphrase must be a string' });
+      return;
+    }
+    if (name !== undefined && typeof name !== 'string') {
+      res.status(400).json({ error: 'name must be a string' });
+      return;
+    }
+
+    const resolvedEndpoint =
+      typeof endpointUrl === 'string' && endpointUrl.trim() !== ''
+        ? endpointUrl.trim()
+        : (deps.defaultEndpointUrl?.() ?? '');
+
+    const reissue = alias in deps.loadConfig().callers;
+
+    try {
+      const bundle = issueCallerBundle({
+        alias,
+        endpointUrl: resolvedEndpoint,
+        ...(typeof name === 'string' && { name }),
+        ...(Array.isArray(connections) && { connections }),
+        ...(typeof passphrase === 'string' && passphrase !== '' && { passphrase }),
+      });
+      // Install the fresh public key and invalidate any prior credential's
+      // active sessions (removePeer drops sessions + peer; reloadPeer re-adds
+      // the new key) so a rotation takes effect immediately.
+      deps.removePeer(alias);
+      deps.reloadPeer(alias);
+      deps.audit?.('caller_issue', {
+        caller: alias,
+        reissue,
+        passphraseWrapped: bundle.encryption !== null,
+        connections: bundle.connections,
+        fingerprint: bundle.fingerprint,
+      });
+      res.json(bundle);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       res.status(errorStatus(message)).json({ error: message });
