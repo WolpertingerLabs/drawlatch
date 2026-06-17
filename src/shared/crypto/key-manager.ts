@@ -93,10 +93,17 @@ export function exportServerPublicKeys(opts?: KeyManagerOpts): SerializedPublicK
 }
 
 /**
- * Import a caller's public keys. Saves under `keys/callers/<alias>/`.
- * Used by the server to store received caller public keys (e.g., via sync).
+ * Persist ONLY a caller's public keys under `keys/callers/<alias>/`.
+ *
+ * This is the public-only save path used by credential issuance: drawlatch mints
+ * the keypair in memory, hands the private half out in the bundle, and keeps only
+ * the public half on disk (so the private key never touches drawlatch's disk).
+ *
+ * Any stale PRIVATE key files left from a legacy on-disk mint (the old local
+ * bootstrap wrote priv+pub here) are removed, so re-issuing a previously
+ * full-keypair caller restores the public-only invariant.
  */
-export function importCallerPublicKeys(
+export function saveCallerPublicKeys(
   alias: string,
   keys: SerializedPublicKeys,
   opts?: KeyManagerOpts,
@@ -109,6 +116,26 @@ export function importCallerPublicKeys(
 
   fs.writeFileSync(path.join(dir, 'signing.pub.pem'), keys.signing, { mode: 0o644 });
   fs.writeFileSync(path.join(dir, 'exchange.pub.pem'), keys.exchange, { mode: 0o644 });
+
+  // Drop any private key material from an earlier on-disk mint.
+  for (const f of ['signing.key.pem', 'exchange.key.pem']) {
+    const p = path.join(dir, f);
+    if (fs.existsSync(p)) fs.rmSync(p, { force: true });
+  }
+}
+
+/**
+ * Import a caller's public keys. Saves under `keys/callers/<alias>/`.
+ * Used by the server to store received caller public keys (e.g., via sync).
+ *
+ * Alias for {@link saveCallerPublicKeys} — both are the public-only persist path.
+ */
+export function importCallerPublicKeys(
+  alias: string,
+  keys: SerializedPublicKeys,
+  opts?: KeyManagerOpts,
+): void {
+  saveCallerPublicKeys(alias, keys, opts);
 }
 
 /**

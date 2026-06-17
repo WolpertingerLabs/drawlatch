@@ -196,10 +196,18 @@ export interface IngestorOverrides {
   params?: Record<string, unknown>;
 }
 
+/** How a caller's keypair was provisioned (drives the dashboard source badge). */
+export type CallerSource = 'local-auto' | 'bundle-issued';
+
 /** Per-caller access configuration */
 export interface CallerConfig {
   /** Human-readable name for this caller (used in audit logs) */
   name?: string;
+  /** How this caller's keypair was provisioned:
+   *   - 'bundle-issued' — minted via the credential-issuance flow (download/CLI)
+   *   - 'local-auto'    — auto-shared to a co-located callboard over the filesystem
+   *  Absent for callers created before issuance existed (e.g. via `sync`). */
+  source?: CallerSource;
   /** List of connection aliases — references built-in templates (e.g., "github")
    *  or custom connector aliases defined in the top-level connectors array. */
   connections: string[];
