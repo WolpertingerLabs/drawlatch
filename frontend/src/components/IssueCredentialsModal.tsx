@@ -30,6 +30,15 @@ export interface IssueCredentialsModalProps {
   onIssued: () => void;
 }
 
+/**
+ * Endpoint-from-bundle override is HIDDEN for now. cloudflared tunnel URLs for
+ * callboard<->drawlatch connections are ephemeral and not guaranteed to persist,
+ * so we don't surface the per-bundle endpoint override; the bundle still pins
+ * `defaultEndpoint` silently and the consumer (callboard) sets its server URL
+ * manually. Flip to `true` to revive the override UI once endpoints are stable.
+ */
+const SHOW_ENDPOINT_OVERRIDE = false;
+
 function downloadBundle(alias: string, bundle: CallerBundleV1): void {
   const blob = new Blob([JSON.stringify(bundle, null, 2)], {
     type: "application/json",
@@ -176,10 +185,12 @@ export default function IssueCredentialsModal({
                 <dt>Server key</dt>
                 <dd className="mono">{bundle.serverKeyFingerprint}</dd>
               </div>
-              <div>
-                <dt>Endpoint</dt>
-                <dd className="mono">{bundle.endpointUrl}</dd>
-              </div>
+              {SHOW_ENDPOINT_OVERRIDE && (
+                <div>
+                  <dt>Endpoint</dt>
+                  <dd className="mono">{bundle.endpointUrl}</dd>
+                </div>
+              )}
               <div>
                 <dt>Private keys</dt>
                 <dd>
@@ -210,19 +221,21 @@ export default function IssueCredentialsModal({
           </div>
         ) : (
           <div className="dl-issue-body">
-            <label className="dl-issue-field">
-              <span className="dl-issue-label">Endpoint URL</span>
-              <input
-                type="text"
-                className="dl-issue-input mono"
-                value={endpoint}
-                onChange={(e) => setEndpoint(e.target.value)}
-                placeholder="https://drawlatch.example.com"
-              />
-              <span className="dl-issue-hint">
-                The bundle pins this drawlatch endpoint for the caller.
-              </span>
-            </label>
+            {SHOW_ENDPOINT_OVERRIDE && (
+              <label className="dl-issue-field">
+                <span className="dl-issue-label">Endpoint URL</span>
+                <input
+                  type="text"
+                  className="dl-issue-input mono"
+                  value={endpoint}
+                  onChange={(e) => setEndpoint(e.target.value)}
+                  placeholder="https://drawlatch.example.com"
+                />
+                <span className="dl-issue-hint">
+                  The bundle pins this drawlatch endpoint for the caller.
+                </span>
+              </label>
+            )}
 
             <div className="dl-issue-field">
               <span className="dl-issue-label">
