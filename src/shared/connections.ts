@@ -127,7 +127,15 @@ export function loadConnection(name: string): Route {
   }
 
   const raw = fs.readFileSync(filePath, 'utf-8');
-  return JSON.parse(raw) as Route;
+  const route = JSON.parse(raw) as Route;
+
+  // Reject a malformed oauth2 block at load time (not just in unit tests), so a
+  // bad template never reaches the daemon's TokenManager / request path.
+  if (route.oauth2) {
+    validateOAuth2Config(route.oauth2);
+  }
+
+  return route;
 }
 
 /**

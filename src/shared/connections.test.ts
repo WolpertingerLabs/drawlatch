@@ -79,6 +79,48 @@ describe('loadConnection', () => {
     expect(route.headers).toEqual({ Authorization: 'Bearer ${TEST_TOKEN}' });
   });
 
+  it('should validate a well-formed oauth2 block on load (no throw)', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['oauth-good.json']);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'OAuth Good',
+        allowedEndpoints: ['https://api.good.com/**'],
+        secrets: { ID: '${ID}', SECRET: '${SECRET}', RT: '${RT}' },
+        oauth2: {
+          tokenUrl: 'https://good.com/token',
+          grant: 'refresh_token',
+          clientAuth: 'basic',
+          secretRefs: { clientId: 'ID', clientSecret: 'SECRET', refreshToken: 'RT' },
+        },
+      }),
+    );
+
+    const route = loadConnection('oauth-good');
+    expect(route.oauth2?.grant).toBe('refresh_token');
+  });
+
+  it('should reject a malformed oauth2 block at load time', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['oauth-bad.json']);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'OAuth Bad',
+        allowedEndpoints: ['https://api.bad.com/**'],
+        secrets: { ID: '${ID}', SECRET: '${SECRET}' },
+        // refresh_token grant WITHOUT a refreshToken secretRef — invalid.
+        oauth2: {
+          tokenUrl: 'https://bad.com/token',
+          grant: 'refresh_token',
+          clientAuth: 'basic',
+          secretRefs: { clientId: 'ID', clientSecret: 'SECRET' },
+        },
+      }),
+    );
+
+    expect(() => loadConnection('oauth-bad')).toThrow(/refreshToken/);
+  });
+
   it('should throw for unknown connection name', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
 

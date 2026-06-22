@@ -217,6 +217,11 @@ export interface ResolvedRoute {
   listenerConfig?: ListenerConfigSchema;
   /** Raw ingestor configuration (carried from config, needed by tool handlers) */
   ingestorConfig?: IngestorConfig;
+  /** OAuth2 token-refresh declaration (carried from config). When present, the
+   *  request path resolves the `Authorization: Bearer` token via the daemon's
+   *  TokenManager rather than a static header. Purely declarative — see
+   *  {@link OAuth2Config}. */
+  oauth2?: OAuth2Config;
 }
 
 /** Per-connection ingestor overrides (all fields optional — omitted fields inherit from template). */
@@ -578,6 +583,7 @@ export function resolveRoutes(
       ...(route.testIngestor !== undefined && { testIngestor: route.testIngestor }),
       ...(route.listenerConfig !== undefined && { listenerConfig: route.listenerConfig }),
       ...(route.ingestor !== undefined && { ingestorConfig: route.ingestor }),
+      ...(route.oauth2 !== undefined && { oauth2: route.oauth2 }),
     };
   });
 }
