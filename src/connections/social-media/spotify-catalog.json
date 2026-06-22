@@ -1,0 +1,25 @@
+{
+  "name": "Spotify Web API (Catalog)",
+  "stability": "dev",
+  "category": "social-media",
+  "description": "Spotify Web API — public catalog access (search, single track/album/artist metadata) using an app token via the client_credentials grant. No user consent required: the daemon obtains and auto-refreshes the short-lived (1h) Bearer access token from your client credentials. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET. NOTE (Feb-2026 Web API update): for Development-Mode apps the batch catalog endpoints (GET /tracks?ids=, /albums?ids=, /artists?ids=, etc.) and browse endpoints were removed, and /search 'limit' is capped at 10 — single-item fetches (GET /tracks/{id}, /albums/{id}, ...) and /search still work. Extended-Quota apps are unaffected. The allowlist stays broad (api.spotify.com/**) but plan around these limits if your app is in Development mode.",
+  "docsUrl": "https://developer.spotify.com/documentation/web-api",
+  "secrets": {
+    "SPOTIFY_CLIENT_ID": "${SPOTIFY_CLIENT_ID}",
+    "SPOTIFY_CLIENT_SECRET": "${SPOTIFY_CLIENT_SECRET}"
+  },
+  "allowedEndpoints": ["https://api.spotify.com/**"],
+  "oauth2": {
+    "tokenUrl": "https://accounts.spotify.com/api/token",
+    "grant": "client_credentials",
+    "clientAuth": "basic",
+    "secretRefs": {
+      "clientId": "SPOTIFY_CLIENT_ID",
+      "clientSecret": "SPOTIFY_CLIENT_SECRET"
+    }
+  },
+  "testConnection": {
+    "url": "https://api.spotify.com/v1/search?q=test&type=track&limit=1",
+    "description": "Runs a minimal catalog search to verify the app token"
+  }
+}
