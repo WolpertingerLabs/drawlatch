@@ -84,6 +84,49 @@ export interface ProxyConfig {
   requestTimeout: number;
 }
 
+/**
+ * Declarative OAuth2 token-refresh configuration for a route.
+ *
+ * Purely a *declaration*: it names the token endpoint, the grant flow, how the
+ * client credentials are presented, and which secrets (by name, never value)
+ * hold the client id/secret and — for the refresh_token grant — the refresh
+ * token. The actual token fetching/caching/refresh logic is implemented
+ * elsewhere (the daemon's TokenManager); this block only describes *how* to do
+ * it so the engine and admin UIs can reason about it.
+ */
+export interface OAuth2Config {
+  /** Token endpoint URL (e.g., "https://accounts.spotify.com/api/token"). */
+  tokenUrl: string;
+  /** OAuth2 grant flow used to obtain access tokens. */
+  grant: 'refresh_token' | 'client_credentials';
+  /** How client_id/client_secret are presented to the token endpoint:
+   *   - 'basic' — Authorization: Basic base64(client_id:client_secret)
+   *   - 'body'  — client_id/client_secret as form fields in the request body */
+  clientAuth: 'basic' | 'body';
+  /** Names of the secrets (NOT their values) that hold the OAuth2 credentials.
+   *  Resolved against the route's `secrets` map / env at runtime. */
+  secretRefs: {
+    /** Secret name holding the OAuth2 client id. Always required. */
+    clientId: string;
+    /** Secret name holding the OAuth2 client secret. Always required. */
+    clientSecret: string;
+    /** Secret name holding the refresh token. Required iff grant === 'refresh_token'. */
+    refreshToken?: string;
+  };
+  /** Override the field names read from the token-endpoint JSON response.
+   *  Defaults: access_token / expires_in / refresh_token. */
+  responseMapping?: {
+    accessTokenField?: string;
+    expiresInField?: string;
+    refreshTokenField?: string;
+  };
+  /** Scopes to request (sent in the body for the client_credentials grant). */
+  scopes?: string[];
+  /** Skew before expiry at which a token is treated as stale and refreshed
+   *  proactively, in milliseconds. Defaults to ~60_000 if omitted. */
+  refreshSkewMs?: number;
+}
+
 /** A single route / connector definition — scopes secrets and headers to a set of endpoints */
 export interface Route {
   /** Alias for referencing this connector from caller connection lists.
@@ -138,6 +181,11 @@ export interface Route {
    *  Used by UIs and management tools to render configuration forms.
    *  Only present on connections that have an ingestor. */
   listenerConfig?: ListenerConfigSchema;
+  /** Optional OAuth2 token-refresh declaration. When present, the daemon
+   *  obtains/refreshes the `Authorization: Bearer` access token for this route
+   *  via its token endpoint instead of injecting a static `${TOKEN}` header.
+   *  This block is purely declarative — see {@link OAuth2Config}. */
+  oauth2?: OAuth2Config;
 }
 
 /** A route after secret/header resolution — used at runtime */

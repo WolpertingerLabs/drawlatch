@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Route, ConnectionCategory } from './config.js';
+import type { Route, ConnectionCategory, OAuth2Config } from './config.js';
 
 /** Metadata about a built-in connection template — used by UIs to render
  *  connection cards, form fields, and badges without parsing raw JSON. */
@@ -153,6 +153,72 @@ function extractPlaceholderNames(str: string): Set<string> {
   return names;
 }
 
+// ── OAuth2 block ────────────────────────────────────────────────────────────
+
+/**
+ * Validate a route's `oauth2` declaration.
+ *
+ * Enforces the structural invariants of an {@link OAuth2Config}:
+ *   - `tokenUrl` and `grant` are required.
+ *   - `grant` must be a known flow ('refresh_token' | 'client_credentials').
+ *   - `clientAuth` must be 'basic' or 'body'.
+ *   - `secretRefs.clientId` and `secretRefs.clientSecret` are always required.
+ *   - A `refresh_token` grant MUST declare `secretRefs.refreshToken`.
+ *   - A `client_credentials` grant does NOT require a refresh token.
+ *
+ * Throws an Error describing the first violation found. This is the validation
+ * surface that admin UIs / template loaders use to reject malformed templates;
+ * it does not perform any runtime token work.
+ */
+export function validateOAuth2Config(oauth2: OAuth2Config): void {
+  // Connection templates are JSON loaded from disk (or supplied by a UI), so the
+  // static OAuth2Config type is an *assumption* — validate against a loose view
+  // where every field may actually be missing or malformed at runtime.
+  const raw = oauth2 as {
+    tokenUrl?: string;
+    grant?: string;
+    clientAuth?: string;
+    secretRefs?: { clientId?: string; clientSecret?: string; refreshToken?: string };
+  };
+
+  if (!raw.tokenUrl) {
+    throw new Error('oauth2: tokenUrl is required');
+  }
+  if (!raw.grant) {
+    throw new Error('oauth2: grant is required');
+  }
+  if (raw.grant !== 'refresh_token' && raw.grant !== 'client_credentials') {
+    throw new Error(
+      `oauth2: unknown grant "${raw.grant}" (expected 'refresh_token' or 'client_credentials')`,
+    );
+  }
+  if (raw.clientAuth !== 'basic' && raw.clientAuth !== 'body') {
+    throw new Error(`oauth2: unknown clientAuth "${raw.clientAuth}" (expected 'basic' or 'body')`);
+  }
+  if (!raw.secretRefs?.clientId) {
+    throw new Error('oauth2: secretRefs.clientId is required');
+  }
+  if (!raw.secretRefs.clientSecret) {
+    throw new Error('oauth2: secretRefs.clientSecret is required');
+  }
+  if (raw.grant === 'refresh_token' && !raw.secretRefs.refreshToken) {
+    throw new Error("oauth2: secretRefs.refreshToken is required for the 'refresh_token' grant");
+  }
+}
+
+/**
+ * The secret names an `oauth2` block makes *required* (must always be
+ * configured for the connection to work). Always clientId + clientSecret;
+ * additionally refreshToken when the grant is 'refresh_token'.
+ */
+function requiredOAuth2SecretRefs(oauth2: OAuth2Config): string[] {
+  const refs = [oauth2.secretRefs.clientId, oauth2.secretRefs.clientSecret];
+  if (oauth2.grant === 'refresh_token' && oauth2.secretRefs.refreshToken) {
+    refs.push(oauth2.secretRefs.refreshToken);
+  }
+  return refs;
+}
+
 /**
  * List all available connection templates with structured metadata.
  *
@@ -174,18 +240,28 @@ export function listConnectionTemplates(): ConnectionTemplateInfo[] {
   return listAvailableConnections().map((alias) => {
     const route = loadConnection(alias);
 
-    // Collect secret names referenced in header values
-    const headerSecretNames = new Set<string>();
+    // Collect secret names that must always be configured. Two sources:
+    //   1. ${VAR} placeholders in header values (auto-injected into requests).
+    //   2. An oauth2 block's required secretRefs (clientId/clientSecret always;
+    //      refreshToken for the refresh_token grant) — these are consumed by the
+    //      daemon's token refresh, not by a static header, but are equally
+    //      mandatory, so the admin UI must collect them.
+    const requiredSecretNames = new Set<string>();
     for (const value of Object.values(route.headers ?? {})) {
       for (const name of extractPlaceholderNames(value)) {
-        headerSecretNames.add(name);
+        requiredSecretNames.add(name);
+      }
+    }
+    if (route.oauth2) {
+      for (const name of requiredOAuth2SecretRefs(route.oauth2)) {
+        requiredSecretNames.add(name);
       }
     }
 
-    // Partition secrets into required (in headers) vs optional (elsewhere)
+    // Partition secrets into required vs optional (defined but not mandatory).
     const allSecretNames = Object.keys(route.secrets ?? {});
-    const requiredSecrets = allSecretNames.filter((s) => headerSecretNames.has(s));
-    const optionalSecrets = allSecretNames.filter((s) => !headerSecretNames.has(s));
+    const requiredSecrets = allSecretNames.filter((s) => requiredSecretNames.has(s));
+    const optionalSecrets = allSecretNames.filter((s) => !requiredSecretNames.has(s));
 
     return {
       alias,
