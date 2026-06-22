@@ -32,6 +32,9 @@ import {
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller, setCallerSecrets } from '../shared/env-utils.js';
 import type { IngestorManager } from './ingestors/index.js';
+import type { TokenManager } from './oauth/token-manager.js';
+import { OAuth2InvalidGrantError, OAuth2RefreshError } from './oauth/token-manager.js';
+import { getSharedTokenManager } from './oauth/shared-token-manager.js';
 
 // ── Endpoint matching ────────────────────────────────────────────────────────
 
@@ -98,14 +101,35 @@ export interface ProxyRequestResult {
 }
 
 /**
+ * Optional collaborators for OAuth2-backed routes. When a matched route carries
+ * an `oauth2` block, the access token is obtained from `tokenManager`, scoped to
+ * (connection alias, `caller`). Omitted (or defaulted) for non-oauth2 routes,
+ * for which behaviour is byte-for-byte unchanged.
+ */
+export interface ProxyRequestOptions {
+  /** Token manager used to mint/refresh OAuth2 access tokens. Defaults to the
+   *  process-wide shared instance so the request path and the poll ingestor
+   *  share one token cache. Tests inject a stubbed manager here. */
+  tokenManager?: TokenManager;
+  /** Caller alias the OAuth2 token is scoped to (the (connection, caller) key).
+   *  Defaults to "unknown" — only relevant for oauth2 routes. */
+  caller?: string;
+}
+
+/**
  * Core proxy request execution — route matching, secret injection, and fetch.
  *
  * Pure in the sense that it takes routes as input rather than reading global
  * state. The only side effect is the outbound fetch().
+ *
+ * For routes carrying an `oauth2` block, the outgoing `Authorization` header is
+ * set to `Bearer <token>` minted by the {@link TokenManager} and a single
+ * 401-driven force-refresh + retry is performed (see the oauth2 branch below).
  */
 export async function executeProxyRequest(
   input: ProxyRequestInput,
   routes: ResolvedRoute[],
+  options: ProxyRequestOptions = {},
 ): Promise<ProxyRequestResult> {
   const { method, url, headers = {}, body, files, bodyFieldName } = input;
 
@@ -206,12 +230,76 @@ export async function executeProxyRequest(
     throw new Error(`Endpoint not allowed after resolution: ${url}`);
   }
 
-  // Step 7: Make the actual HTTP request
-  const resp = await fetch(resolvedUrl, {
-    method,
-    headers: resolvedHeaders,
-    body: fetchBody,
-  });
+  // Step 7: Make the actual HTTP request.
+  //
+  // Non-oauth2 routes: a single plain fetch — behaviour is byte-for-byte
+  // unchanged from before this card. The oauth2 branch below is purely additive.
+  let resp: Response;
+
+  if (matched.oauth2) {
+    // ── OAuth2 route: inject a managed Bearer token, with 401 force-refresh. ──
+    //
+    // CONTRACT FOR CARD 4 (Spotify templates) — DO NOT declare a static
+    // `Authorization` header on an oauth2 route. The token minted here
+    // OVERRIDES any Authorization the template/client may have set: we delete
+    // every casing of `Authorization` before applying the managed token, so a
+    // static one would be silently dropped. Templates must leave Authorization
+    // to the TokenManager.
+    const tokenManager = options.tokenManager ?? getSharedTokenManager();
+    const caller = options.caller ?? 'unknown';
+    const oauth2 = matched.oauth2;
+    // Resolve secret *names* to their caller-scoped values using the SAME
+    // resolved-secret map the request path already uses. Card 2 expects exactly
+    // `(name) => route.secrets[name]` semantics.
+    const resolveSecret = (name: string): string | undefined => matched.secrets[name];
+    const tokenKey = { connection: matched.alias ?? resolvedUrl, caller };
+
+    const applyBearer = (token: string): void => {
+      // Override any Authorization set by the template or the client (any casing).
+      delete resolvedHeaders.Authorization;
+      delete resolvedHeaders.authorization;
+      resolvedHeaders.Authorization = `Bearer ${token}`;
+    };
+
+    const doFetch = (): Promise<Response> =>
+      fetch(resolvedUrl, { method, headers: resolvedHeaders, body: fetchBody });
+
+    let token: string;
+    try {
+      token = await tokenManager.getAccessToken(tokenKey, oauth2, resolveSecret);
+    } catch (err) {
+      throw asAuthError(err, matched.alias ?? 'connection');
+    }
+    applyBearer(token);
+
+    resp = await doFetch();
+
+    // 401 recovery: force ONE refresh + ONE retry, guarded so it can never loop.
+    // `retried` flips to true on the single retry; the `&& !retried` condition
+    // means a still-401 response after the retry falls straight through and is
+    // returned as-is. Non-401 responses are never retried here.
+    let retried = false;
+    while (resp.status === 401 && !retried) {
+      retried = true;
+      let freshToken: string;
+      try {
+        // forceRefresh (NOT invalidate): preserves a rotated refresh token.
+        freshToken = await tokenManager.getAccessToken(tokenKey, oauth2, resolveSecret, {
+          forceRefresh: true,
+        });
+      } catch (err) {
+        throw asAuthError(err, matched.alias ?? 'connection');
+      }
+      applyBearer(freshToken);
+      resp = await doFetch();
+    }
+  } else {
+    resp = await fetch(resolvedUrl, {
+      method,
+      headers: resolvedHeaders,
+      body: fetchBody,
+    });
+  }
 
   const contentType = resp.headers.get('content-type') ?? '';
   let responseBody: unknown;
@@ -228,6 +316,30 @@ export async function executeProxyRequest(
     headers: Object.fromEntries(resp.headers.entries()),
     body: responseBody,
   };
+}
+
+/**
+ * Translate a TokenManager error into a clear request-path failure WITHOUT
+ * leaking any token material. A terminal `invalid_grant` becomes a re-auth
+ * error; a transient refresh failure surfaces as an upstream auth failure — we
+ * never silently fall through to an unauthenticated request.
+ */
+function asAuthError(err: unknown, connection: string): Error {
+  if (err instanceof OAuth2InvalidGrantError) {
+    return new Error(
+      `OAuth2 authentication failed for connection "${connection}": the credentials are no longer valid and the connection needs to be re-authorized.`,
+    );
+  }
+  if (err instanceof OAuth2RefreshError) {
+    return new Error(
+      `OAuth2 token refresh failed for connection "${connection}"` +
+        (err.status !== undefined ? ` (HTTP ${err.status})` : '') +
+        '. The upstream token endpoint could not issue an access token.',
+    );
+  }
+  // Unknown error — re-throw as-is rather than swallowing it. (Still no token
+  // material: TokenManager never puts secrets in its error messages.)
+  return err instanceof Error ? err : new Error(String(err));
 }
 
 // ── Tool handlers ──────────────────────────────────────────────────────────
@@ -254,8 +366,12 @@ export const toolHandlers: Record<string, ToolHandler> = {
    * Proxied HTTP request with route-scoped secret injection.
    * Delegates to the extracted executeProxyRequest() function.
    */
-  async http_request(input, routes, _context) {
-    return executeProxyRequest(input as unknown as ProxyRequestInput, routes);
+  async http_request(input, routes, context) {
+    // Scope OAuth2 tokens to the caller making this request, using the shared
+    // TokenManager (so the request path and poll ingestor share one cache).
+    return executeProxyRequest(input as unknown as ProxyRequestInput, routes, {
+      caller: context.callerAlias,
+    });
   },
 
   /**

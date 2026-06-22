@@ -814,3 +814,138 @@ describe('Poll factory registration', () => {
     expect(ingestor).toBeNull();
   });
 });
+
+// ── OAuth2 token injection (Card 3) ──────────────────────────────────
+
+describe('PollIngestor — OAuth2 token injection', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const FIXTURE_OAUTH2 = {
+    tokenUrl: 'https://accounts.fixture.com/token',
+    grant: 'refresh_token' as const,
+    clientAuth: 'basic' as const,
+    secretRefs: { clientId: 'ID', clientSecret: 'SECRET', refreshToken: 'RT' },
+  };
+
+  /** Fake TokenManager returning queued tokens, recording forceRefresh flags. */
+  function fakeTokenManager(tokens: string[]) {
+    const calls: { forceRefresh: boolean }[] = [];
+    let i = 0;
+    const getAccessToken = vi.fn(
+      (_k: unknown, _o: unknown, _r: unknown, opts?: { forceRefresh?: boolean }) => {
+        calls.push({ forceRefresh: opts?.forceRefresh ?? false });
+        const t = tokens[Math.min(i, tokens.length - 1)];
+        i++;
+        return Promise.resolve(t);
+      },
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal TokenManager stand-in
+    return { manager: { getAccessToken, invalidate: vi.fn() } as any, calls };
+  }
+
+  function makeIngestor(tokens: string[]) {
+    const { manager, calls } = fakeTokenManager(tokens);
+    const ingestor = new PollIngestor(
+      'fixture',
+      { ID: 'id-val', SECRET: 'secret-val', RT: 'rt-val' },
+      defaultConfig({ url: 'https://api.fixture.com/items', deduplicateBy: 'id' }),
+      {},
+      undefined,
+      undefined,
+      { oauth2: FIXTURE_OAUTH2, caller: 'alice', tokenManager: manager },
+    );
+    return { ingestor, manager, calls };
+  }
+
+  it('injects Authorization: Bearer <token> from the manager before polling', async () => {
+    fetchMock.mockResolvedValue(mockResponse([{ id: 'a' }]));
+    const { ingestor, calls } = makeIngestor(['poll-token']);
+
+    await ingestor.start();
+    await ingestor.stop();
+
+    expect(calls[0]).toEqual({ forceRefresh: false });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer poll-token');
+  });
+
+  it('scopes the token key to (connection, caller)', async () => {
+    fetchMock.mockResolvedValue(mockResponse([]));
+    const { ingestor, manager } = makeIngestor(['t']);
+
+    await ingestor.start();
+    await ingestor.stop();
+
+    const [key] = (manager.getAccessToken as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      { connection: string; caller: string },
+    ];
+    expect(key).toEqual({ connection: 'fixture', caller: 'alice' });
+  });
+
+  it('on a 401 poll, force-refreshes once and retries the poll once', async () => {
+    fetchMock
+      .mockResolvedValueOnce(mockResponse({ error: 'unauthorized' }, 401))
+      .mockResolvedValueOnce(mockResponse([{ id: 'a' }], 200));
+    const { ingestor, calls } = makeIngestor(['stale', 'fresh']);
+
+    await ingestor.start();
+
+    // One initial poll: original fetch (401) + single retry fetch (200).
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(calls).toEqual([{ forceRefresh: false }, { forceRefresh: true }]);
+    const [, retryInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect((retryInit.headers as Record<string, string>).Authorization).toBe('Bearer fresh');
+    // Retry succeeded → connected, not reconnecting.
+    expect(ingestor.getStatus().state).toBe('connected');
+
+    await ingestor.stop();
+  });
+
+  it('a persistent 401 retries only once (no loop) and surfaces as a single poll error', async () => {
+    fetchMock.mockResolvedValue(mockResponse({ error: 'unauthorized' }, 401));
+    const { ingestor, calls } = makeIngestor(['t1', 't2']);
+
+    await ingestor.start();
+
+    // Exactly one initial poll → 2 fetches (original + single retry), never more.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(calls).toEqual([{ forceRefresh: false }, { forceRefresh: true }]);
+    // A single failed poll increments consecutive errors by 1 (not a loop).
+    expect(ingestor.getStatus().state).toBe('reconnecting');
+
+    await ingestor.stop();
+  });
+
+  it('does not invoke the token manager for a non-oauth2 poll route', async () => {
+    fetchMock.mockResolvedValue(mockResponse([]));
+    const { manager } = fakeTokenManager(['unused']);
+    const ingestor = new PollIngestor(
+      'plain',
+      {},
+      defaultConfig(),
+      { Authorization: 'Bearer static' },
+      undefined,
+      undefined,
+      { tokenManager: manager }, // no oauth2 block
+    );
+
+    await ingestor.start();
+    await ingestor.stop();
+
+    expect(manager.getAccessToken).not.toHaveBeenCalled();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer static');
+  });
+});
