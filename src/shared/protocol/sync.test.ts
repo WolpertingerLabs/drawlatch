@@ -16,10 +16,14 @@ describe('generateSyncCode', () => {
     expect(code).toMatch(/^[A-Z]+-\d{4}$/);
   });
 
-  it('generates unique codes', () => {
-    const codes = new Set(Array.from({ length: 50 }, () => generateSyncCode()));
-    // With ~76 words * 9000 numbers, collisions in 50 are extremely unlikely
-    expect(codes.size).toBe(50);
+  it('generates near-unique codes', () => {
+    // 76 words * 9000 numbers = ~684k space. Collisions are possible but rare
+    // (birthday paradox: ~0.2% chance of one collision in 50 draws), so assert
+    // a high uniqueness ratio rather than perfection — asserting exact
+    // uniqueness made this test intermittently flaky in CI.
+    const N = 50;
+    const codes = new Set(Array.from({ length: N }, () => generateSyncCode()));
+    expect(codes.size).toBeGreaterThanOrEqual(N - 2);
   });
 });
 
