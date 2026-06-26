@@ -15,7 +15,7 @@ export default defineConfig({
         'src/shared/crypto/index.ts',
         'src/shared/protocol/index.ts',
       ],
-      reporter: ['text', 'text-summary', 'lcov'],
+      reporter: ['text', 'text-summary', 'lcov', 'json-summary'],
       thresholds: {
         statements: 50,
         branches: 40,
