@@ -239,12 +239,18 @@ describe('Full handshake flow', () => {
 
     const finish = initiator.createFinish(initiatorSessionKeys);
 
-    // Tamper with the finish payload
-    const tampered = { ...finish, payload: finish.payload.replace(/[0-9a-f]/, '0') };
+    // Tamper with the finish payload. payload is hex, so flip the first nibble
+    // to a guaranteed-different value — replacing the first [0-9a-f] with '0'
+    // was a no-op whenever that char was already '0' (~1/16 of runs), leaving
+    // the payload intact and the verification (correctly) passing → flaky.
+    const tampered = {
+      ...finish,
+      payload: finish.payload.replace(/[0-9a-f]/, (c) => (c === '0' ? '1' : '0')),
+    };
 
     const verified = responder.verifyFinish(tampered, responderSessionKeys);
-    // May or may not throw depending on which byte was changed, but should not verify
-    // The verifyFinish method catches exceptions and returns false
+    // The tampered ciphertext must fail authenticated decryption; verifyFinish
+    // catches the exception and returns false.
     expect(verified).toBe(false);
   });
 
