@@ -776,7 +776,7 @@ describe('loadRemoteConfig', () => {
     expect(config.host).toBe('127.0.0.1');
     expect(config.port).toBe(9999);
     expect(config.callers).toEqual({});
-    expect(config.rateLimitPerMinute).toBe(60);
+    expect(config.rateLimitPerMinute).toBe(240);
 
     existsSpy.mockRestore();
   });
@@ -811,7 +811,7 @@ describe('loadRemoteConfig', () => {
     expect(config.connectors).toHaveLength(1);
     expect(config.callers.laptop.connections).toEqual(['my-api']);
     // Default values still present
-    expect(config.rateLimitPerMinute).toBe(60);
+    expect(config.rateLimitPerMinute).toBe(240);
 
     existsSpy.mockRestore();
     readSpy.mockRestore();
