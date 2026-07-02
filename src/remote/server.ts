@@ -151,7 +151,7 @@ export interface SessionSnapshot {
 const sessions = new Map<string, Session>();
 const pendingHandshakes = new Map<string, PendingHandshake>();
 
-let rateLimitPerMinute = 60;
+let rateLimitPerMinute = 240;
 
 /** Read package.json version once at module load. */
 const PKG_VERSION: string = (() => {
