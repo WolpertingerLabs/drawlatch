@@ -1,0 +1,24 @@
+{
+  "name": "Exa Search API",
+  "stability": "beta",
+  "category": "ai",
+  "description": "Exa AI search API — neural and keyword web search, page content retrieval, similarity search, and LLM-grounded answers. Endpoints include /search (find pages by meaning or keyword), /contents (fetch cleaned page text, highlights, and summaries), /findSimilar (semantically similar pages), and /answer (a sourced answer to a question). All calls are POST with a JSON body. Auth is handled automatically via the EXA_API_KEY environment variable, injected as the x-api-key header.",
+  "docsUrl": "https://docs.exa.ai/reference/getting-started",
+  "headers": {
+    "x-api-key": "${EXA_API_KEY}",
+    "Content-Type": "application/json"
+  },
+  "secrets": {
+    "EXA_API_KEY": "${EXA_API_KEY}"
+  },
+  "allowedEndpoints": ["https://api.exa.ai/**"],
+  "testConnection": {
+    "method": "POST",
+    "url": "https://api.exa.ai/search",
+    "body": {
+      "query": "drawlatch connection test",
+      "numResults": 1
+    },
+    "description": "Runs a minimal search query to verify the Exa API key"
+  }
+}
