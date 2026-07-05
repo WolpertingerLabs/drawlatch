@@ -319,6 +319,17 @@ describe('bundled connection templates', () => {
     expect(route.openApiUrl).toBeTruthy();
   });
 
+  it('should load exa connection template', () => {
+    const route = loadConnection('exa');
+
+    expect(route.name).toBe('Exa Search API');
+    expect(route.allowedEndpoints).toEqual(['https://api.exa.ai/**']);
+    expect(route.secrets).toHaveProperty('EXA_API_KEY');
+    expect(route.headers).toHaveProperty('x-api-key');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.testConnection?.method).toBe('POST');
+  });
+
   it('should load openrouter connection template', () => {
     const route = loadConnection('openrouter');
 
