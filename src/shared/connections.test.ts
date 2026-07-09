@@ -4,8 +4,10 @@ import {
   loadConnection,
   listAvailableConnections,
   listConnectionTemplates,
+  validateOAuth2Config,
   _resetConnectionIndex,
 } from './connections.js';
+import type { OAuth2Config } from './config.js';
 
 // Ensure node:fs is properly instrumentable by vitest's spy mechanism.
 // Without this, the first vi.spyOn(fs, 'readFileSync') call in a file can
@@ -75,6 +77,48 @@ describe('loadConnection', () => {
     expect(route.allowedEndpoints).toEqual(['https://api.test.com/**']);
     expect(route.secrets).toEqual({ TEST_TOKEN: '${TEST_TOKEN}' });
     expect(route.headers).toEqual({ Authorization: 'Bearer ${TEST_TOKEN}' });
+  });
+
+  it('should validate a well-formed oauth2 block on load (no throw)', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['oauth-good.json']);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'OAuth Good',
+        allowedEndpoints: ['https://api.good.com/**'],
+        secrets: { ID: '${ID}', SECRET: '${SECRET}', RT: '${RT}' },
+        oauth2: {
+          tokenUrl: 'https://good.com/token',
+          grant: 'refresh_token',
+          clientAuth: 'basic',
+          secretRefs: { clientId: 'ID', clientSecret: 'SECRET', refreshToken: 'RT' },
+        },
+      }),
+    );
+
+    const route = loadConnection('oauth-good');
+    expect(route.oauth2?.grant).toBe('refresh_token');
+  });
+
+  it('should reject a malformed oauth2 block at load time', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['oauth-bad.json']);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'OAuth Bad',
+        allowedEndpoints: ['https://api.bad.com/**'],
+        secrets: { ID: '${ID}', SECRET: '${SECRET}' },
+        // refresh_token grant WITHOUT a refreshToken secretRef — invalid.
+        oauth2: {
+          tokenUrl: 'https://bad.com/token',
+          grant: 'refresh_token',
+          clientAuth: 'basic',
+          secretRefs: { clientId: 'ID', clientSecret: 'SECRET' },
+        },
+      }),
+    );
+
+    expect(() => loadConnection('oauth-bad')).toThrow(/refreshToken/);
   });
 
   it('should throw for unknown connection name', () => {
@@ -1284,6 +1328,260 @@ describe('listConnectionTemplates — category field (integration)', () => {
     for (const t of templates) {
       const route = loadConnection(t.alias);
       expect(route.category).toBe(t.category);
+    }
+  });
+});
+
+// ── OAuth2 block: secret introspection ──────────────────────────────────
+
+describe('listConnectionTemplates — oauth2 secret introspection (unit)', () => {
+  beforeEach(() => {
+    _resetConnectionIndex();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    _resetConnectionIndex();
+  });
+
+  it('should surface clientId + clientSecret + refreshToken as required for a refresh_token grant', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['oauthy.json']);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'OAuthy',
+        category: 'social-media',
+        allowedEndpoints: ['https://api.oauthy.com/**'],
+        // No static auth header — the Bearer token is resolved via oauth2.
+        secrets: {
+          OAUTHY_CLIENT_ID: '${OAUTHY_CLIENT_ID}',
+          OAUTHY_CLIENT_SECRET: '${OAUTHY_CLIENT_SECRET}',
+          OAUTHY_REFRESH_TOKEN: '${OAUTHY_REFRESH_TOKEN}',
+        },
+        oauth2: {
+          tokenUrl: 'https://accounts.oauthy.com/api/token',
+          grant: 'refresh_token',
+          clientAuth: 'basic',
+          secretRefs: {
+            clientId: 'OAUTHY_CLIENT_ID',
+            clientSecret: 'OAUTHY_CLIENT_SECRET',
+            refreshToken: 'OAUTHY_REFRESH_TOKEN',
+          },
+        },
+      }),
+    );
+
+    const t = listConnectionTemplates()[0];
+    expect(t.requiredSecrets).toEqual([
+      'OAUTHY_CLIENT_ID',
+      'OAUTHY_CLIENT_SECRET',
+      'OAUTHY_REFRESH_TOKEN',
+    ]);
+    expect(t.optionalSecrets).toEqual([]);
+  });
+
+  it('should surface only clientId + clientSecret as required for a client_credentials grant', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['catalog.json']);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'Catalog',
+        category: 'social-media',
+        allowedEndpoints: ['https://api.oauthy.com/**'],
+        secrets: {
+          OAUTHY_CLIENT_ID: '${OAUTHY_CLIENT_ID}',
+          OAUTHY_CLIENT_SECRET: '${OAUTHY_CLIENT_SECRET}',
+        },
+        oauth2: {
+          tokenUrl: 'https://accounts.oauthy.com/api/token',
+          grant: 'client_credentials',
+          clientAuth: 'basic',
+          secretRefs: {
+            clientId: 'OAUTHY_CLIENT_ID',
+            clientSecret: 'OAUTHY_CLIENT_SECRET',
+          },
+        },
+      }),
+    );
+
+    const t = listConnectionTemplates()[0];
+    expect(t.requiredSecrets).toEqual(['OAUTHY_CLIENT_ID', 'OAUTHY_CLIENT_SECRET']);
+    expect(t.optionalSecrets).toEqual([]);
+  });
+
+  it('should not double-count a secret that is both an oauth2 ref and a header placeholder', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['dual.json']);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'Dual',
+        category: 'social-media',
+        allowedEndpoints: ['https://api.dual.com/**'],
+        headers: { 'X-Client': '${DUAL_CLIENT_ID}' },
+        secrets: {
+          DUAL_CLIENT_ID: '${DUAL_CLIENT_ID}',
+          DUAL_CLIENT_SECRET: '${DUAL_CLIENT_SECRET}',
+          DUAL_REFRESH_TOKEN: '${DUAL_REFRESH_TOKEN}',
+        },
+        oauth2: {
+          tokenUrl: 'https://accounts.dual.com/api/token',
+          grant: 'refresh_token',
+          clientAuth: 'body',
+          secretRefs: {
+            clientId: 'DUAL_CLIENT_ID',
+            clientSecret: 'DUAL_CLIENT_SECRET',
+            refreshToken: 'DUAL_REFRESH_TOKEN',
+          },
+        },
+      }),
+    );
+
+    const t = listConnectionTemplates()[0];
+    // DUAL_CLIENT_ID appears once despite being both a header placeholder and an oauth2 ref.
+    expect(t.requiredSecrets).toEqual([
+      'DUAL_CLIENT_ID',
+      'DUAL_CLIENT_SECRET',
+      'DUAL_REFRESH_TOKEN',
+    ]);
+    expect(t.optionalSecrets).toEqual([]);
+  });
+
+  it('should still classify non-oauth2 secrets as optional when an oauth2 block is present', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['poll.json']);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'Poll',
+        category: 'social-media',
+        allowedEndpoints: ['https://api.poll.com/**'],
+        secrets: {
+          POLL_CLIENT_ID: '${POLL_CLIENT_ID}',
+          POLL_CLIENT_SECRET: '${POLL_CLIENT_SECRET}',
+          POLL_REFRESH_TOKEN: '${POLL_REFRESH_TOKEN}',
+          POLL_WEBHOOK_SECRET: '${POLL_WEBHOOK_SECRET}',
+        },
+        oauth2: {
+          tokenUrl: 'https://accounts.poll.com/api/token',
+          grant: 'refresh_token',
+          clientAuth: 'basic',
+          secretRefs: {
+            clientId: 'POLL_CLIENT_ID',
+            clientSecret: 'POLL_CLIENT_SECRET',
+            refreshToken: 'POLL_REFRESH_TOKEN',
+          },
+        },
+      }),
+    );
+
+    const t = listConnectionTemplates()[0];
+    expect(t.requiredSecrets).toEqual([
+      'POLL_CLIENT_ID',
+      'POLL_CLIENT_SECRET',
+      'POLL_REFRESH_TOKEN',
+    ]);
+    expect(t.optionalSecrets).toEqual(['POLL_WEBHOOK_SECRET']);
+  });
+});
+
+// ── OAuth2 block: validation ─────────────────────────────────────────────
+
+describe('validateOAuth2Config', () => {
+  /** A minimal valid refresh_token-grant block. */
+  function refreshTokenBlock(overrides: Partial<OAuth2Config> = {}): OAuth2Config {
+    return {
+      tokenUrl: 'https://accounts.example.com/api/token',
+      grant: 'refresh_token',
+      clientAuth: 'basic',
+      secretRefs: {
+        clientId: 'CLIENT_ID',
+        clientSecret: 'CLIENT_SECRET',
+        refreshToken: 'REFRESH_TOKEN',
+      },
+      ...overrides,
+    };
+  }
+
+  /** A minimal valid client_credentials-grant block. */
+  function clientCredentialsBlock(overrides: Partial<OAuth2Config> = {}): OAuth2Config {
+    return {
+      tokenUrl: 'https://accounts.example.com/api/token',
+      grant: 'client_credentials',
+      clientAuth: 'basic',
+      secretRefs: {
+        clientId: 'CLIENT_ID',
+        clientSecret: 'CLIENT_SECRET',
+      },
+      ...overrides,
+    };
+  }
+
+  it('should accept a well-formed refresh_token block', () => {
+    expect(() => validateOAuth2Config(refreshTokenBlock())).not.toThrow();
+  });
+
+  it('should accept a well-formed client_credentials block', () => {
+    expect(() => validateOAuth2Config(clientCredentialsBlock())).not.toThrow();
+  });
+
+  it('should reject a missing tokenUrl', () => {
+    const block = refreshTokenBlock();
+    // @ts-expect-error — deliberately invalid for the test
+    delete block.tokenUrl;
+    expect(() => validateOAuth2Config(block)).toThrow(/tokenUrl/);
+  });
+
+  it('should reject a missing grant', () => {
+    const block = clientCredentialsBlock();
+    // @ts-expect-error — deliberately invalid for the test
+    delete block.grant;
+    expect(() => validateOAuth2Config(block)).toThrow(/grant/);
+  });
+
+  it('should reject an unknown grant', () => {
+    const block = clientCredentialsBlock({ grant: 'authorization_code' as OAuth2Config['grant'] });
+    expect(() => validateOAuth2Config(block)).toThrow(/grant/);
+  });
+
+  it('should reject a refresh_token grant that omits secretRefs.refreshToken', () => {
+    const block = refreshTokenBlock();
+    delete block.secretRefs.refreshToken;
+    expect(() => validateOAuth2Config(block)).toThrow(/refreshToken/);
+  });
+
+  it('should reject a missing secretRefs.clientId', () => {
+    const block = clientCredentialsBlock();
+    // @ts-expect-error — deliberately invalid for the test
+    delete block.secretRefs.clientId;
+    expect(() => validateOAuth2Config(block)).toThrow(/clientId/);
+  });
+
+  it('should reject a missing secretRefs.clientSecret', () => {
+    const block = refreshTokenBlock();
+    // @ts-expect-error — deliberately invalid for the test
+    delete block.secretRefs.clientSecret;
+    expect(() => validateOAuth2Config(block)).toThrow(/clientSecret/);
+  });
+
+  it('should NOT require a refreshToken for a client_credentials grant', () => {
+    const block = clientCredentialsBlock();
+    expect(block.secretRefs.refreshToken).toBeUndefined();
+    expect(() => validateOAuth2Config(block)).not.toThrow();
+  });
+
+  it('should reject an unknown clientAuth', () => {
+    const block = clientCredentialsBlock({
+      clientAuth: 'querystring' as OAuth2Config['clientAuth'],
+    });
+    expect(() => validateOAuth2Config(block)).toThrow(/clientAuth/);
+  });
+});
+
+describe('oauth2 templates — JSON structure validation (integration)', () => {
+  it('should have every bundled oauth2 block pass validateOAuth2Config', () => {
+    for (const alias of listAvailableConnections()) {
+      const route = loadConnection(alias);
+      if (route.oauth2) {
+        expect(() => validateOAuth2Config(route.oauth2!)).not.toThrow();
+      }
     }
   });
 });

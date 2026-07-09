@@ -219,10 +219,17 @@ export class IngestorManager {
     }
 
     // For poll ingestors, attach the resolved route headers so the factory
-    // can pass them through for authenticated HTTP requests.
+    // can pass them through for authenticated HTTP requests. When the route
+    // carries an oauth2 block, also attach it + the caller so the poller can
+    // mint a managed Bearer token via the shared TokenManager.
+    const { caller } = parseKey(key);
     if (effectiveConfig.type === 'poll') {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- private property consumed by poll factory
       (effectiveConfig as any)._resolvedRouteHeaders = resolvedRoute.headers;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- ditto
+      (effectiveConfig as any)._oauth2 = resolvedRoute.oauth2;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- ditto
+      (effectiveConfig as any)._oauth2Caller = caller;
     }
 
     const ingestor = createIngestor(
@@ -234,7 +241,6 @@ export class IngestorManager {
     );
 
     if (ingestor) {
-      const { caller } = parseKey(key);
       ingestor.callerAlias = caller;
       this.ingestors.set(key, ingestor);
 
@@ -560,6 +566,10 @@ export class IngestorManager {
     if (effectiveConfig.type === 'poll') {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
       (effectiveConfig as any)._resolvedRouteHeaders = resolvedRoute.headers;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+      (effectiveConfig as any)._oauth2 = resolvedRoute.oauth2;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+      (effectiveConfig as any)._oauth2Caller = callerAlias;
     }
 
     const ingestor = createIngestor(
