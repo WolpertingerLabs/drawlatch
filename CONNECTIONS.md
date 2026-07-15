@@ -26,6 +26,7 @@ Connection templates are loaded when a caller's session is established. Custom c
 | `agentmail`     | [AgentMail API](https://docs.agentmail.to/api-reference)                                      | `AGENTMAIL_API_KEY`                        | Bearer token header (see note)        |
 | `anthropic`     | [Anthropic Claude API](https://docs.anthropic.com/en/api)                                     | `ANTHROPIC_API_KEY`                        | x-api-key header (see note)           |
 | `bluesky`       | [Bluesky API (AT Protocol)](https://docs.bsky.app/)                                           | `BLUESKY_ACCESS_TOKEN`                     | Bearer token header (see note)        |
+| `datadog`       | [Datadog API](https://docs.datadoghq.com/api/latest/)                                         | `DATADOG_API_KEY`, `DATADOG_APP_KEY`       | DD-API-KEY + DD-APPLICATION-KEY headers (see note) |
 | `devin`         | [Devin AI API](https://docs.devin.ai/api-reference/overview)                                  | `DEVIN_API_KEY`                            | Bearer token header                   |
 | `discord-bot`   | [Discord Bot API](https://discord.com/developers/docs/intro)                                  | `DISCORD_BOT_TOKEN`                        | Bot token header (see note)           |
 | `discord-oauth` | [Discord OAuth2 API](https://discord.com/developers/docs/topics/oauth2)                       | `DISCORD_OAUTH_TOKEN`                      | Bearer token header (see note)        |
@@ -53,6 +54,8 @@ Connection templates are loaded when a caller's session is established. Custom c
 > **Anthropic note:** The Anthropic API uses a custom `x-api-key` header instead of the standard `Authorization: Bearer` pattern. The `anthropic-version` header is pinned to `2023-06-01`. To use a different API version, override with a custom route.
 
 > **GitHub note:** The `github` connection includes a **webhook ingestor** for real-time events (push, pull_request, issues, etc.). Set `GITHUB_WEBHOOK_SECRET` to the webhook signing secret configured in your GitHub repository's webhook settings, then point the webhook URL to `https://<your-server>/webhooks/github`. Events are buffered and retrievable via `poll_events`. The server must be publicly accessible (or behind a tunnel like ngrok/Cloudflare Tunnel) to receive webhook POSTs. If you don't need webhook ingestion, the `GITHUB_WEBHOOK_SECRET` env var can be left unset — the REST API functionality works independently.
+
+> **Datadog note:** Datadog uses two custom auth headers instead of the standard `Authorization: Bearer` pattern: `DD-API-KEY` (an [API key](https://docs.datadoghq.com/account_management/api-app-keys/#api-keys), identifies your organization) and `DD-APPLICATION-KEY` (an [application key](https://docs.datadoghq.com/account_management/api-app-keys/#application-keys), scoped to a user's permissions). Most management endpoints (monitors, dashboards, logs search, etc.) require both; intake endpoints like metric submission need only the API key. Both v1 and v2 API paths are available under `/api`. The template targets the US1 site (`api.datadoghq.com`) by default and also allowlists the other regional sites (`api.us3.datadoghq.com`, `api.us5.datadoghq.com`, `api.datadoghq.eu`, `api.ap1.datadoghq.com`) — just use your site's base URL in request URLs. Note that the built-in connection test validates against US1 only; for other sites, verify with a direct request to `https://<your-site>/api/v1/validate`.
 
 > **Discord note:** Discord has two connection types. `discord-bot` uses the `Bot` authorization prefix for bot tokens, which have full access to most API routes (guilds, channels, messages, etc.). `discord-oauth` uses a standard `Bearer` token obtained via OAuth2, which provides user-scoped access limited to the authorized scopes (identity, guilds list, email, etc.). Both target the same v10 API base URL.
 
@@ -177,7 +180,6 @@ The following connections are on the roadmap to be added:
 - [ ] **Bitbucket** — Git hosting (Atlassian ecosystem)
 - [ ] **Asana** — Project management
 - [ ] **Confluence** — Wiki & docs (Atlassian ecosystem)
-- [ ] **Datadog** — Monitoring & observability
 - [ ] **PagerDuty** — Incident management
 
 ### Tier 3 — Popular SaaS & Business Tools

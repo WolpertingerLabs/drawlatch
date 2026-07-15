@@ -178,6 +178,19 @@ describe('bundled connection templates', () => {
     expect(route.docsUrl).toBeTruthy();
   });
 
+  it('should load datadog connection template', () => {
+    const route = loadConnection('datadog');
+
+    expect(route.name).toBe('Datadog API');
+    expect(route.allowedEndpoints).toContain('https://api.datadoghq.com/**');
+    expect(route.allowedEndpoints).toContain('https://api.datadoghq.eu/**');
+    expect(route.secrets).toHaveProperty('DATADOG_API_KEY');
+    expect(route.secrets).toHaveProperty('DATADOG_APP_KEY');
+    expect(route.headers).toHaveProperty('DD-API-KEY');
+    expect(route.headers).toHaveProperty('DD-APPLICATION-KEY');
+    expect(route.docsUrl).toBeTruthy();
+  });
+
   it('should load discord-bot connection template', () => {
     const route = loadConnection('discord-bot');
 
@@ -356,6 +369,7 @@ describe('bundled connection templates', () => {
 
     expect(available).toContain('agentmail');
     expect(available).toContain('anthropic');
+    expect(available).toContain('datadog');
     expect(available).toContain('devin');
     expect(available).toContain('discord-bot');
     expect(available).toContain('discord-oauth');
