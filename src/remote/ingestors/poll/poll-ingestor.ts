@@ -22,6 +22,9 @@ import { BaseIngestor } from '../base-ingestor.js';
 import type { PollIngestorConfig } from '../types.js';
 import { registerIngestorFactory } from '../registry.js';
 import { createLogger } from '../../../shared/logger.js';
+import type { OAuth2Config } from '../../../shared/config.js';
+import type { TokenManager } from '../../oauth/token-manager.js';
+import { getSharedTokenManager } from '../../oauth/shared-token-manager.js';
 
 const log = createLogger('poll');
 
@@ -58,6 +61,13 @@ export class PollIngestor extends BaseIngestor {
   /** Resolved headers from the parent connection route (injected by manager). */
   private readonly routeHeaders: Record<string, string>;
 
+  /** OAuth2 declaration for this route, when the connection uses managed tokens. */
+  private readonly oauth2?: OAuth2Config;
+  /** Caller alias the OAuth2 token is scoped to (the (connection, caller) key). */
+  private readonly oauth2Caller: string;
+  /** Shared token manager (same instance the request path uses). */
+  private readonly tokenManager: TokenManager;
+
   constructor(
     connectionAlias: string,
     secrets: Record<string, string>,
@@ -66,8 +76,17 @@ export class PollIngestor extends BaseIngestor {
     routeHeaders: Record<string, string>,
     bufferSize?: number,
     instanceId?: string,
+    /** OAuth2 wiring (omitted for non-oauth2 routes — behaviour unchanged). */
+    oauth2Options?: {
+      oauth2?: OAuth2Config;
+      caller?: string;
+      tokenManager?: TokenManager;
+    },
   ) {
     super(connectionAlias, 'poll', secrets, bufferSize, instanceId);
+    this.oauth2 = oauth2Options?.oauth2;
+    this.oauth2Caller = oauth2Options?.caller ?? 'unknown';
+    this.tokenManager = oauth2Options?.tokenManager ?? getSharedTokenManager();
 
     // Resolve ${VAR} placeholders in URL
     this.url = PollIngestor.resolvePlaceholders(pollConfig.url, secrets);
@@ -154,7 +173,27 @@ export class PollIngestor extends BaseIngestor {
         }
       }
 
-      const response = await fetch(this.url, fetchOptions);
+      // OAuth2 routes: inject a managed Bearer token before fetching. The
+      // managed token OVERRIDES any Authorization header from the template
+      // (same precedence contract as the request path — Card 4 templates must
+      // NOT declare a static Authorization header on an oauth2 route).
+      if (this.oauth2) {
+        const token = await this.resolveOAuthToken(false);
+        PollIngestor.applyBearer(headers, token);
+      }
+
+      let response = await fetch(this.url, fetchOptions);
+
+      // OAuth2 401 recovery: force ONE refresh + ONE retry of this poll, guarded
+      // so it can never loop and so a 401 triggers a real token refresh rather
+      // than burning the consecutive-error retry budget on repeated 401s.
+      if (this.oauth2 && response.status === 401) {
+        const fresh = await this.resolveOAuthToken(true);
+        PollIngestor.applyBearer(headers, fresh);
+        response = await fetch(this.url, fetchOptions);
+        // If still 401, fall through to the normal !response.ok handling below —
+        // we never retry a second time.
+      }
 
       // Handle ETag 304 Not Modified — no new data, not an error
       if (this.useEtag && response.status === 304) {
@@ -345,6 +384,34 @@ export class PollIngestor extends BaseIngestor {
     return `poll:${this.connectionAlias}:${id}`;
   }
 
+  // ── OAuth2 token injection ──────────────────────────────────────────
+
+  /**
+   * Obtain a managed access token for this route's oauth2 block via the shared
+   * TokenManager, scoped to (connection, caller). Secrets are resolved against
+   * this ingestor's already-resolved secret map — the same `(name) =>
+   * secrets[name]` semantics the request path uses. Never logs token material.
+   *
+   * @param forceRefresh  After a 401, force exactly one refresh (preserving a
+   *                       rotated refresh token — NOT invalidate()).
+   */
+  private resolveOAuthToken(forceRefresh: boolean): Promise<string> {
+    // `this.oauth2` is guaranteed defined by the caller's guard.
+    return this.tokenManager.getAccessToken(
+      { connection: this.connectionAlias, caller: this.oauth2Caller },
+      this.oauth2!,
+      (name) => this.secrets[name],
+      { forceRefresh },
+    );
+  }
+
+  /** Set `Authorization: Bearer <token>`, overriding any existing casing. */
+  private static applyBearer(headers: Record<string, string>, token: string): void {
+    delete headers.Authorization;
+    delete headers.authorization;
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────
 
   /**
@@ -374,5 +441,13 @@ registerIngestorFactory('poll', (connectionAlias, config, secrets, bufferSize, i
     ((config as any)._resolvedRouteHeaders as Record<string, string>) ?? {},
     bufferSize,
     instanceId,
+    {
+      // oauth2 + caller injected by the manager via private properties; absent
+      // for non-oauth2 routes (tokenManager defaults to the shared instance).
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+      oauth2: (config as any)._oauth2 as OAuth2Config | undefined,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+      caller: (config as any)._oauth2Caller as string | undefined,
+    },
   );
 });

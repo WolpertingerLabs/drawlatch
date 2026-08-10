@@ -1,0 +1,83 @@
+{
+  "name": "Spotify Web API (User)",
+  "stability": "dev",
+  "category": "social-media",
+  "description": "Spotify Web API — user-scoped access to playback, library, playlists, recently-played, and top tracks. Authenticates via the Spotify Authorization Code + refresh flow: the daemon obtains and auto-refreshes the short-lived (1h) Bearer access token from the refresh token, so no static Authorization header is needed. Set SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, and SPOTIFY_REFRESH_TOKEN (mint the refresh token once via the authorization-code flow). Includes a poll ingestor that fetches recently-played tracks — use poll_events to retrieve them.",
+  "docsUrl": "https://developer.spotify.com/documentation/web-api",
+  "secrets": {
+    "SPOTIFY_CLIENT_ID": "${SPOTIFY_CLIENT_ID}",
+    "SPOTIFY_CLIENT_SECRET": "${SPOTIFY_CLIENT_SECRET}",
+    "SPOTIFY_REFRESH_TOKEN": "${SPOTIFY_REFRESH_TOKEN}"
+  },
+  "allowedEndpoints": ["https://api.spotify.com/**"],
+  "oauth2": {
+    "tokenUrl": "https://accounts.spotify.com/api/token",
+    "grant": "refresh_token",
+    "clientAuth": "basic",
+    "secretRefs": {
+      "clientId": "SPOTIFY_CLIENT_ID",
+      "clientSecret": "SPOTIFY_CLIENT_SECRET",
+      "refreshToken": "SPOTIFY_REFRESH_TOKEN"
+    },
+    "scopes": [
+      "user-read-playback-state",
+      "user-modify-playback-state",
+      "user-read-currently-playing",
+      "user-library-read",
+      "playlist-read-private",
+      "playlist-read-collaborative",
+      "user-read-recently-played",
+      "user-top-read",
+      "user-read-playback-position"
+    ]
+  },
+  "ingestor": {
+    "type": "poll",
+    "poll": {
+      "url": "https://api.spotify.com/v1/me/player/recently-played?limit=20",
+      "intervalMs": 300000,
+      "method": "GET",
+      "responsePath": "items",
+      "deduplicateBy": "played_at",
+      "eventType": "track_played"
+    }
+  },
+  "testIngestor": {
+    "description": "Fetches one recently-played track to verify Spotify user API access",
+    "strategy": "poll_once",
+    "request": {
+      "url": "https://api.spotify.com/v1/me/player/recently-played?limit=1",
+      "expectedStatus": [200]
+    }
+  },
+  "listenerConfig": {
+    "name": "Spotify Recently-Played Poll Listener",
+    "description": "Polls the authenticated user's recently-played tracks at a configurable interval.",
+    "fields": [
+      {
+        "key": "intervalMs",
+        "label": "Poll Interval (ms)",
+        "description": "How often to check for recently-played tracks, in milliseconds. Spotify rate-limits, so keep this generous.",
+        "type": "number",
+        "default": 300000,
+        "min": 60000,
+        "max": 3600000,
+        "group": "Connection"
+      },
+      {
+        "key": "bufferSize",
+        "label": "Buffer Size",
+        "description": "Maximum number of events to keep in memory.",
+        "type": "number",
+        "default": 200,
+        "min": 10,
+        "max": 1000,
+        "group": "Advanced"
+      }
+    ]
+  },
+  "testConnection": {
+    "url": "https://api.spotify.com/v1/me",
+    "description": "Fetches the authenticated Spotify user profile"
+  }
+}
