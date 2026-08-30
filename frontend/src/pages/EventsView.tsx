@@ -468,6 +468,14 @@ export default function EventsView() {
                     {expanded && (
                       <div className="dl-events-detail">
                         <div className="dl-events-detail-meta">
+                          {ev.instanceId && (
+                            <span>
+                              <span className="dl-events-muted">
+                                instanceId:
+                              </span>{" "}
+                              <span className="mono">{ev.instanceId}</span>
+                            </span>
+                          )}
                           <span>
                             <span className="dl-events-muted">id:</span>{" "}
                             <span className="mono">{ev.id}</span>

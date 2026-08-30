@@ -49,11 +49,20 @@
   z-index: 90;
 }
 
+/* An absolutely positioned shrink-to-fit box takes max(min-content, ...), and
+ * the caller alias inside is one unbreakable nowrap token, so a long one made
+ * the menu 404px and pushed it off a 320px screen. min-width:0 down the chain
+ * is not enough — the alias is a block, not a flex item, so its nowrap
+ * min-content still propagates. Cap the box against the viewport instead; the
+ * alias then ellipsizes as .dl-conn-caller-item-alias already asks it to.
+ * 24px is the .main-content-mobile gutter, and the menu's left edge sits on
+ * it. No effect at desktop widths, where the menu is far narrower. */
 .dl-conn-caller-menu {
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
   min-width: 240px;
+  max-width: calc(100vw - 24px);
   z-index: 100;
   background: #16161a;
   border: 1px solid #2a2a30;
@@ -84,6 +93,16 @@
   align-items: center;
   gap: 8px;
   flex: 1;
+  min-width: 0;
+}
+
+/* .dl-conn-caller-item-alias below already ellipsizes, but this wrapper had no
+ * rule at all, so its default min-width:auto floored it at the alias's
+ * min-content width — one unbreakable token. .dl-conn-caller-item-main can
+ * shrink, but that floor propagated through this element up to the absolutely
+ * positioned menu's shrink-to-fit width and pushed it past the screen. The
+ * ellipsis only gets a chance to apply once this can shrink. */
+.dl-conn-caller-item-text {
   min-width: 0;
 }
 
@@ -195,7 +214,12 @@
 }
 
 /* ── Link button (empty state) ── */
+/* Sits mid-sentence, so it carries .dl-tap-compact: the <768px tap-target rule
+ * would otherwise make it a 44px-tall box and blow the line box of the
+ * paragraph around it apart. position:relative anchors that utility's
+ * pseudo-element. */
 .dl-conn-link-btn {
+  position: relative;
   border: none;
   background: none;
   padding: 0;
@@ -219,7 +243,10 @@
 }
 .dl-conn-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  /* min(360px, 100%), not a bare 360px: on a phone narrower than 384px the
+   * fixed track floor is wider than the column it sits in, so the cards would
+   * hang off the side and scroll the page sideways. */
+  grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
   gap: 12px;
 }
 
@@ -293,6 +320,9 @@
 }
 
 /* ── Toggle ── */
+/* Carries .dl-tap-compact (index.css): the <768px tap-target rule would round
+ * this 40×22 pill into a 44×44 circle with the knob stranded in a corner.
+ * position:relative doubles as the anchor for that utility's hit area. */
 .dl-conn-toggle {
   position: relative;
   width: 40px;
