@@ -1228,12 +1228,29 @@ button {
     margin-top: 8px;
   }
 
-  /* These hold fingerprints, endpoint URLs and config paths — none of which
-   * offer a break opportunity. A `1fr` track still floors at the item's
-   * min-content width, so one long value stretched the page well past the
+  /* A guard, not a fix for anything on screen today: the only .kv-grid is
+   * ConnectionDetail's, whose values are an ingestor type and four yes/no
+   * flags. A `1fr` track floors at the item's min-content width, so the day a
+   * URL or fingerprint is added here it would stretch the page past the
    * viewport. `anywhere` (unlike `break-word`) shrinks that floor too. */
   .kv-grid dd {
     min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* Where the unbreakable values actually are. A caller fingerprint is 47
+   * characters of colon-separated hex and Chrome will not break on `:`, so as
+   * a flex item with the default min-width:auto it set the header's width and
+   * panned the whole page sideways on a phone (CallerDetail). */
+  .subtitle-meta > * {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* Overview puts the daemon's config path here — one unbreakable 308px chunk
+   * in a 296px column at 320px wide. The header column is itself a flex item,
+   * so this has to shrink the min-content size, not just wrap. */
+  .page-subtitle {
     overflow-wrap: anywhere;
   }
 
@@ -1269,6 +1286,13 @@ button {
   .dl-tap-compact {
     min-width: 0;
     min-height: 0;
+    /* The min-width above is also a flex item's shrink floor, so dropping it
+     * lets a control that is a flex item shrink below its own content — the
+     * editing banner's Cancel squashed to 22px with the word spilling out of
+     * the banner. Nothing using this utility ever wants to shrink (they are
+     * fixed-size switches and short captions), so pin them. Inert on the
+     * inline and absolutely positioned consumers. */
+    flex-shrink: 0;
   }
 
   .dl-tap-compact::after {

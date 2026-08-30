@@ -12,6 +12,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .dl-events-caller-label {
@@ -21,7 +22,14 @@
   color: #8b8b94;
 }
 
+/* A <select> sizes itself to its widest <option>, not to its container, so one
+ * caller with a long "name (alias)" made this 583px wide at every viewport and
+ * panned the page sideways on a phone (and at 1024). Cap it and let the
+ * selected label ellipsize; the full name is still in the open dropdown. */
 .dl-events-caller-select select {
+  min-width: 0;
+  max-width: 220px;
+  text-overflow: ellipsis;
   background: #16161a;
   border: 1px solid #2a2a30;
   border-radius: 6px;
@@ -320,17 +328,26 @@
   .dl-events-preview {
     display: none;
   }
+
+  /* Same call as .dl-events-preview above: below 640 there is no width for a
+   * listener instance id to shrink into. Letting it ellipsize instead left a
+   * 10px stub rendering a bare "s" with the ellipsis itself clipped off, which
+   * reads as if the id were the letter s. It is shown in full in the expanded
+   * detail. Scoped to the feed row — the same class labels the ingestor status
+   * card, which has room for it. */
+  .dl-events-row .dl-events-instance {
+    display: none;
+  }
+
   .dl-events-detail {
     padding-left: 16px;
   }
 }
 
 @media (max-width: 768px) {
-  /* The instance id and event type were pinned at flex-shrink:0, so a long
-   * listener name ("slack-workspace-production-…") set the width of the whole
-   * feed and scrolled the page sideways. Let them give way and ellipsize; the
-   * full value is in the expanded detail below. */
-  .dl-events-instance,
+  /* The event type was pinned at flex-shrink:0, so a long one set the width of
+   * the whole feed and scrolled the page sideways. Let it give way and
+   * ellipsize. */
   .dl-events-type {
     min-width: 0;
     overflow: hidden;
@@ -338,20 +355,19 @@
     white-space: nowrap;
   }
 
-  /* The event type is the more useful of the two, so make the instance id give
-   * way first. */
-  .dl-events-instance {
-    flex-shrink: 3;
-  }
-
-  .dl-events-type {
-    flex-shrink: 1;
-  }
-
   /* Event ids and idempotency keys are unbreakable, and flex items default to
    * min-width:auto, so one of them widened the detail panel the same way. */
   .dl-events-detail-meta > span {
     min-width: 0;
     overflow-wrap: anywhere;
+  }
+
+  /* The other .dl-events-instance: in the ingestor card head it sits beside
+   * the connection name and the three together overrun a 320/360px screen.
+   * Wrap it onto its own line rather than shrink it — this is the one place
+   * the instance id is the card's subject, so it has to stay readable in
+   * full, and .dl-events-ingestor-meta below already wraps the same way. */
+  .dl-events-ingestor-head {
+    flex-wrap: wrap;
   }
 }

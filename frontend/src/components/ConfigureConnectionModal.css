@@ -418,13 +418,16 @@
    * past the row on each side. Both neighbours are interactive and sat closer
    * than that: the field's own input 6px below, and the previous field's
    * reveal button 14px above (whose target reaches back down 22px from the
-   * centre of a 34px input). 16px on both puts every pair of centres at least
-   * 44px apart — widen the real gap rather than clip a target. */
+   * centre of a 34px input). Widen the real gap rather than clip a target.
+   *
+   * 20px, not the 16px that just clears: 16 put the nearest pair of centres
+   * 44.2px apart, and a platform font substituting a 2px shorter input would
+   * flip that into the reveal button eating taps meant for Clear. */
   .dl-secrets-field-head {
-    margin-bottom: 16px;
+    margin-bottom: 20px;
   }
 
   .dl-secrets-fields {
-    gap: 16px;
+    gap: 20px;
   }
 }

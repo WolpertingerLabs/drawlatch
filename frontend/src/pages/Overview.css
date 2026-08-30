@@ -6,7 +6,6 @@
  */
 
 .dl-tunnel-card {
-  gap: 10px;
   /* Grid items default to min-width:auto, so the long tunnel URL would widen
    * the whole card grid (and with it the page) instead of wrapping. */
   min-width: 0;
@@ -120,17 +119,6 @@
   background: #0d0d0f;
 }
 
-@media (max-width: 768px) {
-  /* The switch's hit area reaches 22px below its centre but the URL link
-   * underneath starts 6px below the header row, so a strip of the link would
-   * toggle the tunnel instead of opening it. Push the rows apart rather than
-   * clip the target. Qualified with .card because index.css is bundled after
-   * this file and its `.card { gap: 6px }` would otherwise win on order. */
-  .card.dl-tunnel-card {
-    gap: 16px;
-  }
-}
-
 .dl-tunnel-switch-spin {
   position: absolute;
   top: 4px;
@@ -174,4 +162,27 @@
   padding: 1px 5px;
   background: rgba(255, 255, 255, 0.05);
   border-radius: 4px;
+}
+
+/* ── Mobile ──────────────────────────────────────────────────────────── */
+
+/* Last in the file so both rules win on order over the ones they override. */
+@media (max-width: 768px) {
+  /* The switch's hit area reaches 22px below its centre but the URL link
+   * underneath starts 6px below the header row, so a strip of the link would
+   * toggle the tunnel instead of opening it. Push the rows apart rather than
+   * clip the target. Qualified with .card because index.css is bundled after
+   * this file and its `.card { gap: 6px }` would otherwise win on order. */
+  .card.dl-tunnel-card {
+    gap: 16px;
+  }
+
+  /* index.css collapses .card.span-2 to one track here; this banner spans the
+   * grid the same way but was missed, so whenever it renders (tunnel enabled
+   * without a URL yet, or the reverse) it held the Overview grid at two
+   * columns of ~116px and ~165px on a phone and broke the cards' text
+   * mid-word. */
+  .dl-tunnel-restart-banner {
+    grid-column: span 1;
+  }
 }

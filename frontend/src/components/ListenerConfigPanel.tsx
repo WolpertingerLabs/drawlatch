@@ -533,7 +533,7 @@ export default function ListenerConfigPanel({
                 <h3 className="dl-lcp-section-title">Listener Instances</h3>
                 <div className="dl-lcp-bulk">
                   <button
-                    className="dl-lcp-bulk-btn dl-tap-compact dl-lcp-ctrl-start"
+                    className="dl-lcp-bulk-btn dl-lcp-ctrl-start dl-tap-compact"
                     disabled={!!controlBusy || offline}
                     title="Start all instances"
                     onClick={() => void runControl("start")}
@@ -542,7 +542,7 @@ export default function ListenerConfigPanel({
                     All
                   </button>
                   <button
-                    className="dl-lcp-bulk-btn dl-tap-compact dl-lcp-ctrl-stop"
+                    className="dl-lcp-bulk-btn dl-lcp-ctrl-stop dl-tap-compact"
                     disabled={!!controlBusy || offline}
                     title="Stop all instances"
                     onClick={() => void runControl("stop")}
