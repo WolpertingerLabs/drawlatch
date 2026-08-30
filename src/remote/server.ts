@@ -645,6 +645,11 @@ export function createApp(options: CreateAppOptions = {}) {
         callerAlias: session.callerAlias,
         ingestorManager: app.locals.ingestorManager as IngestorManager,
         refreshRoutes: () => refreshCallerSessions(session.callerAlias),
+        // Absent on requests from older local proxies — that means "no clamp",
+        // i.e. the pre-existing behavior, not a zero budget.
+        ...(request.outboundBudgetMs !== undefined && {
+          outboundBudgetMs: request.outboundBudgetMs,
+        }),
       };
       const result = await handler(request.toolInput, session.resolvedRoutes, context);
 

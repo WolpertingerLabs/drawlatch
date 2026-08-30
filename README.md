@@ -327,7 +327,7 @@ Define reusable route templates for APIs not covered by built-in connections:
 | `headers` | No | Headers to auto-inject (`${VAR}` placeholders resolved from `secrets`) |
 | `secrets` | No | Key-value pairs — literal strings or `${ENV_VAR}` references |
 | `resolveSecretsInBody` | No | Resolve `${VAR}` in request bodies (default: `false`) |
-| `requestTimeoutMs` | No | Outbound timeout (ms) for calls to this API — also the ceiling a caller may request (default: `25000`) |
+| `requestTimeoutMs` | No | Outbound timeout (ms) for calls to this API — also the ceiling a caller may request (default: `25000`, max `290000`) |
 
 Custom connectors with an `alias` matching a built-in connection name take precedence.
 
@@ -339,7 +339,7 @@ Used by the local MCP proxy to connect to the remote server:
 {
   "remoteUrl": "http://127.0.0.1:9999",
   "connectTimeout": 10000,
-  "requestTimeout": 30000
+  "requestTimeout": 185000
 }
 ```
 
@@ -347,7 +347,7 @@ Used by the local MCP proxy to connect to the remote server:
 |-------|-------------|---------|
 | `remoteUrl` | URL of the remote server | `http://localhost:9999` |
 | `connectTimeout` | Handshake timeout (ms) | `10000` |
-| `requestTimeout` | Local → remote request timeout (ms), used when a call does not carry its own `timeoutMs` | `30000` |
+| `requestTimeout` | Local → remote request timeout (ms), used when a call does not carry its own `timeoutMs`; also sets the remote's outbound budget | `185000` |
 
 Key paths are derived automatically — no configuration needed:
 - Caller keys: `keys/callers/{MCP_KEY_ALIAS || "default"}/`
@@ -357,30 +357,63 @@ Key paths are derived automatically — no configuration needed:
 
 A proxied call passes through three nested deadlines. They are ordered so the
 **innermost fires first** — only the remote's outbound fetch can actually cancel
-the upstream API call, so it must be the one to give up:
+the upstream API call, so it must be the one to give up. This holds
+unconditionally, whether or not a call carries its own `timeoutMs`:
 
 | Layer | Deadline | Set by | Default |
 |-------|----------|--------|---------|
-| remote → upstream API | `timeoutMs` (per request) → connection's `requestTimeoutMs` → built-in default | `secure_request`, connection template | `25000` |
-| local proxy → remote | `timeoutMs` + 5000ms slack, or `requestTimeout` when no `timeoutMs` is given | `proxy.config.json` | `30000` |
+| remote → upstream API | `timeoutMs` (per request) → connection's `requestTimeoutMs` → built-in default, then clamped to the local proxy's budget | `secure_request`, connection template | `25000` |
+| local proxy → remote | `timeoutMs` + 5000ms slack, or `requestTimeout` when no `timeoutMs` is given | `proxy.config.json` | `185000` |
 | MCP client → local proxy | `MCP_TOOL_TIMEOUT` | your MCP client | `60000` |
+
+The two directions that keep the ordering true:
+
+- **Downward.** Every request carries an `outboundBudgetMs` derived from the
+  deadline the local proxy actually armed, minus its 5000ms slack. The remote
+  clamps each outbound fetch to that budget, so the outbound leg is always
+  smaller than the local leg — including for tools that expose no `timeoutMs`
+  of their own, such as `test_connection`.
+- **Upward.** A caller-supplied `timeoutMs` raises the local deadline to
+  `timeoutMs + 5000`, so asking for a longer upstream call widens the outer
+  layer to match instead of being cut short by it.
+
+Practical notes:
 
 - `timeoutMs` on `secure_request` sets the outbound deadline for a single call.
   It is clamped to the matched connection's `requestTimeoutMs` when that
-  connection sets one, and to `600000` otherwise. Zero, negative, and non-finite
-  values fall back to the connection default.
-- Because the local deadline is derived as `timeoutMs + 5000`, keep `timeoutMs`
-  at or below ~55000 to stay inside the MCP client's 60s cap.
-- **Above 60s requires client configuration.** Connections whose
-  `requestTimeoutMs` exceeds 60s (`perplexity` is 180000; `firecrawl` and
-  `parallel` are 120000) are not reachable end-to-end out of the box — you must
-  raise `MCP_TOOL_TIMEOUT` in your MCP client _and_ raise `requestTimeout` in
-  `proxy.config.json` above the outbound deadline. Without both, the outer
-  layers still cut the call short. Prefer the API's async job pattern where one
-  exists.
+  connection sets one, to `290000` otherwise, and then to the local proxy's
+  budget. Zero, negative, and non-finite values fall back to the connection
+  default. A *present but malformed* `requestTimeoutMs` on a connection (a
+  string, `null`, `0`) falls back to the `25000` default rather than removing
+  the ceiling.
+- `requestTimeout` in `proxy.config.json` is a **liveness** bound ("is the
+  remote wedged"), not a work budget. A hung upstream still fails at its own
+  much smaller deadline; only a totally unresponsive remote takes the long
+  path, and the MCP client's cap bounds that anyway. It ships at `185000` so
+  that the slowest bundled connection ceiling is reachable. Raising it does not
+  slow ordinary calls: a connection with no `requestTimeoutMs` still gets
+  `25000`.
+- The global outbound maximum is `290000`, deliberately below undici's 300s
+  internal headers timeout. Passing an `AbortSignal` does not disable that
+  timeout, it races it — so a larger value would be unreachable and would
+  surface as an opaque `UND_ERR_HEADERS_TIMEOUT` instead of a drawlatch error.
+- **Reachability: above ~55s still requires client configuration.** The MCP
+  client's 60s cap is the one layer drawlatch cannot set for you. Any connection
+  whose ceiling exceeds it — `exa`, `firecrawl`, and `parallel` at `120000`,
+  `perplexity` at `180000` — needs `MCP_TOOL_TIMEOUT` raised in your MCP client
+  before you can use the full ceiling. Every shipped ceiling does fit under the
+  default budget, so `requestTimeout` needs no adjustment. Nothing here is
+  silent — `list_routes` reports each
+  connection's `defaultTimeoutMs` and `maxTimeoutMs` under the budget currently
+  in force, and a clamped timeout error names the value to raise. Prefer the
+  API's async job pattern where one exists.
 - A call that exceeds its outbound deadline is cancelled at the socket and
-  reported as `Upstream request timed out after <n>ms`. Unlike the previous
-  behavior, the upstream request no longer keeps running after you give up.
+  reported as `Upstream request timed out after <n>ms` — including when the
+  deadline fires while reading a slow response body. If the local proxy's
+  budget was the binding constraint, the error says so and names the value to
+  raise. A host that never accepts the connection is reported separately, as
+  `Upstream never accepted the connection`, because raising `timeoutMs` will
+  not help there.
 
 ### Advanced Configuration
 

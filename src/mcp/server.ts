@@ -23,7 +23,9 @@ import {
   getCallerKeysDir,
   getServerKeysDir,
   getProxyConfigPath,
-  type ProxyConfig,
+  resolveLocalTimeout,
+  resolveOutboundBudget,
+  MAX_OUTBOUND_TIMEOUT_MS,
 } from '../shared/config.js';
 import {
   loadKeyBundle,
@@ -166,30 +168,6 @@ async function getChannel(): Promise<EncryptedChannel> {
 
 // ── Encrypted request/response ─────────────────────────────────────────────
 
-/**
- * Head-room (ms) added to the caller's requested outbound timeout to produce
- * the local → remote deadline. Covers encryption, HTTP transport, and the
- * remote's own routing work, so the remote's upstream fetch — the only layer
- * that can actually cancel the API call — always expires first.
- */
-const LOCAL_TIMEOUT_SLACK_MS = 5_000;
-
-/**
- * Deadline (ms) for the local → remote POST.
- *
- * When the request carries a `timeoutMs`, derive the deadline from it so the
- * chain stays ordered `upstream < local < MCP client`. Otherwise fall back to
- * the configured flat `requestTimeout`, which stays backward compatible for
- * anyone who set it deliberately.
- */
-function resolveLocalTimeout(toolInput: Record<string, unknown>, config: ProxyConfig): number {
-  const requested = toolInput.timeoutMs;
-  if (typeof requested === 'number' && Number.isFinite(requested) && requested > 0) {
-    return requested + LOCAL_TIMEOUT_SLACK_MS;
-  }
-  return config.requestTimeout;
-}
-
 async function sendEncryptedRequest(
   toolName: string,
   toolInput: Record<string, unknown>,
@@ -205,6 +183,10 @@ async function sendEncryptedRequest(
     id: crypto.randomUUID(),
     toolName,
     toolInput,
+    // On the envelope, not in toolInput — it has to reach handlers that never
+    // forward their input (test_connection, test_ingestor,
+    // resolve_listener_options), which is exactly where the ordering gap was.
+    outboundBudgetMs: resolveOutboundBudget(localTimeout),
     timestamp: Date.now(),
   };
 
@@ -311,9 +293,13 @@ server.tool(
       .number()
       .int()
       .positive()
+      // Without an upper bound, a large value overflows Node's 32-bit timer:
+      // the local deadline collapses to 1ms and aborts instantly while the
+      // remote's fetch runs on and bills. See MAX_LOCAL_TIMEOUT_MS.
+      .max(MAX_OUTBOUND_TIMEOUT_MS)
       .optional()
       .describe(
-        "Outbound request timeout in milliseconds — how long the server waits for the upstream API before cancelling the call. Clamped to the connection's own ceiling. Omit for the connection default (~25s, or higher for slow connections like web scraping). Values above ~55000 also require raising MCP_TOOL_TIMEOUT in your MCP client, which caps tool calls at 60s by default.",
+        `Outbound request timeout in milliseconds — how long the server waits for the upstream API before cancelling the call. Clamped to the connection's own ceiling and to the local proxy's requestTimeout budget; call list_routes to see the effective maxTimeoutMs per connection. Omit for the connection default (~25s, or higher for slow connections like web scraping). Values above ~55000 also require raising MCP_TOOL_TIMEOUT in your MCP client, which caps tool calls at 60s by default. Maximum ${MAX_OUTBOUND_TIMEOUT_MS}.`,
       ),
   },
   async ({ method, url, headers, body, files, bodyFieldName, timeoutMs }) => {

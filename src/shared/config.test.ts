@@ -17,6 +17,14 @@ import {
   getRemoteConfigPath,
   getEnvFilePath,
   resolveCallerKeyAlias,
+  resolveLocalTimeout,
+  resolveOutboundBudget,
+  LOCAL_TIMEOUT_SLACK_MS,
+  MIN_OUTBOUND_TIMEOUT_MS,
+  MAX_LOCAL_TIMEOUT_MS,
+  MAX_OUTBOUND_TIMEOUT_MS,
+  DEFAULT_OUTBOUND_TIMEOUT_MS,
+  type ProxyConfig,
 } from './config.js';
 import { _resetConnectionIndex } from './connections.js';
 
@@ -709,7 +717,7 @@ describe('loadProxyConfig', () => {
 
     expect(config.remoteUrl).toBe('http://localhost:9999');
     expect(config.connectTimeout).toBe(10_000);
-    expect(config.requestTimeout).toBe(30_000);
+    expect(config.requestTimeout).toBe(185_000);
 
     existsSpy.mockRestore();
   });
@@ -730,7 +738,7 @@ describe('loadProxyConfig', () => {
     expect(config.remoteUrl).toBe('https://custom-proxy.example.com:8443');
     expect(config.connectTimeout).toBe(5000);
     // Default values still present
-    expect(config.requestTimeout).toBe(30_000);
+    expect(config.requestTimeout).toBe(185_000);
 
     existsSpy.mockRestore();
     readSpy.mockRestore();
@@ -1271,5 +1279,117 @@ describe('saveRemoteConfig', () => {
 
     mkdirSpy.mockRestore();
     writeSpy.mockRestore();
+  });
+});
+
+// ── Nested request deadlines ───────────────────────────────────────────────
+
+describe('timeout constants', () => {
+  it('should order the chain innermost-first out of the box', () => {
+    // remote → upstream default < local → remote default < MCP client cap.
+    const shippedLocal = 185_000;
+    expect(DEFAULT_OUTBOUND_TIMEOUT_MS).toBeLessThan(shippedLocal);
+    expect(DEFAULT_OUTBOUND_TIMEOUT_MS + LOCAL_TIMEOUT_SLACK_MS).toBeLessThan(60_000);
+  });
+
+  it("should keep the outbound max below undici's 300s headers timeout", () => {
+    // An AbortSignal races undici's internal timeout rather than replacing it,
+    // so anything at or above 300s is unreachable and surfaces as an opaque
+    // UND_ERR_HEADERS_TIMEOUT instead of a drawlatch error.
+    expect(MAX_OUTBOUND_TIMEOUT_MS).toBeLessThan(300_000);
+  });
+
+  it("should keep the local max well inside Node's 32-bit timer range", () => {
+    expect(MAX_LOCAL_TIMEOUT_MS).toBeLessThan(2_147_483_647);
+  });
+});
+
+describe('resolveLocalTimeout', () => {
+  const config: ProxyConfig = {
+    remoteUrl: 'http://localhost:9999',
+    connectTimeout: 10_000,
+    requestTimeout: 185_000,
+  };
+
+  it('should fall back to requestTimeout when no timeoutMs is given', () => {
+    expect(resolveLocalTimeout({}, config)).toBe(185_000);
+  });
+
+  it('should derive from timeoutMs plus slack when one is given', () => {
+    expect(resolveLocalTimeout({ timeoutMs: 120_000 }, config)).toBe(
+      120_000 + LOCAL_TIMEOUT_SLACK_MS,
+    );
+  });
+
+  it.each([0, -1, NaN, Infinity, '30000', null])(
+    'should ignore a malformed timeoutMs of %p',
+    (bad) => {
+      expect(resolveLocalTimeout({ timeoutMs: bad }, config)).toBe(185_000);
+    },
+  );
+
+  // Unclamped, a delay above 2147483647 makes Node emit TimeoutOverflowWarning
+  // and collapse the timer to 1ms: the local POST aborts in ~2ms while the
+  // remote's fetch runs on and bills. Triggered by asking for a *longer*
+  // timeout, which is the opposite of what the caller wanted.
+  describe('32-bit timer overflow', () => {
+    it.each([2_147_483_647, 4_294_962_296, Number.MAX_SAFE_INTEGER])(
+      'should clamp a timeoutMs of %p rather than overflow the timer',
+      (huge) => {
+        const resolved = resolveLocalTimeout({ timeoutMs: huge }, config);
+        expect(resolved).toBe(MAX_LOCAL_TIMEOUT_MS);
+        expect(resolved).toBeLessThan(2_147_483_647);
+      },
+    );
+
+    it('should clamp an absurd configured requestTimeout too', () => {
+      expect(resolveLocalTimeout({}, { ...config, requestTimeout: 9_999_999_999 })).toBe(
+        MAX_LOCAL_TIMEOUT_MS,
+      );
+    });
+
+    it('should arm a usable AbortSignal at the clamped value', () => {
+      const resolved = resolveLocalTimeout({ timeoutMs: Number.MAX_SAFE_INTEGER }, config);
+      // Unclamped this throws RangeError [ERR_OUT_OF_RANGE].
+      expect(() => AbortSignal.timeout(resolved)).not.toThrow();
+    });
+
+    it.each([0, -1, NaN, Infinity])(
+      'should clamp up, not down, for a requestTimeout of %p',
+      (bad) => {
+        expect(resolveLocalTimeout({}, { ...config, requestTimeout: bad })).toBe(
+          MAX_LOCAL_TIMEOUT_MS,
+        );
+      },
+    );
+  });
+});
+
+describe('resolveOutboundBudget', () => {
+  // Derived from the deadline actually armed, not from config.requestTimeout —
+  // otherwise a caller who explicitly asked for 120s (and whose socket will
+  // wait 125s) would still be handed a 25s budget.
+  it('should subtract slack exactly once from the armed deadline', () => {
+    expect(resolveOutboundBudget(125_000)).toBe(120_000);
+  });
+
+  it('should track a caller-raised timeoutMs rather than the flat requestTimeout', () => {
+    const config: ProxyConfig = {
+      remoteUrl: 'http://localhost:9999',
+      connectTimeout: 10_000,
+      requestTimeout: 30_000,
+    };
+    const armed = resolveLocalTimeout({ timeoutMs: 120_000 }, config);
+    expect(resolveOutboundBudget(armed)).toBe(120_000);
+  });
+
+  it('should floor a pathologically small deadline instead of going negative', () => {
+    expect(resolveOutboundBudget(100)).toBe(MIN_OUTBOUND_TIMEOUT_MS);
+    expect(resolveOutboundBudget(LOCAL_TIMEOUT_SLACK_MS)).toBe(MIN_OUTBOUND_TIMEOUT_MS);
+  });
+
+  it('should give the shipped default enough room for the slowest connection', () => {
+    // perplexity ships requestTimeoutMs: 180000.
+    expect(resolveOutboundBudget(185_000)).toBeGreaterThanOrEqual(180_000);
   });
 });

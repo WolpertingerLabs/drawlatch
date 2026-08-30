@@ -99,7 +99,7 @@ All key paths are derivable from the config directory. No path fields needed in 
 
 The `requestTimeout` above is carried through unchanged from the "Before" config
 — this migration only touches key paths. Note that `300000` is **not** the
-built-in default; that is `30000` (see README → Proxy Config). The outbound
+built-in default; that is `185000` (see README → Proxy Config). The outbound
 request deadline now lives on the connection (`requestTimeoutMs`) and on each
 `secure_request` call (`timeoutMs`), so a large blanket `requestTimeout` is no
 longer the way to give slow APIs room.

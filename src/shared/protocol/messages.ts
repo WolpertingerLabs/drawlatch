@@ -14,6 +14,20 @@ export interface ProxyRequest {
   toolName: string;
   /** The tool's input parameters */
   toolInput: Record<string, unknown>;
+  /** How long (ms) the remote may spend on an outbound fetch for this request,
+   *  derived by the local proxy from the deadline it actually armed on its own
+   *  socket, minus its slack. Clamps the matched connection's
+   *  `requestTimeoutMs` so the nested deadlines stay ordered innermost-first
+   *  even for tools that expose no per-call `timeoutMs`.
+   *
+   *  Lives on the envelope rather than in `toolInput` precisely because it must
+   *  reach handlers that do not forward their input (test_connection,
+   *  test_ingestor, resolve_listener_options).
+   *
+   *  Optional, and absence means "no clamp" — an older local proxy talking to a
+   *  newer remote simply omits it, and in-process hosts never set it. Both
+   *  sides tolerate absence, so adding it is not a breaking protocol change. */
+  outboundBudgetMs?: number;
   /** Timestamp (ms since epoch) */
   timestamp: number;
 }

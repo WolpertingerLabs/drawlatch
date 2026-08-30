@@ -2,7 +2,7 @@
   "name": "Exa Search API",
   "stability": "beta",
   "category": "web-search",
-  "description": "Exa AI search API — neural and keyword web search, page content retrieval, similarity search, and LLM-grounded answers. Endpoints include /search (find pages by meaning or keyword), /contents (fetch cleaned page text, highlights, and summaries), /findSimilar (semantically similar pages), /answer (a sourced answer to a question), and /research/v1 (multi-step research runs). All calls are POST with a JSON body. Auth is handled automatically via the EXA_API_KEY environment variable, injected as the x-api-key header.",
+  "description": "Exa AI search API — neural and keyword web search, page content retrieval, similarity search, and LLM-grounded answers. Core endpoints: POST /search (find pages by meaning or keyword), POST /contents (cleaned page text, highlights, summaries), POST /findSimilar (semantically similar pages), POST /answer (a sourced answer to a question), POST /context (code snippets from open-source repos), and POST /responses and POST /chat/completions (OpenAI-compatible surfaces). The Agent API — POST /agent/runs then GET /agent/runs/{id} — runs long multi-step research and is the replacement for the retired Research API. Monitors (/monitors) schedule recurring searches, and Websets (/websets/v0/*) build verified, enriched result sets. On /search the `type` parameter is the primary quality/latency/cost dial: instant, fast, auto, deep-lite, deep, deep-reasoning (deep-reasoning takes 12-40s and replaces the old research runs). Note that not everything is POST — Websets, Monitors, and Agent runs use GET/PATCH/DELETE as well. Auth is handled automatically via the EXA_API_KEY environment variable, injected as the x-api-key header.",
   "docsUrl": "https://exa.ai/docs/reference/getting-started",
   "headers": {
     "x-api-key": "${EXA_API_KEY}",
@@ -12,7 +12,7 @@
     "EXA_API_KEY": "${EXA_API_KEY}"
   },
   "allowedEndpoints": ["https://api.exa.ai/**"],
-  "requestTimeoutMs": 45000,
+  "requestTimeoutMs": 120000,
   "testConnection": {
     "method": "POST",
     "url": "https://api.exa.ai/search",

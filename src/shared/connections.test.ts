@@ -6,6 +6,7 @@ import {
   listConnectionTemplates,
   _resetConnectionIndex,
 } from './connections.js';
+import { MAX_OUTBOUND_TIMEOUT_MS } from './config.js';
 
 // Ensure node:fs is properly instrumentable by vitest's spy mechanism.
 // Without this, the first vi.spyOn(fs, 'readFileSync') call in a file can
@@ -377,6 +378,28 @@ describe('bundled connection templates', () => {
     expect(route.headers?.Authorization).toBe('Bearer ${PERPLEXITY_API_KEY}');
     expect(route.docsUrl).toBeTruthy();
     expect(route.testConnection?.method).toBe('GET');
+    // The test endpoint sunsets 2026-09-27 along with the rest of Sonar. Keep
+    // the deadline visible in the template rather than letting the test start
+    // failing silently.
+    expect(route.description).toMatch(/2026-09-27/);
+    expect(route.testConnection?.description).toMatch(/2026-09-27/);
+  });
+
+  it('should keep every web-search ceiling inside the outbound maximum', () => {
+    for (const alias of ['exa', 'firecrawl', 'parallel', 'perplexity']) {
+      const route = loadConnection(alias);
+      expect(route.requestTimeoutMs).toBeGreaterThan(0);
+      // Above MAX_OUTBOUND_TIMEOUT_MS the value is unreachable: it is clamped
+      // down, and past undici's 300s headers timeout it would never fire at all.
+      expect(route.requestTimeoutMs).toBeLessThanOrEqual(MAX_OUTBOUND_TIMEOUT_MS);
+    }
+  });
+
+  it('should not advertise retired or pre-GA endpoint paths', () => {
+    // Exa's /research/v1 now returns 410 RESEARCH_RETIRED.
+    expect(loadConnection('exa').description).not.toMatch(/research\/v1/);
+    // Parallel's extract is GA at /v1/extract.
+    expect(loadConnection('parallel').description).not.toMatch(/v1beta\/extract/);
   });
 
   it('should load openrouter connection template', () => {
