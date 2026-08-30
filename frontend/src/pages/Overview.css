@@ -7,6 +7,9 @@
 
 .dl-tunnel-card {
   gap: 10px;
+  /* Grid items default to min-width:auto, so the long tunnel URL would widen
+   * the whole card grid (and with it the page) instead of wrapping. */
+  min-width: 0;
 }
 
 .dl-tunnel-head {
@@ -23,16 +26,23 @@
   min-width: 0;
 }
 
+/* Wraps rather than truncates: the URL is the point of the card, and on a
+ * phone there is no hover/title fallback for an ellipsis. `anywhere` (unlike
+ * `break-word`) also shrinks the min-content size, so this flex item can
+ * actually narrow instead of forcing the card wider than the screen. */
 .dl-tunnel-url {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+  min-width: 0;
   color: var(--accent, #5b9dff);
   font-size: 13px;
   text-decoration: none;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+/* Inline, so the icon trails the last line of the URL instead of being parked
+ * at the far right of the card. */
+.dl-tunnel-url svg {
+  margin-left: 4px;
+  vertical-align: -2px;
 }
 
 .dl-tunnel-url:hover {
@@ -105,6 +115,26 @@
 .dl-tunnel-switch.is-on .dl-tunnel-switch-knob {
   left: 20px;
   background: #0d0d0f;
+}
+
+/* The global <768px rule forces every button to 44×44 for tap targets, which
+ * turns this 40×22 pill into a circle. Keep the switch its own size and get the
+ * 44×44 target back from an invisible pseudo-element instead. */
+@media (max-width: 768px) {
+  .dl-tunnel-switch {
+    min-width: 40px;
+    min-height: 22px;
+  }
+
+  .dl-tunnel-switch::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
 }
 
 .dl-tunnel-switch-spin {

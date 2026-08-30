@@ -180,7 +180,7 @@ export default function Overview() {
                   className="dl-tunnel-url mono"
                 >
                   {tunnelUrl}
-                  <ExternalLink size={12} />
+                  <ExternalLink size={12} aria-hidden="true" />
                 </a>
               </>
             ) : tunnelEnabled && !tunnelUrl ? (
