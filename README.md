@@ -357,8 +357,10 @@ Key paths are derived automatically — no configuration needed:
 
 A proxied call passes through three nested deadlines. They are ordered so the
 **innermost fires first** — only the remote's outbound fetch can actually cancel
-the upstream API call, so it must be the one to give up. This holds
-unconditionally, whether or not a call carries its own `timeoutMs`:
+the upstream API call, so it must be the one to give up. The outbound leg is
+never longer than the local leg, whether or not a call carries its own
+`timeoutMs`; at a `requestTimeout` below ~6s the two converge to equal, since
+the budget cannot be floored above the deadline it is derived from:
 
 | Layer | Deadline | Set by | Default |
 |-------|----------|--------|---------|

@@ -497,6 +497,52 @@ describe('executeProxyRequest secret hygiene', () => {
     await expect(attempt).rejects.toThrow(/\$\{TRELLO_KEY\}/);
   });
 
+  it('should scrub a secret carried only on the cause chain', async () => {
+    // undici's usual shape: a clean `fetch failed` wrapper over the real reason.
+    // In-process hosts log the error object, which prints [cause].
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+      new TypeError('fetch failed', {
+        cause: new Error('connect ECONNREFUSED using key abcd-super-secret-key'),
+      }),
+    );
+
+    const attempt = executeProxyRequest({ method: 'GET', url: 'https://api.example.com/v1/x' }, [
+      testRoute({ secrets: { TOKEN: 'abcd-super-secret-key' } }),
+    ]);
+
+    await expect(attempt).rejects.not.toThrow(/abcd-super-secret-key/);
+    await expect(attempt).rejects.toSatisfy((e: Error) => e.cause === undefined);
+  });
+
+  it('should not hang on a self-referencing cause chain', async () => {
+    const looping = new TypeError('fetch failed');
+    looping.cause = looping;
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(looping);
+
+    await expect(
+      executeProxyRequest({ method: 'GET', url: 'https://api.example.com/v1/x' }, [
+        testRoute({ secrets: { TOKEN: 'abcd-super-secret-key' } }),
+      ]),
+    ).rejects.toThrow('fetch failed');
+  });
+
+  it('should scrub the longest secret first so no tail survives', async () => {
+    // INNER is a prefix of OUTER. Replacing INNER first would leave "ER-VALUE".
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+      new TypeError('Failed to parse URL from /x?k=tok-OUTER-VALUE'),
+    );
+
+    const attempt = executeProxyRequest({ method: 'GET', url: '/x?k=${OUTER}' }, [
+      testRoute({
+        secrets: { INNER: 'tok-OUT', OUTER: 'tok-OUTER-VALUE' },
+        allowedEndpoints: ['**'],
+      }),
+    ]);
+
+    await expect(attempt).rejects.toThrow(/\$\{OUTER\}/);
+    await expect(attempt).rejects.not.toThrow(/ER-VALUE/);
+  });
+
   it('should leave a generic error without secrets untouched', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
 

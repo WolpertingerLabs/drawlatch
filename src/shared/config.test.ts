@@ -1384,8 +1384,18 @@ describe('resolveOutboundBudget', () => {
   });
 
   it('should floor a pathologically small deadline instead of going negative', () => {
-    expect(resolveOutboundBudget(100)).toBe(MIN_OUTBOUND_TIMEOUT_MS);
     expect(resolveOutboundBudget(LOCAL_TIMEOUT_SLACK_MS)).toBe(MIN_OUTBOUND_TIMEOUT_MS);
+    expect(resolveOutboundBudget(LOCAL_TIMEOUT_SLACK_MS + 1)).toBe(MIN_OUTBOUND_TIMEOUT_MS);
+  });
+
+  it('should never return a budget longer than the deadline it derives from', () => {
+    // The MIN floor must not out-rank the local deadline: a budget above the
+    // local leg re-inverts the ordering this module exists to maintain, which
+    // is the original orphaned-upstream-call bug at the small end.
+    for (const localTimeout of [1, 100, 500, 999, 1_000, 1_001, 5_000, 6_000, 30_000, 185_000]) {
+      expect(resolveOutboundBudget(localTimeout)).toBeLessThanOrEqual(localTimeout);
+      expect(resolveOutboundBudget(localTimeout)).toBeGreaterThan(0);
+    }
   });
 
   it('should give the shipped default enough room for the slowest connection', () => {

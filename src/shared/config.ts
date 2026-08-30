@@ -405,7 +405,15 @@ export function resolveLocalTimeout(
  * layer that owns it; the remote never learns what the slack value is.
  */
 export function resolveOutboundBudget(localTimeout: number): number {
-  return Math.max(MIN_OUTBOUND_TIMEOUT_MS, localTimeout - LOCAL_TIMEOUT_SLACK_MS);
+  // The MIN floor keeps a pathologically small `requestTimeout` from producing a
+  // zero or negative budget — but the floor itself can exceed the local deadline
+  // (requestTimeout <= 1000 would yield a 1000ms budget against a <=1000ms local
+  // leg), re-inverting the very ordering this module exists to maintain. Cap the
+  // floor at the local deadline so the outbound leg is never the longer one.
+  return Math.min(
+    localTimeout,
+    Math.max(MIN_OUTBOUND_TIMEOUT_MS, localTimeout - LOCAL_TIMEOUT_SLACK_MS),
+  );
 }
 
 // ── Defaults ─────────────────────────────────────────────────────────────────

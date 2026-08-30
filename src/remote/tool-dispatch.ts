@@ -203,14 +203,36 @@ function classifyTimeout(err: unknown): TimeoutKind | null {
  *
  * Values shorter than 4 characters are skipped: they are not meaningful
  * secrets, and substring-replacing them would shred the message.
+ *
+ * Longest value first: when one secret is a prefix of another, replacing the
+ * shorter one first leaves the remainder of the longer one exposed (secrets
+ * `tok-OUT` and `tok-OUTER-VALUE` would scrub to `${INNER}ER-VALUE`).
  */
 function scrubSecrets(text: string, secrets: Record<string, string>): string {
+  const entries = Object.entries(secrets)
+    .filter(([, value]) => typeof value === 'string' && value.length >= 4)
+    .sort(([, a], [, b]) => b.length - a.length);
+
   let out = text;
-  for (const [name, value] of Object.entries(secrets)) {
-    if (typeof value !== 'string' || value.length < 4) continue;
+  for (const [name, value] of entries) {
     out = out.split(value).join(`\${${name}}`);
   }
   return out;
+}
+
+/**
+ * Whether any message in an error's `cause` chain carries a resolved secret.
+ *
+ * Checked separately from scrubbing because a clean top-level message can sit
+ * above a leaking cause — `TypeError: fetch failed` is undici's usual wrapper.
+ * Depth-capped and cycle-safe: `err.cause = err` is a legal construction.
+ */
+function leaksSecret(err: Error, secrets: Record<string, string>): boolean {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 4; e = e.cause, depth++) {
+    if (scrubSecrets(e.message, secrets) !== e.message) return true;
+    if (e.cause === e) break;
+  }
+  return false;
 }
 
 /** Header values fetch() rejects — and echoes back in full when it does. */
@@ -444,9 +466,13 @@ export async function executeProxyRequest(
     // sees is the secret-resolved form. Scrub before it reaches the console,
     // the client, and the model. A new Error rather than a mutation — `message`
     // is not writable on every error subclass Node throws here.
-    if (err instanceof Error) {
-      const scrubbed = scrubSecrets(err.message, matched.secrets);
-      if (scrubbed !== err.message) throw new Error(scrubbed);
+    // The chain matters, not just the top level: undici reports `TypeError:
+    // fetch failed` with the real reason on `cause`, so a clean top-level
+    // message can sit above a leaking one. In-process hosts importing this
+    // module log the error object directly, which prints `[cause]`. Rethrowing
+    // as a fresh Error drops the chain, which is the point.
+    if (err instanceof Error && leaksSecret(err, matched.secrets)) {
+      throw new Error(scrubSecrets(err.message, matched.secrets));
     }
     throw err;
   }
