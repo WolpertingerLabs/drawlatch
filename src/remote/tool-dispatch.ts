@@ -65,6 +65,84 @@ export function matchRoute(url: string, routes: ResolvedRoute[]): ResolvedRoute 
   return null;
 }
 
+// ── Outbound timeouts ──────────────────────────────────────────────────────
+
+/**
+ * Default deadline (ms) for the remote → upstream API fetch when neither the
+ * caller nor the matched route specifies one.
+ *
+ * drawlatch nests three timeout ceilings, and they must fire innermost-first
+ * so that the layer closest to the socket is the one that actually cancels the
+ * upstream work:
+ *
+ *   remote → upstream   (this constant)      <  ~25s
+ *   local  → remote     (requestTimeout)     <   30s   proxy.config.json
+ *   MCP client → local  (MCP_TOOL_TIMEOUT)   =   60s   MCP SDK default
+ *
+ * Without a signal here, a bare fetch() falls back to undici's 300s headers
+ * timeout — the *largest* deadline in the chain — so the local proxy would
+ * give up first while the upstream call kept running (and kept billing) with
+ * its result discarded. This constant keeps the innermost layer smallest.
+ */
+export const DEFAULT_OUTBOUND_TIMEOUT_MS = 25_000;
+
+/**
+ * Hard upper bound (ms) on a caller-supplied `timeoutMs` when the matched
+ * route sets no `requestTimeoutMs` of its own. A route that does set one
+ * supersedes this — its value is the ceiling for that connection.
+ */
+export const MAX_OUTBOUND_TIMEOUT_MS = 600_000;
+
+/** True only for a finite, strictly positive number (rejects 0, NaN, Infinity). */
+function isUsableTimeout(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * Resolve the effective outbound fetch deadline in milliseconds.
+ *
+ * Precedence:
+ *   1. `requested` — the caller's per-request `timeoutMs`, clamped to the
+ *      route's `requestTimeoutMs` when the route sets one, otherwise to
+ *      MAX_OUTBOUND_TIMEOUT_MS.
+ *   2. `routeTimeout` — the connection's own default (itself clamped to
+ *      MAX_OUTBOUND_TIMEOUT_MS).
+ *   3. DEFAULT_OUTBOUND_TIMEOUT_MS.
+ *
+ * Zero, negative, NaN, and Infinity are treated as "not specified" at every
+ * level, so a malformed value degrades to the next fallback rather than
+ * disabling the deadline.
+ */
+export function resolveOutboundTimeout(
+  requested: number | undefined,
+  routeTimeout: number | undefined,
+): number {
+  const routeCeiling = isUsableTimeout(routeTimeout)
+    ? Math.min(routeTimeout, MAX_OUTBOUND_TIMEOUT_MS)
+    : undefined;
+
+  if (!isUsableTimeout(requested)) {
+    return routeCeiling ?? DEFAULT_OUTBOUND_TIMEOUT_MS;
+  }
+
+  return Math.min(requested, routeCeiling ?? MAX_OUTBOUND_TIMEOUT_MS);
+}
+
+/**
+ * Detect an abort/timeout rejection from fetch(). Node surfaces these as a
+ * DOMException named "TimeoutError" or "AbortError", sometimes re-wrapped in a
+ * TypeError whose `cause` carries the original.
+ */
+function isAbortOrTimeout(err: unknown): boolean {
+  const names = new Set(['TimeoutError', 'AbortError']);
+  if (err instanceof Error) {
+    if (names.has(err.name)) return true;
+    const cause: unknown = err.cause;
+    if (cause instanceof Error && names.has(cause.name)) return true;
+  }
+  return false;
+}
+
 // ── Proxy request execution ────────────────────────────────────────────────
 
 /** A file attachment transmitted as base64 data through the encrypted channel. */
@@ -88,6 +166,10 @@ export interface ProxyRequestInput {
   files?: FileAttachment[];
   /** Form field name for the JSON body part (default: "payload_json") */
   bodyFieldName?: string;
+  /** Deadline (ms) for the outbound fetch to the upstream API. Clamped to the
+   *  matched route's `requestTimeoutMs` when it sets one. Omitted = use the
+   *  route's default, else DEFAULT_OUTBOUND_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 export interface ProxyRequestResult {
@@ -107,7 +189,7 @@ export async function executeProxyRequest(
   input: ProxyRequestInput,
   routes: ResolvedRoute[],
 ): Promise<ProxyRequestResult> {
-  const { method, url, headers = {}, body, files, bodyFieldName } = input;
+  const { method, url, headers = {}, body, files, bodyFieldName, timeoutMs } = input;
 
   // Step 1: Find matching route — try raw URL first
   let matched: ResolvedRoute | null = matchRoute(url, routes);
@@ -206,12 +288,31 @@ export async function executeProxyRequest(
     throw new Error(`Endpoint not allowed after resolution: ${url}`);
   }
 
-  // Step 7: Make the actual HTTP request
-  const resp = await fetch(resolvedUrl, {
-    method,
-    headers: resolvedHeaders,
-    body: fetchBody,
-  });
+  // Step 7: Make the actual HTTP request.
+  // Always pass a signal — a bare fetch() would inherit undici's 300s headers
+  // timeout, which is larger than every outer ceiling in the chain and so
+  // would leave the upstream call running after the caller gave up.
+  const effectiveTimeout = resolveOutboundTimeout(timeoutMs, matched.requestTimeoutMs);
+
+  let resp: Response;
+  try {
+    resp = await fetch(resolvedUrl, {
+      method,
+      headers: resolvedHeaders,
+      body: fetchBody,
+      signal: AbortSignal.timeout(effectiveTimeout),
+    });
+  } catch (err) {
+    if (isAbortOrTimeout(err)) {
+      // Report the caller's own URL, not `resolvedUrl` — the resolved form can
+      // carry secrets (e.g. Trello's key/token query params).
+      throw new Error(
+        `Upstream request timed out after ${effectiveTimeout}ms: ${method} ${url}. ` +
+          "The upstream call was cancelled. Raise timeoutMs (up to this connection's requestTimeoutMs), or use the API's async job pattern.",
+      );
+    }
+    throw err;
+  }
 
   const contentType = resp.headers.get('content-type') ?? '';
   let responseBody: unknown;

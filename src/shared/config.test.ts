@@ -326,6 +326,30 @@ describe('resolveRoutes', () => {
     expect(routes[0].resolveSecretsInBody).toBe(false);
   });
 
+  it('should carry through requestTimeoutMs when set', () => {
+    const routes = resolveRoutes([
+      {
+        secrets: { KEY: 'value' },
+        allowedEndpoints: ['https://api.example.com/**'],
+        requestTimeoutMs: 120_000,
+      },
+    ]);
+
+    expect(routes[0].requestTimeoutMs).toBe(120_000);
+  });
+
+  it('should leave requestTimeoutMs undefined when not set', () => {
+    const routes = resolveRoutes([
+      {
+        secrets: { KEY: 'value' },
+        allowedEndpoints: ['https://api.example.com/**'],
+      },
+    ]);
+
+    expect(routes[0].requestTimeoutMs).toBeUndefined();
+    expect('requestTimeoutMs' in routes[0]).toBe(false);
+  });
+
   it('should resolve header placeholders against the route own secrets', () => {
     const routes = resolveRoutes([
       {

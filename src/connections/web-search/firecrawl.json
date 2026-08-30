@@ -12,6 +12,7 @@
     "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}"
   },
   "allowedEndpoints": ["https://api.firecrawl.dev/**"],
+  "requestTimeoutMs": 120000,
   "testConnection": {
     "method": "GET",
     "url": "https://api.firecrawl.dev/v2/team/credit-usage",

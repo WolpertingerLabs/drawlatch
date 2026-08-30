@@ -12,6 +12,7 @@
     "PARALLEL_API_KEY": "${PARALLEL_API_KEY}"
   },
   "allowedEndpoints": ["https://api.parallel.ai/**"],
+  "requestTimeoutMs": 120000,
   "testConnection": {
     "method": "POST",
     "url": "https://api.parallel.ai/v1/search",

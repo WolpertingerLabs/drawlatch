@@ -23,6 +23,7 @@ import {
   getCallerKeysDir,
   getServerKeysDir,
   getProxyConfigPath,
+  type ProxyConfig,
 } from '../shared/config.js';
 import {
   loadKeyBundle,
@@ -165,12 +166,39 @@ async function getChannel(): Promise<EncryptedChannel> {
 
 // ── Encrypted request/response ─────────────────────────────────────────────
 
+/**
+ * Head-room (ms) added to the caller's requested outbound timeout to produce
+ * the local → remote deadline. Covers encryption, HTTP transport, and the
+ * remote's own routing work, so the remote's upstream fetch — the only layer
+ * that can actually cancel the API call — always expires first.
+ */
+const LOCAL_TIMEOUT_SLACK_MS = 5_000;
+
+/**
+ * Deadline (ms) for the local → remote POST.
+ *
+ * When the request carries a `timeoutMs`, derive the deadline from it so the
+ * chain stays ordered `upstream < local < MCP client`. Otherwise fall back to
+ * the configured flat `requestTimeout`, which stays backward compatible for
+ * anyone who set it deliberately.
+ */
+function resolveLocalTimeout(toolInput: Record<string, unknown>, config: ProxyConfig): number {
+  const requested = toolInput.timeoutMs;
+  if (typeof requested === 'number' && Number.isFinite(requested) && requested > 0) {
+    return requested + LOCAL_TIMEOUT_SLACK_MS;
+  }
+  return config.requestTimeout;
+}
+
 async function sendEncryptedRequest(
   toolName: string,
   toolInput: Record<string, unknown>,
 ): Promise<unknown> {
   const ch = await getChannel();
   const config = loadProxyConfig();
+  // Derived from toolInput (not a parameter) so the 401 re-establishment retry
+  // below recomputes the same deadline without threading it through.
+  const localTimeout = resolveLocalTimeout(toolInput, config);
 
   const request: ProxyRequest = {
     type: 'proxy_request',
@@ -192,7 +220,7 @@ async function sendEncryptedRequest(
         'X-Session-Id': ch.sessionId,
       },
       body: new Uint8Array(encrypted),
-      signal: AbortSignal.timeout(config.requestTimeout),
+      signal: AbortSignal.timeout(localTimeout),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -204,7 +232,7 @@ async function sendEncryptedRequest(
     }
     if ((err instanceof DOMException && err.name === 'AbortError') || msg.includes('timed out')) {
       throw new Error(
-        `Remote server at ${remoteUrl} is not responding (timed out after ${config.requestTimeout}ms)`,
+        `Remote server at ${remoteUrl} is not responding (timed out after ${localTimeout}ms)`,
       );
     }
     channel = null;
@@ -279,8 +307,16 @@ server.tool(
       .describe(
         'Form field name for the JSON body part in multipart requests (default: "payload_json"). Only used when files are present.',
       ),
+    timeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "Outbound request timeout in milliseconds — how long the server waits for the upstream API before cancelling the call. Clamped to the connection's own ceiling. Omit for the connection default (~25s, or higher for slow connections like web scraping). Values above ~55000 also require raising MCP_TOOL_TIMEOUT in your MCP client, which caps tool calls at 60s by default.",
+      ),
   },
-  async ({ method, url, headers, body, files, bodyFieldName }) => {
+  async ({ method, url, headers, body, files, bodyFieldName, timeoutMs }) => {
     try {
       const toolInput: Record<string, unknown> = {
         method,
@@ -288,6 +324,12 @@ server.tool(
         headers: headers ?? {},
         body,
       };
+
+      // Rides along inside toolInput through the existing encrypted channel —
+      // no protocol change needed. Also drives the local → remote deadline.
+      if (timeoutMs !== undefined) {
+        toolInput.timeoutMs = timeoutMs;
+      }
 
       // Read and base64-encode files from the local filesystem before sending
       // through the encrypted channel (remote server can't access local files)

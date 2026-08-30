@@ -124,6 +124,18 @@ export interface Route {
    *  Defaults to false — prevents agents from exfiltrating secrets by
    *  writing placeholder strings into API resources and reading them back. */
   resolveSecretsInBody?: boolean;
+  /** Default timeout (ms) for the remote server's outbound fetch to this
+   *  connection's upstream API. Omitted = use the module-level default
+   *  (`DEFAULT_OUTBOUND_TIMEOUT_MS` in remote/tool-dispatch.ts).
+   *
+   *  This value doubles as the **ceiling** on what a caller may request:
+   *  a per-request `timeoutMs` larger than this is clamped down to it, so a
+   *  connection can bound how long any single call may hold a socket open.
+   *
+   *  Values above the local proxy's `requestTimeout` (proxy.config.json) or
+   *  above the MCP client's own tool timeout (60s by default) are not usable
+   *  end-to-end until those outer limits are raised too — see README. */
+  requestTimeoutMs?: number;
   /** Optional ingestor configuration for real-time event ingestion.
    *  When present, the remote server can start a long-lived ingestor
    *  (WebSocket, webhook listener, or poller) for this connection. */
@@ -162,6 +174,9 @@ export interface ResolvedRoute {
   allowedEndpoints: string[];
   /** Whether to resolve ${VAR} placeholders in request bodies (default: false) */
   resolveSecretsInBody: boolean;
+  /** Default + ceiling for the outbound fetch timeout in ms (carried from config).
+   *  Absent = fall back to the module-level default in remote/tool-dispatch.ts. */
+  requestTimeoutMs?: number;
   /** Pre-configured test request for verifying connection credentials (carried from config) */
   testConnection?: TestConnectionConfig;
   /** Pre-configured test for verifying ingestor / event listener (carried from config) */
@@ -527,6 +542,7 @@ export function resolveRoutes(
       secrets: resolvedSecrets,
       allowedEndpoints: route.allowedEndpoints,
       resolveSecretsInBody: route.resolveSecretsInBody ?? false,
+      ...(route.requestTimeoutMs !== undefined && { requestTimeoutMs: route.requestTimeoutMs }),
       ...(route.testConnection !== undefined && { testConnection: route.testConnection }),
       ...(route.testIngestor !== undefined && { testIngestor: route.testIngestor }),
       ...(route.listenerConfig !== undefined && { listenerConfig: route.listenerConfig }),
