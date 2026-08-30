@@ -224,7 +224,10 @@
 }
 .dl-conn-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  /* min(360px, 100%), not a bare 360px: on a phone narrower than 384px the
+   * fixed track floor is wider than the column it sits in, so the cards would
+   * hang off the side and scroll the page sideways. */
+  grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
   gap: 12px;
 }
 

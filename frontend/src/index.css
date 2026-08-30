@@ -1228,6 +1228,15 @@ button {
     margin-top: 8px;
   }
 
+  /* These hold fingerprints, endpoint URLs and config paths — none of which
+   * offer a break opportunity. A `1fr` track still floors at the item's
+   * min-content width, so one long value stretched the page well past the
+   * viewport. `anywhere` (unlike `break-word`) shrinks that floor too. */
+  .kv-grid dd {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
   /* Keep wide tables horizontally scrollable inside their wrappers. */
   .data-table-wrap {
     overflow-x: auto;

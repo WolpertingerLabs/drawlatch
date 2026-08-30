@@ -324,3 +324,34 @@
     padding-left: 16px;
   }
 }
+
+@media (max-width: 768px) {
+  /* The instance id and event type were pinned at flex-shrink:0, so a long
+   * listener name ("slack-workspace-production-…") set the width of the whole
+   * feed and scrolled the page sideways. Let them give way and ellipsize; the
+   * full value is in the expanded detail below. */
+  .dl-events-instance,
+  .dl-events-type {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The event type is the more useful of the two, so make the instance id give
+   * way first. */
+  .dl-events-instance {
+    flex-shrink: 3;
+  }
+
+  .dl-events-type {
+    flex-shrink: 1;
+  }
+
+  /* Event ids and idempotency keys are unbreakable, and flex items default to
+   * min-width:auto, so one of them widened the detail panel the same way. */
+  .dl-events-detail-meta > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
