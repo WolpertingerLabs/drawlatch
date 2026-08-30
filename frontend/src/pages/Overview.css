@@ -67,6 +67,9 @@
 
 /* ── Switch ──────────────────────────────────────────────────────────── */
 
+/* Carries .dl-tap-compact (index.css): the <768px tap-target rule would round
+ * this 40×22 pill into a 44×44 circle with the knob stranded in a corner.
+ * position:relative doubles as the anchor for that utility's hit area. */
 .dl-tunnel-switch {
   position: relative;
   display: inline-flex;
@@ -117,23 +120,14 @@
   background: #0d0d0f;
 }
 
-/* The global <768px rule forces every button to 44×44 for tap targets, which
- * turns this 40×22 pill into a circle. Keep the switch its own size and get the
- * 44×44 target back from an invisible pseudo-element instead. */
 @media (max-width: 768px) {
-  .dl-tunnel-switch {
-    min-width: 40px;
-    min-height: 22px;
-  }
-
-  .dl-tunnel-switch::after {
-    content: "";
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 44px;
-    height: 44px;
-    transform: translate(-50%, -50%);
+  /* The switch's hit area reaches 22px below its centre but the URL link
+   * underneath starts 6px below the header row, so a strip of the link would
+   * toggle the tunnel instead of opening it. Push the rows apart rather than
+   * clip the target. Qualified with .card because index.css is bundled after
+   * this file and its `.card { gap: 6px }` would otherwise win on order. */
+  .card.dl-tunnel-card {
+    gap: 16px;
   }
 }
 

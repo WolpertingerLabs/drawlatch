@@ -533,7 +533,7 @@ export default function ListenerConfigPanel({
                 <h3 className="dl-lcp-section-title">Listener Instances</h3>
                 <div className="dl-lcp-bulk">
                   <button
-                    className="dl-lcp-bulk-btn dl-lcp-ctrl-start"
+                    className="dl-lcp-bulk-btn dl-tap-compact dl-lcp-ctrl-start"
                     disabled={!!controlBusy || offline}
                     title="Start all instances"
                     onClick={() => void runControl("start")}
@@ -542,7 +542,7 @@ export default function ListenerConfigPanel({
                     All
                   </button>
                   <button
-                    className="dl-lcp-bulk-btn dl-lcp-ctrl-stop"
+                    className="dl-lcp-bulk-btn dl-tap-compact dl-lcp-ctrl-stop"
                     disabled={!!controlBusy || offline}
                     title="Stop all instances"
                     onClick={() => void runControl("stop")}
@@ -551,7 +551,7 @@ export default function ListenerConfigPanel({
                     All
                   </button>
                   <button
-                    className="dl-lcp-bulk-btn"
+                    className="dl-lcp-bulk-btn dl-tap-compact"
                     disabled={!!controlBusy || offline}
                     title="Restart all instances"
                     onClick={() => void runControl("restart")}
@@ -742,7 +742,7 @@ export default function ListenerConfigPanel({
                     Editing instance: <code className="mono">{editingInstanceId}</code>
                   </span>
                   <button
-                    className="dl-lcp-editing-cancel"
+                    className="dl-lcp-editing-cancel dl-tap-compact"
                     onClick={() => {
                       setEditingInstanceId(null);
                       setFormValues({});
@@ -928,7 +928,7 @@ function FieldControl({ field, value, options, loadingOptions, onFetchOptions, o
         {field.type === "boolean" && (
           <button
             type="button"
-            className={`dl-lcp-toggle ${value === true || (value === undefined && field.default === true) ? "is-on" : ""}`}
+            className={`dl-lcp-toggle dl-tap-compact ${value === true || (value === undefined && field.default === true) ? "is-on" : ""}`}
             onClick={() => onChange(!(value ?? field.default ?? false))}
             aria-pressed={value === true}
           >

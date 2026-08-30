@@ -333,7 +333,7 @@ function SecretField({
           {clearing ? (
             <button
               type="button"
-              className="dl-secrets-undo-btn"
+              className="dl-secrets-undo-btn dl-tap-compact"
               onClick={onUndoClear}
               title="Keep this secret"
             >
@@ -349,7 +349,7 @@ function SecretField({
                 </span>
                 <button
                   type="button"
-                  className="dl-secrets-clear-btn"
+                  className="dl-secrets-clear-btn dl-tap-compact"
                   onClick={onClear}
                   title="Remove this secret on save"
                 >
@@ -377,7 +377,7 @@ function SecretField({
         {!clearing && (
           <button
             type="button"
-            className="dl-secrets-eye"
+            className="dl-secrets-eye dl-tap-compact"
             onClick={() => setReveal((r) => !r)}
             aria-label={reveal ? "Hide value" : "Show value"}
             title={reveal ? "Hide value" : "Show value"}

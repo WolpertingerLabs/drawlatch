@@ -195,7 +195,12 @@
 }
 
 /* ── Link button (empty state) ── */
+/* Sits mid-sentence, so it carries .dl-tap-compact: the <768px tap-target rule
+ * would otherwise make it a 44px-tall box and blow the line box of the
+ * paragraph around it apart. position:relative anchors that utility's
+ * pseudo-element. */
 .dl-conn-link-btn {
+  position: relative;
   border: none;
   background: none;
   padding: 0;
@@ -293,6 +298,9 @@
 }
 
 /* ── Toggle ── */
+/* Carries .dl-tap-compact (index.css): the <768px tap-target rule would round
+ * this 40×22 pill into a 44×44 circle with the knob stranded in a corner.
+ * position:relative doubles as the anchor for that utility's hit area. */
 .dl-conn-toggle {
   position: relative;
   width: 40px;

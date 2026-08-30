@@ -1233,12 +1233,45 @@ button {
     overflow-x: auto;
   }
 
-  /* 44×44 minimum tap targets for interactive elements. */
+  /* 44×44 minimum tap targets for interactive elements. Growing the control
+   * itself is the right default — it is what most buttons here want, and it
+   * keeps a control that is added later accessible without anyone remembering
+   * to opt in. It only works for a plain rectangle in flow, though: a control
+   * with a deliberately smaller or non-square design opts out with
+   * .dl-tap-compact below. */
   button,
   a.sidebar-nav-link,
   [role="button"] {
     min-height: 44px;
     min-width: 44px;
+  }
+
+  /* Opt out of the growth above and recover the touch target from a
+   * transparent centred pseudo-element, so the control keeps the layout box it
+   * was designed with (pill switches, inline links inside prose, micro
+   * captions, controls parked on top of an input).
+   *
+   * The element must be its own containing block — everything using this is
+   * either already position:relative/absolute or says so at its own rule.
+   *
+   * Only safe where nothing else interactive sits within 44px: the hit area is
+   * painted over its surroundings and would steal a neighbour's taps. Rows of
+   * icon buttons deliberately do NOT use this — see .dl-lcp-icon-btn. */
+  .dl-tap-compact {
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .dl-tap-compact::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    /* max(), not a flat 44px: a control wider than 44px would otherwise have
+     * its hit area shrunk to less than the pixels it actually paints. */
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
   }
 
   .sidebar-nav-link {

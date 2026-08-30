@@ -425,7 +425,7 @@ export default function ConnectionsPage() {
               Try{" "}
               <button
                 type="button"
-                className="dl-conn-link-btn"
+                className="dl-conn-link-btn dl-tap-compact"
                 onClick={() => setStabilityFilter("dev")}
               >
                 All (dev)
@@ -612,7 +612,7 @@ function ConnectionCard({
         </div>
         <button
           type="button"
-          className={`dl-conn-toggle ${c.enabled ? "dl-conn-toggle-on" : ""}`}
+          className={`dl-conn-toggle dl-tap-compact ${c.enabled ? "dl-conn-toggle-on" : ""}`}
           disabled={toggling}
           onClick={() => onToggle(!c.enabled)}
           title={c.enabled ? "Disable connection" : "Enable connection"}

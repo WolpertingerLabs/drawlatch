@@ -158,7 +158,7 @@ export default function Overview() {
               role="switch"
               aria-checked={tunnelEnabled}
               aria-label="Toggle cloudflared tunnel"
-              className={`dl-tunnel-switch ${tunnelEnabled ? "is-on" : ""}`}
+              className={`dl-tunnel-switch dl-tap-compact ${tunnelEnabled ? "is-on" : ""}`}
               disabled={tunnelSaving || !meta}
               onClick={() => void handleToggleTunnel()}
             >

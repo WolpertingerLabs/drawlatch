@@ -196,7 +196,12 @@
   color: #3fb950;
 }
 
+/* Carries .dl-tap-compact (index.css) — an 11px caption sharing a 22px row
+ * with the "Set" badge, which the <768px tap-target rule would double in
+ * height. See the media query at the end of this file for the extra breathing
+ * room its hit area then needs. */
 .dl-secrets-clear-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -214,7 +219,9 @@
   color: #f85149;
 }
 
+/* Same as .dl-secrets-clear-btn — it replaces it in the same row. */
 .dl-secrets-undo-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -262,6 +269,10 @@
   opacity: 0.65;
 }
 
+/* Carries .dl-tap-compact (index.css): it is parked on top of the input, so
+ * the <768px tap-target rule blowing it up to 44×44 makes it taller than the
+ * field it sits in. Being absolutely positioned, it is already the containing
+ * block that utility's hit area hangs off. */
 .dl-secrets-eye {
   position: absolute;
   top: 50%;
@@ -396,5 +407,24 @@
 @keyframes dl-secrets-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* ── Mobile ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  /* .dl-secrets-clear-btn / .dl-secrets-undo-btn keep their 22.5px box and
+   * take their 44px touch target from a pseudo-element, so it reaches ~11px
+   * past the row on each side. Both neighbours are interactive and sat closer
+   * than that: the field's own input 6px below, and the previous field's
+   * reveal button 14px above (whose target reaches back down 22px from the
+   * centre of a 34px input). 16px on both puts every pair of centres at least
+   * 44px apart — widen the real gap rather than clip a target. */
+  .dl-secrets-field-head {
+    margin-bottom: 16px;
+  }
+
+  .dl-secrets-fields {
+    gap: 16px;
   }
 }

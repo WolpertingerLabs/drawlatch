@@ -324,7 +324,11 @@
   gap: 4px;
 }
 
+/* Carries .dl-tap-compact (index.css): these are 11px captions tucked beside
+ * the section heading, and the <768px tap-target rule doubles their height,
+ * turning the three of them into a row of squares that dwarfs the heading. */
 .dl-lcp-bulk-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -513,7 +517,10 @@
   background: rgba(91, 157, 255, 0.1);
 }
 
+/* Carries .dl-tap-compact (index.css): an 11px caption inside a 32px-tall
+ * banner, which the <768px tap-target rule would stretch to 56px. */
 .dl-lcp-editing-cancel {
+  position: relative;
   margin-left: auto;
   padding: 2px 6px;
   border: none;
@@ -650,6 +657,9 @@ select.dl-lcp-input {
 
 /* ── Toggle ──────────────────────────────────────────────────────────── */
 
+/* Carries .dl-tap-compact (index.css): the <768px tap-target rule would round
+ * this 40×22 pill into a 44×44 circle with the knob stranded in a corner.
+ * position:relative doubles as the anchor for that utility's hit area. */
 .dl-lcp-toggle {
   position: relative;
   width: 40px;
