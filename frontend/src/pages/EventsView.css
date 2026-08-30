@@ -23,9 +23,10 @@
 }
 
 /* A <select> sizes itself to its widest <option>, not to its container, so one
- * caller with a long "name (alias)" made this 583px wide at every viewport and
- * panned the page sideways on a phone (and at 1024). Cap it and let the
- * selected label ellipsize; the full name is still in the open dropdown. */
+ * caller with a long "name (alias)" made this hundreds of pixels wide at every
+ * viewport and panned the page sideways on a phone. Cap it and let the
+ * selected label ellipsize; the full name is still in the open dropdown.
+ * (The separate overflow at 1024 is the instance id above, not this.) */
 .dl-events-caller-select select {
   min-width: 0;
   max-width: 220px;
@@ -257,13 +258,27 @@
   color: #5b9dff;
 }
 
+/* A listener instance id is one unbreakable token and there is no length
+ * limit on it, so it has to be able to break rather than set the width of
+ * whatever holds it. `anywhere` (unlike `break-word`) also shrinks the
+ * min-content size, which is the part that was forcing the width. */
 .dl-events-instance {
   flex-shrink: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 10px;
   padding: 1px 5px;
   border-radius: 4px;
   background: #1f1f25;
   color: #8b8b94;
+}
+
+/* In the ingestor card head the id is the card's subject, so it must stay
+ * readable in full — let it shrink and wrap inside its own badge instead of
+ * being pinned at max-content. Not scoped to a breakpoint: a 56-character id
+ * measures 346px and overran the card at 320, 360, 768 and 1024 alike. */
+.dl-events-ingestor-head .dl-events-instance {
+  flex-shrink: 1;
 }
 
 .dl-events-type {
@@ -329,12 +344,13 @@
     display: none;
   }
 
-  /* Same call as .dl-events-preview above: below 640 there is no width for a
-   * listener instance id to shrink into. Letting it ellipsize instead left a
-   * 10px stub rendering a bare "s" with the ellipsis itself clipped off, which
-   * reads as if the id were the letter s. It is shown in full in the expanded
-   * detail. Scoped to the feed row — the same class labels the ingestor status
-   * card, which has room for it. */
+  /* Same call as .dl-events-preview above: below 640 a collapsed row has no
+   * room for the instance id without squeezing the event type out. The
+   * expanded detail carries `instanceId:` (added alongside this rule) so the
+   * per-event attribution is one tap away rather than gone — with two
+   * instances of the same connection running, that is the only way to tell
+   * which produced an event. Scoped to the feed row; the same class labels
+   * the ingestor status card, which shows it unconditionally. */
   .dl-events-row .dl-events-instance {
     display: none;
   }
