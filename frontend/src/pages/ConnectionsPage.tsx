@@ -44,6 +44,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   messaging: "Messaging",
   productivity: "Productivity",
   "social-media": "Social Media",
+  "web-search": "Web Search & Fetch",
 };
 const CATEGORY_ORDER = [
   "ai",
@@ -52,6 +53,7 @@ const CATEGORY_ORDER = [
   "messaging",
   "productivity",
   "social-media",
+  "web-search",
   "other",
 ];
 

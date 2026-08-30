@@ -343,6 +343,42 @@ describe('bundled connection templates', () => {
     expect(route.testConnection?.method).toBe('POST');
   });
 
+  it('should load firecrawl connection template', () => {
+    const route = loadConnection('firecrawl');
+
+    expect(route.name).toBe('Firecrawl API');
+    expect(route.allowedEndpoints).toEqual(['https://api.firecrawl.dev/**']);
+    expect(route.secrets).toHaveProperty('FIRECRAWL_API_KEY');
+    expect(route.headers?.Authorization).toBe('Bearer ${FIRECRAWL_API_KEY}');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.testConnection?.method).toBe('GET');
+  });
+
+  it('should load parallel connection template', () => {
+    const route = loadConnection('parallel');
+
+    expect(route.name).toBe('Parallel API');
+    expect(route.allowedEndpoints).toEqual(['https://api.parallel.ai/**']);
+    expect(route.secrets).toHaveProperty('PARALLEL_API_KEY');
+    expect(route.headers).toHaveProperty('x-api-key');
+    // Beta endpoints need a per-request `parallel-beta` header — injecting it
+    // at the route level would reject any request that also supplies its own.
+    expect(route.headers).not.toHaveProperty('parallel-beta');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.testConnection?.method).toBe('POST');
+  });
+
+  it('should load perplexity connection template', () => {
+    const route = loadConnection('perplexity');
+
+    expect(route.name).toBe('Perplexity API');
+    expect(route.allowedEndpoints).toEqual(['https://api.perplexity.ai/**']);
+    expect(route.secrets).toHaveProperty('PERPLEXITY_API_KEY');
+    expect(route.headers?.Authorization).toBe('Bearer ${PERPLEXITY_API_KEY}');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.testConnection?.method).toBe('GET');
+  });
+
   it('should load openrouter connection template', () => {
     const route = loadConnection('openrouter');
 
@@ -1239,6 +1275,7 @@ describe('listConnectionTemplates — category field (integration)', () => {
       'messaging',
       'productivity',
       'social-media',
+      'web-search',
     ];
 
     for (const t of templates) {
@@ -1275,6 +1312,14 @@ describe('listConnectionTemplates — category field (integration)', () => {
     for (const alias of ['x', 'bluesky', 'mastodon', 'reddit', 'twitch']) {
       const t = templates.find((t) => t.alias === alias)!;
       expect(t.category).toBe('social-media');
+    }
+  });
+
+  it('should have correct category for web-search connections', () => {
+    const templates = listConnectionTemplates();
+    for (const alias of ['exa', 'firecrawl', 'parallel', 'perplexity']) {
+      const t = templates.find((t) => t.alias === alias)!;
+      expect(t.category).toBe('web-search');
     }
   });
 

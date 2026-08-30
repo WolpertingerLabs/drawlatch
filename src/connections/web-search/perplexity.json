@@ -1,0 +1,20 @@
+{
+  "name": "Perplexity API",
+  "stability": "beta",
+  "category": "web-search",
+  "description": "Perplexity API — web search and search-grounded answers. POST /search runs a web search and returns ranked results with page contents. The Sonar chat endpoints (POST /chat/completions, plus POST/GET /v1/async/sonar for long-running research) return cited answers. The Agent API (POST /v1/agent) runs multi-step research with tools, and /v1/embeddings covers text embeddings. Auth is handled automatically via the PERPLEXITY_API_KEY environment variable as a Bearer token.",
+  "docsUrl": "https://docs.perplexity.ai/api-reference",
+  "headers": {
+    "Authorization": "Bearer ${PERPLEXITY_API_KEY}",
+    "Content-Type": "application/json"
+  },
+  "secrets": {
+    "PERPLEXITY_API_KEY": "${PERPLEXITY_API_KEY}"
+  },
+  "allowedEndpoints": ["https://api.perplexity.ai/**"],
+  "testConnection": {
+    "method": "GET",
+    "url": "https://api.perplexity.ai/v1/async/sonar",
+    "description": "Lists async Sonar requests — an authenticated read-only call that consumes no credits"
+  }
+}

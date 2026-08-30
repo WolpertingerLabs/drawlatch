@@ -72,7 +72,8 @@ export type ConnectionCategory =
   | 'gaming'
   | 'messaging'
   | 'productivity'
-  | 'social-media';
+  | 'social-media'
+  | 'web-search';
 
 /** MCP proxy (local) configuration */
 export interface ProxyConfig {
