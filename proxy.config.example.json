@@ -3,5 +3,5 @@
   "localKeyAlias": "my-laptop",
   "remotePublicKeysDir": "~/.drawlatch/keys/peers/remote-server",
   "connectTimeout": 10000,
-  "requestTimeout": 300000
+  "requestTimeout": 185000
 }

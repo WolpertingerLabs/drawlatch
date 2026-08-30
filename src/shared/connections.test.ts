@@ -6,6 +6,7 @@ import {
   listConnectionTemplates,
   _resetConnectionIndex,
 } from './connections.js';
+import { MAX_OUTBOUND_TIMEOUT_MS } from './config.js';
 
 // Ensure node:fs is properly instrumentable by vitest's spy mechanism.
 // Without this, the first vi.spyOn(fs, 'readFileSync') call in a file can
@@ -341,6 +342,64 @@ describe('bundled connection templates', () => {
     expect(route.headers).toHaveProperty('x-api-key');
     expect(route.docsUrl).toBeTruthy();
     expect(route.testConnection?.method).toBe('POST');
+  });
+
+  it('should load firecrawl connection template', () => {
+    const route = loadConnection('firecrawl');
+
+    expect(route.name).toBe('Firecrawl API');
+    expect(route.allowedEndpoints).toEqual(['https://api.firecrawl.dev/**']);
+    expect(route.secrets).toHaveProperty('FIRECRAWL_API_KEY');
+    expect(route.headers?.Authorization).toBe('Bearer ${FIRECRAWL_API_KEY}');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.testConnection?.method).toBe('GET');
+  });
+
+  it('should load parallel connection template', () => {
+    const route = loadConnection('parallel');
+
+    expect(route.name).toBe('Parallel API');
+    expect(route.allowedEndpoints).toEqual(['https://api.parallel.ai/**']);
+    expect(route.secrets).toHaveProperty('PARALLEL_API_KEY');
+    expect(route.headers).toHaveProperty('x-api-key');
+    // Beta endpoints need a per-request `parallel-beta` header — injecting it
+    // at the route level would reject any request that also supplies its own.
+    expect(route.headers).not.toHaveProperty('parallel-beta');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.testConnection?.method).toBe('POST');
+  });
+
+  it('should load perplexity connection template', () => {
+    const route = loadConnection('perplexity');
+
+    expect(route.name).toBe('Perplexity API');
+    expect(route.allowedEndpoints).toEqual(['https://api.perplexity.ai/**']);
+    expect(route.secrets).toHaveProperty('PERPLEXITY_API_KEY');
+    expect(route.headers?.Authorization).toBe('Bearer ${PERPLEXITY_API_KEY}');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.testConnection?.method).toBe('GET');
+    // The test endpoint sunsets 2026-09-27 along with the rest of Sonar. Keep
+    // the deadline visible in the template rather than letting the test start
+    // failing silently.
+    expect(route.description).toMatch(/2026-09-27/);
+    expect(route.testConnection?.description).toMatch(/2026-09-27/);
+  });
+
+  it('should keep every web-search ceiling inside the outbound maximum', () => {
+    for (const alias of ['exa', 'firecrawl', 'parallel', 'perplexity']) {
+      const route = loadConnection(alias);
+      expect(route.requestTimeoutMs).toBeGreaterThan(0);
+      // Above MAX_OUTBOUND_TIMEOUT_MS the value is unreachable: it is clamped
+      // down, and past undici's 300s headers timeout it would never fire at all.
+      expect(route.requestTimeoutMs).toBeLessThanOrEqual(MAX_OUTBOUND_TIMEOUT_MS);
+    }
+  });
+
+  it('should not advertise retired or pre-GA endpoint paths', () => {
+    // Exa's /research/v1 now returns 410 RESEARCH_RETIRED.
+    expect(loadConnection('exa').description).not.toMatch(/research\/v1/);
+    // Parallel's extract is GA at /v1/extract.
+    expect(loadConnection('parallel').description).not.toMatch(/v1beta\/extract/);
   });
 
   it('should load openrouter connection template', () => {
@@ -1239,6 +1298,7 @@ describe('listConnectionTemplates — category field (integration)', () => {
       'messaging',
       'productivity',
       'social-media',
+      'web-search',
     ];
 
     for (const t of templates) {
@@ -1275,6 +1335,14 @@ describe('listConnectionTemplates — category field (integration)', () => {
     for (const alias of ['x', 'bluesky', 'mastodon', 'reddit', 'twitch']) {
       const t = templates.find((t) => t.alias === alias)!;
       expect(t.category).toBe('social-media');
+    }
+  });
+
+  it('should have correct category for web-search connections', () => {
+    const templates = listConnectionTemplates();
+    for (const alias of ['exa', 'firecrawl', 'parallel', 'perplexity']) {
+      const t = templates.find((t) => t.alias === alias)!;
+      expect(t.category).toBe('web-search');
     }
   });
 

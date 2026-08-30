@@ -72,7 +72,8 @@ export type ConnectionCategory =
   | 'gaming'
   | 'messaging'
   | 'productivity'
-  | 'social-media';
+  | 'social-media'
+  | 'web-search';
 
 /** MCP proxy (local) configuration */
 export interface ProxyConfig {
@@ -80,7 +81,12 @@ export interface ProxyConfig {
   remoteUrl: string;
   /** Connection timeout (ms) */
   connectTimeout: number;
-  /** Request timeout (ms) */
+  /** Deadline (ms) for the local → remote POST when a call carries no
+   *  `timeoutMs` of its own. A liveness bound on the remote, not a work budget:
+   *  it also determines the `outboundBudgetMs` the remote is allowed to spend
+   *  (`requestTimeout - LOCAL_TIMEOUT_SLACK_MS`), so it must exceed the largest
+   *  connection `requestTimeoutMs` you expect to be reachable. Clamped to
+   *  MAX_LOCAL_TIMEOUT_MS. */
   requestTimeout: number;
 }
 
@@ -123,6 +129,21 @@ export interface Route {
    *  Defaults to false — prevents agents from exfiltrating secrets by
    *  writing placeholder strings into API resources and reading them back. */
   resolveSecretsInBody?: boolean;
+  /** Default timeout (ms) for the remote server's outbound fetch to this
+   *  connection's upstream API. Omitted = DEFAULT_OUTBOUND_TIMEOUT_MS.
+   *
+   *  This value doubles as the **ceiling** on what a caller may request:
+   *  a per-request `timeoutMs` larger than this is clamped down to it, so a
+   *  connection can bound how long any single call may hold a socket open.
+   *
+   *  Templates are hand-written JSON, so a present-but-malformed value (a
+   *  string, null, zero, negative, NaN) fails **closed** to
+   *  DEFAULT_OUTBOUND_TIMEOUT_MS rather than removing the ceiling entirely.
+   *  Only an absent value means "no connection ceiling".
+   *
+   *  Values above the MCP client's own tool timeout (60s by default) are not
+   *  usable end-to-end until that outer limit is raised too — see README. */
+  requestTimeoutMs?: number;
   /** Optional ingestor configuration for real-time event ingestion.
    *  When present, the remote server can start a long-lived ingestor
    *  (WebSocket, webhook listener, or poller) for this connection. */
@@ -161,6 +182,12 @@ export interface ResolvedRoute {
   allowedEndpoints: string[];
   /** Whether to resolve ${VAR} placeholders in request bodies (default: false) */
   resolveSecretsInBody: boolean;
+  /** Default + ceiling for the outbound fetch timeout in ms (carried from config).
+   *  Absent = fall back to DEFAULT_OUTBOUND_TIMEOUT_MS. Deliberately carried
+   *  through unvalidated: dropping a malformed value here would make it look
+   *  *absent*, which means "no ceiling". `resolveOutboundTimeout` sees the raw
+   *  value and fails closed on it instead. */
+  requestTimeoutMs?: number;
   /** Pre-configured test request for verifying connection credentials (carried from config) */
   testConnection?: TestConnectionConfig;
   /** Pre-configured test for verifying ingestor / event listener (carried from config) */
@@ -265,13 +292,142 @@ export interface RemoteServerConfig {
   tunnel?: boolean;
 }
 
+// ── Nested request deadlines ─────────────────────────────────────────────────
+
+/**
+ * A proxied call passes through three nested deadlines, and they must fire
+ * **innermost-first** — only the remote's outbound fetch can actually cancel
+ * the upstream API call, so it has to be the layer that gives up:
+ *
+ *   remote → upstream    outbound deadline    <  local → remote
+ *   local  → remote      requestTimeout       <  MCP client → local
+ *   MCP client → local   MCP_TOOL_TIMEOUT     =  60s (MCP SDK default)
+ *
+ * The ordering is maintained in two directions:
+ *
+ *   - Downward: the local proxy sends the remote an `outboundBudgetMs` derived
+ *     from the deadline it actually armed, minus LOCAL_TIMEOUT_SLACK_MS. The
+ *     remote clamps every outbound fetch to that budget, so the outbound leg is
+ *     always strictly smaller than the local leg regardless of what the
+ *     connection's `requestTimeoutMs` says.
+ *   - Upward: a caller-supplied `timeoutMs` raises the local deadline to
+ *     `timeoutMs + LOCAL_TIMEOUT_SLACK_MS`, so asking for a longer upstream
+ *     call widens the outer layer to match instead of being cut short by it.
+ *
+ * Slack is subtracted exactly once, by the layer that owns it (the local
+ * proxy); the remote never learns what the slack value is.
+ *
+ * These live here rather than in remote/tool-dispatch.ts because both sides of
+ * the proxy need them and both already import this module.
+ */
+
+/**
+ * Head-room (ms) between the local → remote deadline and the outbound budget
+ * handed to the remote. Covers encryption, HTTP transport, and the remote's own
+ * routing work.
+ */
+export const LOCAL_TIMEOUT_SLACK_MS = 5_000;
+
+/**
+ * Floor (ms) for a derived outbound budget. Keeps a pathologically small local
+ * `requestTimeout` from producing a zero or negative budget that would abort
+ * every call instantly.
+ */
+export const MIN_OUTBOUND_TIMEOUT_MS = 1_000;
+
+/**
+ * Default deadline (ms) for the remote → upstream API fetch when neither the
+ * caller nor the matched route specifies one. Chosen to sit below the MCP
+ * client's 60s cap with room for both outer layers.
+ */
+export const DEFAULT_OUTBOUND_TIMEOUT_MS = 25_000;
+
+/**
+ * Hard upper bound (ms) on any outbound fetch deadline.
+ *
+ * Deliberately below undici's 300s `headersTimeout`. Passing an
+ * `AbortSignal.timeout()` to fetch() does **not** disable that internal
+ * timeout — the two race, and whichever is smaller wins. An effective deadline
+ * above 300s would therefore be unreachable: undici would fire first and
+ * surface `UND_ERR_HEADERS_TIMEOUT` wrapped in a bare `TypeError`, bypassing
+ * drawlatch's own timeout reporting. Staying under 300s keeps our signal the
+ * binding one and our error message the one the caller sees.
+ */
+export const MAX_OUTBOUND_TIMEOUT_MS = 290_000;
+
+/**
+ * Hard upper bound (ms) on the local → remote deadline.
+ *
+ * Node's timers are 32-bit: a delay above 2147483647 triggers
+ * `TimeoutOverflowWarning` and collapses to 1ms, and above 4294962295
+ * `AbortSignal.timeout()` throws `RangeError [ERR_OUT_OF_RANGE]`. Either would
+ * invert the ordering — the local leg aborting instantly while the remote's
+ * fetch runs on and bills — so an absurd `requestTimeout` or `timeoutMs` is
+ * clamped here instead.
+ */
+export const MAX_LOCAL_TIMEOUT_MS = MAX_OUTBOUND_TIMEOUT_MS + LOCAL_TIMEOUT_SLACK_MS;
+
+/**
+ * Deadline (ms) for the local → remote POST.
+ *
+ * When the request carries a `timeoutMs`, derive the deadline from it so the
+ * chain stays ordered `upstream < local < MCP client`. Otherwise fall back to
+ * the configured flat `requestTimeout`, which is a liveness bound on the remote
+ * rather than a work budget.
+ *
+ * Both branches are clamped to MAX_LOCAL_TIMEOUT_MS — see that constant for
+ * what an unclamped value does to Node's 32-bit timers.
+ */
+export function resolveLocalTimeout(
+  toolInput: Record<string, unknown>,
+  config: ProxyConfig,
+): number {
+  const requested = toolInput.timeoutMs;
+  const raw =
+    typeof requested === 'number' && Number.isFinite(requested) && requested > 0
+      ? requested + LOCAL_TIMEOUT_SLACK_MS
+      : config.requestTimeout;
+
+  // A non-finite or non-positive `requestTimeout` (hand-edited config) would
+  // otherwise arm a signal that aborts instantly. Clamp up, not down.
+  if (!Number.isFinite(raw) || raw <= 0) return MAX_LOCAL_TIMEOUT_MS;
+  return Math.min(raw, MAX_LOCAL_TIMEOUT_MS);
+}
+
+/**
+ * The outbound budget (ms) to advertise to the remote, derived from the
+ * deadline the local proxy actually armed — not from `config.requestTimeout`.
+ *
+ * That distinction matters: sending `config.requestTimeout` unconditionally
+ * would hand the remote a 25s budget for a caller who explicitly asked for
+ * 120s and whose socket will in fact wait 125s, re-breaking the ordering this
+ * mechanism exists to keep. Slack is subtracted exactly once, here, by the
+ * layer that owns it; the remote never learns what the slack value is.
+ */
+export function resolveOutboundBudget(localTimeout: number): number {
+  // The MIN floor keeps a pathologically small `requestTimeout` from producing a
+  // zero or negative budget — but the floor itself can exceed the local deadline
+  // (requestTimeout <= 1000 would yield a 1000ms budget against a <=1000ms local
+  // leg), re-inverting the very ordering this module exists to maintain. Cap the
+  // floor at the local deadline so the outbound leg is never the longer one.
+  return Math.min(
+    localTimeout,
+    Math.max(MIN_OUTBOUND_TIMEOUT_MS, localTimeout - LOCAL_TIMEOUT_SLACK_MS),
+  );
+}
+
 // ── Defaults ─────────────────────────────────────────────────────────────────
 
 function proxyDefaults(): ProxyConfig {
   return {
     remoteUrl: 'http://localhost:9999',
     connectTimeout: 10_000,
-    requestTimeout: 30_000,
+    // A *liveness* bound ("is the remote wedged"), not a work budget. The
+    // outbound leg is separately clamped to `requestTimeout - slack`, so a hung
+    // upstream still fails at its own much smaller deadline; only a totally
+    // unresponsive remote takes the long path. Set below 30s, every connection
+    // ceiling above ~25s was dead on arrival by construction.
+    requestTimeout: 185_000,
   };
 }
 
@@ -526,6 +682,7 @@ export function resolveRoutes(
       secrets: resolvedSecrets,
       allowedEndpoints: route.allowedEndpoints,
       resolveSecretsInBody: route.resolveSecretsInBody ?? false,
+      ...(route.requestTimeoutMs !== undefined && { requestTimeoutMs: route.requestTimeoutMs }),
       ...(route.testConnection !== undefined && { testConnection: route.testConnection }),
       ...(route.testIngestor !== undefined && { testIngestor: route.testIngestor }),
       ...(route.listenerConfig !== undefined && { listenerConfig: route.listenerConfig }),

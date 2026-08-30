@@ -23,6 +23,9 @@ import {
   getCallerKeysDir,
   getServerKeysDir,
   getProxyConfigPath,
+  resolveLocalTimeout,
+  resolveOutboundBudget,
+  MAX_OUTBOUND_TIMEOUT_MS,
 } from '../shared/config.js';
 import {
   loadKeyBundle,
@@ -171,12 +174,19 @@ async function sendEncryptedRequest(
 ): Promise<unknown> {
   const ch = await getChannel();
   const config = loadProxyConfig();
+  // Derived from toolInput (not a parameter) so the 401 re-establishment retry
+  // below recomputes the same deadline without threading it through.
+  const localTimeout = resolveLocalTimeout(toolInput, config);
 
   const request: ProxyRequest = {
     type: 'proxy_request',
     id: crypto.randomUUID(),
     toolName,
     toolInput,
+    // On the envelope, not in toolInput — it has to reach handlers that never
+    // forward their input (test_connection, test_ingestor,
+    // resolve_listener_options), which is exactly where the ordering gap was.
+    outboundBudgetMs: resolveOutboundBudget(localTimeout),
     timestamp: Date.now(),
   };
 
@@ -192,7 +202,7 @@ async function sendEncryptedRequest(
         'X-Session-Id': ch.sessionId,
       },
       body: new Uint8Array(encrypted),
-      signal: AbortSignal.timeout(config.requestTimeout),
+      signal: AbortSignal.timeout(localTimeout),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -204,7 +214,7 @@ async function sendEncryptedRequest(
     }
     if ((err instanceof DOMException && err.name === 'AbortError') || msg.includes('timed out')) {
       throw new Error(
-        `Remote server at ${remoteUrl} is not responding (timed out after ${config.requestTimeout}ms)`,
+        `Remote server at ${remoteUrl} is not responding (timed out after ${localTimeout}ms)`,
       );
     }
     channel = null;
@@ -279,8 +289,20 @@ server.tool(
       .describe(
         'Form field name for the JSON body part in multipart requests (default: "payload_json"). Only used when files are present.',
       ),
+    timeoutMs: z
+      .number()
+      .int()
+      .positive()
+      // Without an upper bound, a large value overflows Node's 32-bit timer:
+      // the local deadline collapses to 1ms and aborts instantly while the
+      // remote's fetch runs on and bills. See MAX_LOCAL_TIMEOUT_MS.
+      .max(MAX_OUTBOUND_TIMEOUT_MS)
+      .optional()
+      .describe(
+        `Outbound request timeout in milliseconds — how long the server waits for the upstream API before cancelling the call. Clamped to the connection's own ceiling and to the local proxy's requestTimeout budget; call list_routes to see the effective maxTimeoutMs per connection. Omit for the connection default (~25s, or higher for slow connections like web scraping). Values above ~55000 also require raising MCP_TOOL_TIMEOUT in your MCP client, which caps tool calls at 60s by default. Maximum ${MAX_OUTBOUND_TIMEOUT_MS}.`,
+      ),
   },
-  async ({ method, url, headers, body, files, bodyFieldName }) => {
+  async ({ method, url, headers, body, files, bodyFieldName, timeoutMs }) => {
     try {
       const toolInput: Record<string, unknown> = {
         method,
@@ -288,6 +310,12 @@ server.tool(
         headers: headers ?? {},
         body,
       };
+
+      // Rides along inside toolInput through the existing encrypted channel —
+      // no protocol change needed. Also drives the local → remote deadline.
+      if (timeoutMs !== undefined) {
+        toolInput.timeoutMs = timeoutMs;
+      }
 
       // Read and base64-encode files from the local filesystem before sending
       // through the encrypted channel (remote server can't access local files)

@@ -25,6 +25,8 @@ import {
   loadRemoteConfig,
   saveRemoteConfig,
   resolvePlaceholders,
+  DEFAULT_OUTBOUND_TIMEOUT_MS,
+  MAX_OUTBOUND_TIMEOUT_MS,
   type CallerConfig,
   type IngestorOverrides,
   type ResolvedRoute,
@@ -65,6 +67,177 @@ export function matchRoute(url: string, routes: ResolvedRoute[]): ResolvedRoute 
   return null;
 }
 
+// ── Outbound timeouts ──────────────────────────────────────────────────────
+
+/**
+ * The outbound (remote → upstream) half of drawlatch's nested deadline chain.
+ * The constants themselves live in shared/config.ts, which both sides of the
+ * proxy import; see the block comment there for the ordering invariant.
+ *
+ * Re-exported here because this module is where callers reach when they reason
+ * about the outbound leg.
+ */
+export { DEFAULT_OUTBOUND_TIMEOUT_MS, MAX_OUTBOUND_TIMEOUT_MS } from '../shared/config.js';
+
+/** True only for a finite, strictly positive number (rejects 0, NaN, Infinity). */
+function isUsableTimeout(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * Resolve the connection's outbound ceiling in milliseconds — the deadline the
+ * matched route permits, before the local proxy's own budget is applied.
+ *
+ * Precedence:
+ *   1. `requested` — the caller's per-request `timeoutMs`, clamped to the
+ *      route's `requestTimeoutMs` when the route sets one, otherwise to
+ *      MAX_OUTBOUND_TIMEOUT_MS.
+ *   2. `routeTimeout` — the connection's own default (itself clamped to
+ *      MAX_OUTBOUND_TIMEOUT_MS).
+ *   3. DEFAULT_OUTBOUND_TIMEOUT_MS.
+ *
+ * The two levels treat malformed input differently, on purpose:
+ *
+ *   - A malformed `requested` (0, negative, NaN, Infinity, non-number) means
+ *     "not specified" and degrades to the next fallback.
+ *   - A malformed `routeTimeout` fails **closed** to
+ *     DEFAULT_OUTBOUND_TIMEOUT_MS. Route templates are hand-written JSON, so
+ *     `"requestTimeoutMs": "45000"` is a plausible typo; treating it as absent
+ *     would *remove* the connection's ceiling and jump straight to
+ *     MAX_OUTBOUND_TIMEOUT_MS — silently widening the very bound the template
+ *     author was trying to impose. Only `undefined` means "no ceiling set".
+ */
+export function resolveOutboundTimeout(requested: unknown, routeTimeout: unknown): number {
+  let routeCeiling: number | undefined;
+  if (routeTimeout === undefined) {
+    routeCeiling = undefined;
+  } else if (isUsableTimeout(routeTimeout)) {
+    routeCeiling = Math.min(routeTimeout, MAX_OUTBOUND_TIMEOUT_MS);
+  } else {
+    routeCeiling = DEFAULT_OUTBOUND_TIMEOUT_MS;
+  }
+
+  if (!isUsableTimeout(requested)) {
+    return routeCeiling ?? DEFAULT_OUTBOUND_TIMEOUT_MS;
+  }
+
+  return Math.min(requested, routeCeiling ?? MAX_OUTBOUND_TIMEOUT_MS);
+}
+
+/**
+ * Apply the local proxy's outbound budget on top of the connection ceiling.
+ *
+ * `budgetMs` is the window the local proxy actually armed its own socket for,
+ * minus its slack — see `outboundBudgetMs` on ProxyRequest. An **absent** or
+ * malformed budget means "no clamp", never zero: three real callers have no
+ * local proxy in front of them (an in-process host importing this module, the
+ * password-gated admin API, and an older local proxy talking to a newer
+ * remote). Guarded explicitly rather than with `??` because
+ * `Math.min(ceiling, undefined - slack)` is silently NaN, which
+ * `AbortSignal.timeout()` then rejects outright.
+ */
+export function applyOutboundBudget(ceiling: number, budgetMs: unknown): number {
+  return isUsableTimeout(budgetMs) ? Math.min(ceiling, budgetMs) : ceiling;
+}
+
+/** Why an outbound fetch failed, when the failure was a deadline of some kind. */
+type TimeoutKind =
+  /** Our own AbortSignal fired — the deadline drawlatch armed. */
+  | 'deadline'
+  /** undici gave up before the upstream accepted the TCP/TLS connection. */
+  | 'connect'
+  /** undici's own headers/body timeout fired before ours did. */
+  | 'upstream-stalled';
+
+/**
+ * Classify an abort/timeout rejection from fetch().
+ *
+ * Node surfaces our own `AbortSignal.timeout()` as a DOMException named
+ * "TimeoutError" (or "AbortError"), sometimes re-wrapped in a TypeError whose
+ * `cause` carries the original. undici's *internal* deadlines are different
+ * animals: they arrive as a bare `TypeError: fetch failed` / `TypeError:
+ * terminated` whose cause carries a `UND_ERR_*_TIMEOUT` code, and a plain
+ * name check returns false for them, so they escape the timeout handler
+ * entirely. undici's default `connectTimeout` is 10s — below our own 25s
+ * default — so this is not a corner case.
+ *
+ * "The upstream never accepted our connection" is a different failure from
+ * "our deadline fired", and the caller needs to tell them apart, so they get
+ * distinct messages.
+ */
+function classifyTimeout(err: unknown): TimeoutKind | null {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 4; e = e.cause, depth++) {
+    const code: unknown = (e as { code?: unknown }).code;
+    if (e.name === 'TimeoutError' || e.name === 'AbortError') return 'deadline';
+    if (e.name === 'ConnectTimeoutError' || code === 'UND_ERR_CONNECT_TIMEOUT') return 'connect';
+    if (
+      e.name === 'HeadersTimeoutError' ||
+      e.name === 'BodyTimeoutError' ||
+      code === 'UND_ERR_HEADERS_TIMEOUT' ||
+      code === 'UND_ERR_BODY_TIMEOUT'
+    ) {
+      return 'upstream-stalled';
+    }
+  }
+  return null;
+}
+
+// ── Secret hygiene in error messages ───────────────────────────────────────
+
+/**
+ * Replace every resolved secret value found in `text` with its `${NAME}`
+ * placeholder.
+ *
+ * fetch() echoes hostile input straight back in its own error messages, and
+ * what it echoes is the *resolved* form. Two reachable cases:
+ *
+ *   - `TypeError: Headers.append: "Bearer sk-…" is an invalid header value` —
+ *     thrown verbatim when a resolved secret carries an interior CR/LF/NUL
+ *     (a PEM-ish secret, or a token pasted with an embedded newline).
+ *   - `TypeError: Failed to parse URL from /1/boards?key=…` — the resolved URL
+ *     with query-param secrets substituted, reachable when a user-defined
+ *     `allowedEndpoints` of bare `**` compiles to `^.*$` and matches a
+ *     relative URL.
+ *
+ * Either would reach the remote's console, the client, and the model.
+ *
+ * Values shorter than 4 characters are skipped: they are not meaningful
+ * secrets, and substring-replacing them would shred the message.
+ *
+ * Longest value first: when one secret is a prefix of another, replacing the
+ * shorter one first leaves the remainder of the longer one exposed (secrets
+ * `tok-OUT` and `tok-OUTER-VALUE` would scrub to `${INNER}ER-VALUE`).
+ */
+function scrubSecrets(text: string, secrets: Record<string, string>): string {
+  const entries = Object.entries(secrets)
+    .filter(([, value]) => typeof value === 'string' && value.length >= 4)
+    .sort(([, a], [, b]) => b.length - a.length);
+
+  let out = text;
+  for (const [name, value] of entries) {
+    out = out.split(value).join(`\${${name}}`);
+  }
+  return out;
+}
+
+/**
+ * Whether any message in an error's `cause` chain carries a resolved secret.
+ *
+ * Checked separately from scrubbing because a clean top-level message can sit
+ * above a leaking cause — `TypeError: fetch failed` is undici's usual wrapper.
+ * Depth-capped and cycle-safe: `err.cause = err` is a legal construction.
+ */
+function leaksSecret(err: Error, secrets: Record<string, string>): boolean {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 4; e = e.cause, depth++) {
+    if (scrubSecrets(e.message, secrets) !== e.message) return true;
+    if (e.cause === e) break;
+  }
+  return false;
+}
+
+/** Header values fetch() rejects — and echoes back in full when it does. */
+const INVALID_HEADER_VALUE = /[\r\n\0]/;
+
 // ── Proxy request execution ────────────────────────────────────────────────
 
 /** A file attachment transmitted as base64 data through the encrypted channel. */
@@ -88,6 +261,10 @@ export interface ProxyRequestInput {
   files?: FileAttachment[];
   /** Form field name for the JSON body part (default: "payload_json") */
   bodyFieldName?: string;
+  /** Deadline (ms) for the outbound fetch to the upstream API. Clamped to the
+   *  matched route's `requestTimeoutMs` when it sets one. Omitted = use the
+   *  route's default, else DEFAULT_OUTBOUND_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 export interface ProxyRequestResult {
@@ -102,12 +279,20 @@ export interface ProxyRequestResult {
  *
  * Pure in the sense that it takes routes as input rather than reading global
  * state. The only side effect is the outbound fetch().
+ *
+ * `outboundBudgetMs` is the ceiling the *local proxy* can actually wait out,
+ * forwarded on the ProxyRequest envelope. It clamps the connection's own
+ * `requestTimeoutMs`, which is what keeps the deadline chain ordered even for
+ * calls that carry no per-request `timeoutMs` — including handlers like
+ * `test_connection` that expose no `timeoutMs` of their own. Omitted means
+ * "no clamp": see applyOutboundBudget.
  */
 export async function executeProxyRequest(
   input: ProxyRequestInput,
   routes: ResolvedRoute[],
+  outboundBudgetMs?: number,
 ): Promise<ProxyRequestResult> {
-  const { method, url, headers = {}, body, files, bodyFieldName } = input;
+  const { method, url, headers = {}, body, files, bodyFieldName, timeoutMs } = input;
 
   // Step 1: Find matching route — try raw URL first
   let matched: ResolvedRoute | null = matchRoute(url, routes);
@@ -153,6 +338,20 @@ export async function executeProxyRequest(
   // Step 4: Merge route-level headers (they take effect after conflict check)
   for (const [k, v] of Object.entries(matched.headers)) {
     resolvedHeaders[k] = v;
+  }
+
+  // Step 4b: Reject header values fetch() would reject anyway. Done here, by
+  // name only, because fetch()'s own rejection echoes the offending *value* in
+  // full — and these values carry resolved secrets. A token pasted with a
+  // trailing newline is enough to trigger it.
+  for (const [k, v] of Object.entries(resolvedHeaders)) {
+    if (INVALID_HEADER_VALUE.test(v)) {
+      throw new Error(
+        `Invalid value for header "${k}": it contains a carriage return, newline, or NUL. ` +
+          'Check the resolved secret for stray whitespace or line breaks. ' +
+          '(The value itself is withheld because it may be a credential.)',
+      );
+    }
   }
 
   // Step 5: Resolve body placeholders using matched route's secrets.
@@ -206,28 +405,77 @@ export async function executeProxyRequest(
     throw new Error(`Endpoint not allowed after resolution: ${url}`);
   }
 
-  // Step 7: Make the actual HTTP request
-  const resp = await fetch(resolvedUrl, {
-    method,
-    headers: resolvedHeaders,
-    body: fetchBody,
-  });
+  // Step 7: Make the actual HTTP request.
+  // Always pass a signal — a bare fetch() would inherit undici's 300s headers
+  // timeout, which is larger than every outer ceiling in the chain and so
+  // would leave the upstream call running after the caller gave up.
+  const connectionCeiling = resolveOutboundTimeout(timeoutMs, matched.requestTimeoutMs);
+  const effectiveTimeout = applyOutboundBudget(connectionCeiling, outboundBudgetMs);
 
-  const contentType = resp.headers.get('content-type') ?? '';
-  let responseBody: unknown;
+  try {
+    // The signal is one wall-clock budget spanning connect, headers, *and*
+    // body. The body read therefore has to sit inside this try: when an
+    // upstream dribbles out its response, the deadline fires on `resp.json()`,
+    // and outside the try that surfaces as a bare DOMException — exactly the
+    // opaque error the drawlatch deadline exists to replace.
+    const resp = await fetch(resolvedUrl, {
+      method,
+      headers: resolvedHeaders,
+      body: fetchBody,
+      signal: AbortSignal.timeout(effectiveTimeout),
+    });
 
-  if (contentType.includes('application/json')) {
-    responseBody = await resp.json();
-  } else {
-    responseBody = await resp.text();
+    const contentType = resp.headers.get('content-type') ?? '';
+    const responseBody: unknown = contentType.includes('application/json')
+      ? await resp.json()
+      : await resp.text();
+
+    return {
+      status: resp.status,
+      statusText: resp.statusText,
+      headers: Object.fromEntries(resp.headers.entries()),
+      body: responseBody,
+    };
+  } catch (err) {
+    // Every message below reports the caller's own URL, never `resolvedUrl` —
+    // the resolved form can carry secrets (e.g. Trello's key/token query
+    // params).
+    const kind = classifyTimeout(err);
+
+    if (kind === 'connect') {
+      throw new Error(
+        `Upstream never accepted the connection: ${method} ${url}. ` +
+          "The TCP/TLS handshake timed out before drawlatch's own deadline fired — " +
+          'the upstream host is unreachable or refusing connections, which is a different ' +
+          'failure from your request being too slow. Raising timeoutMs will not help.',
+      );
+    }
+
+    if (kind === 'deadline' || kind === 'upstream-stalled') {
+      const budgetBound = effectiveTimeout < connectionCeiling;
+      throw new Error(
+        `Upstream request timed out after ${effectiveTimeout}ms: ${method} ${url}. ` +
+          'The upstream call was cancelled. ' +
+          (budgetBound
+            ? `This connection allows ${connectionCeiling}ms, but the local proxy's requestTimeout capped this call at ${effectiveTimeout}ms — raise requestTimeout in proxy.config.json to use the full ceiling. `
+            : "Raise timeoutMs (up to this connection's requestTimeoutMs), or use the API's async job pattern. "),
+      );
+    }
+
+    // Anything else: fetch() echoes hostile input verbatim, and the input it
+    // sees is the secret-resolved form. Scrub before it reaches the console,
+    // the client, and the model. A new Error rather than a mutation — `message`
+    // is not writable on every error subclass Node throws here.
+    // The chain matters, not just the top level: undici reports `TypeError:
+    // fetch failed` with the real reason on `cause`, so a clean top-level
+    // message can sit above a leaking one. In-process hosts importing this
+    // module log the error object directly, which prints `[cause]`. Rethrowing
+    // as a fresh Error drops the chain, which is the point.
+    if (err instanceof Error && leaksSecret(err, matched.secrets)) {
+      throw new Error(scrubSecrets(err.message, matched.secrets));
+    }
+    throw err;
   }
-
-  return {
-    status: resp.status,
-    statusText: resp.statusText,
-    headers: Object.fromEntries(resp.headers.entries()),
-    body: responseBody,
-  };
 }
 
 // ── Tool handlers ──────────────────────────────────────────────────────────
@@ -241,6 +489,15 @@ export interface ToolContext {
   /** Re-resolve routes for all sessions belonging to this caller.
    *  Call after secrets or connection list changes. */
   refreshRoutes: () => void;
+  /** How long (ms) the caller's own socket will actually wait, minus its slack
+   *  — forwarded on the ProxyRequest envelope by the local proxy. Clamps every
+   *  outbound fetch this request makes, so handlers that expose no `timeoutMs`
+   *  of their own (test_connection, test_ingestor, resolve_listener_options)
+   *  still stay inside the caller's deadline.
+   *
+   *  Absent means **no clamp**, never zero: in-process hosts, the admin API,
+   *  and older local proxies all arrive without one. */
+  outboundBudgetMs?: number;
 }
 
 export type ToolHandler = (
@@ -254,15 +511,19 @@ export const toolHandlers: Record<string, ToolHandler> = {
    * Proxied HTTP request with route-scoped secret injection.
    * Delegates to the extracted executeProxyRequest() function.
    */
-  async http_request(input, routes, _context) {
-    return executeProxyRequest(input as unknown as ProxyRequestInput, routes);
+  async http_request(input, routes, context) {
+    return executeProxyRequest(
+      input as unknown as ProxyRequestInput,
+      routes,
+      context.outboundBudgetMs,
+    );
   },
 
   /**
    * List available routes with metadata, endpoint patterns, and secret names (not values).
    * Provides full disclosure of available routes for the local agent.
    */
-  list_routes(_input, routes, _context) {
+  list_routes(_input, routes, context) {
     const routeList = routes.map((route, index) => {
       const info: Record<string, unknown> = { index };
 
@@ -277,6 +538,20 @@ export const toolHandlers: Record<string, ToolHandler> = {
       info.allowedEndpoints = route.allowedEndpoints;
       info.secretNames = Object.keys(route.secrets);
       info.autoHeaders = Object.keys(route.headers);
+
+      // Timeouts. The budget clamp is otherwise silent, so report what a call
+      // would actually get *right now* rather than only the connection's
+      // nominal ceiling — an agent can then pick a workable `timeoutMs`
+      // instead of discovering the clamp by timing out.
+      if (route.requestTimeoutMs !== undefined) info.requestTimeoutMs = route.requestTimeoutMs;
+      info.defaultTimeoutMs = applyOutboundBudget(
+        resolveOutboundTimeout(undefined, route.requestTimeoutMs),
+        context.outboundBudgetMs,
+      );
+      info.maxTimeoutMs = applyOutboundBudget(
+        resolveOutboundTimeout(MAX_OUTBOUND_TIMEOUT_MS, route.requestTimeoutMs),
+        context.outboundBudgetMs,
+      );
 
       // Ingestor & testing metadata
       info.hasTestConnection = route.testConnection !== undefined;
@@ -328,7 +603,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
    * Test a connection's API credentials by executing a pre-configured,
    * non-destructive read-only request. Returns success/failure with status details.
    */
-  async test_connection(input, routes, _context) {
+  async test_connection(input, routes, context) {
     const { connection } = input as { connection: string };
 
     // Find the route matching this connection alias
@@ -359,6 +634,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
           body: testConfig.body,
         },
         routes,
+        context.outboundBudgetMs,
       );
 
       const isSuccess = expectedStatus.includes(result.status);
@@ -388,7 +664,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
    * Test an event listener / ingestor's configuration by running a lightweight
    * verification appropriate to its type (auth check, secret check, poll check).
    */
-  async test_ingestor(input, routes, _context) {
+  async test_ingestor(input, routes, context) {
     const { connection } = input as { connection: string };
 
     const route = routes.find((r) => r.alias === connection);
@@ -479,6 +755,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
               body: testConfig.request.body,
             },
             routes,
+            context.outboundBudgetMs,
           );
 
           const isSuccess = expectedStatus.includes(result.status);
@@ -536,7 +813,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
    * Resolve dynamic options for a listener configuration field.
    * Fetches options from the external API (e.g., list of Trello boards).
    */
-  async resolve_listener_options(input, routes, _context) {
+  async resolve_listener_options(input, routes, context) {
     const { connection, paramKey } = input as { connection: string; paramKey: string };
 
     const route = routes.find((r) => r.alias === connection);
@@ -559,7 +836,11 @@ export const toolHandlers: Record<string, ToolHandler> = {
     } = field.dynamicOptions;
 
     try {
-      const result = await executeProxyRequest({ method, url, headers: {}, body }, routes);
+      const result = await executeProxyRequest(
+        { method, url, headers: {}, body },
+        routes,
+        context.outboundBudgetMs,
+      );
 
       // Navigate to the response path to find the items array
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- navigating unknown response shape
