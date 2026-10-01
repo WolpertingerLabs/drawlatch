@@ -12,13 +12,9 @@ Drawlatch is a config-driven proxy that gives AI agents authenticated access to 
 - **Endpoint allowlisting** — agents can only reach explicitly configured URL patterns
 - **Per-caller access control** — each agent identity sees only its assigned connections
 - **Real-time event ingestion** — WebSocket, webhook, and polling listeners for incoming events ([details](INGESTORS.md))
-- **Two operating modes** — remote (secrets on a separate server with E2EE) or local (in-process library)
+- **Zero secrets on the client** — a local MCP stdio proxy forwards end-to-end encrypted requests to a daemon that holds the credentials
 
 ## How It Works
-
-Drawlatch runs in two modes depending on your trust model:
-
-### Remote Mode — Secrets Never Leave the Server
 
 The local MCP proxy holds no secrets. It encrypts requests and forwards them to a remote server that injects credentials and makes the actual API calls.
 
@@ -30,23 +26,6 @@ The local MCP proxy holds no secrets. It encrypts requests and forwards them to 
 ```
 
 The crypto layer uses Ed25519 signatures for mutual authentication and X25519 ECDH to derive AES-256-GCM session keys — all built on Node.js native `crypto` with zero external dependencies.
-
-### Local Mode — In-Process Library
-
-No server, no encryption. Your application imports drawlatch directly and calls the same `executeProxyRequest()` function the remote server uses. Secrets come from `process.env` on the same machine.
-
-```
-┌──────────────────────────────────────────┐                    ┌──────────────┐
-│  Your Application                        │── HTTPS ──────────►│  External API │
-│  ┌──────────┐   in-process   ┌────────┐ │                    │               │
-│  │  Agent   │◄── call ──────►│ drawl. │ │                    └──────────────┘
-│  └──────────┘                └────────┘ │
-└──────────────────────────────────────────┘
-```
-
-You still get config-driven route resolution, endpoint allowlisting, per-caller access control, and ingestor support — just without cryptographic secret isolation.
-
-> **When to use which:** Remote mode when secrets must be hidden from the agent's machine (shared servers, CI, untrusted environments). Local mode when running on your own machine and you want convenience without a separate server.
 
 ## Quick Start
 
@@ -498,7 +477,7 @@ See **[INGESTORS.md](INGESTORS.md)** for full configuration reference.
 
 ## Key Exchange
 
-Remote mode requires mutual authentication via Ed25519/X25519 keypairs. Each identity gets four PEM files (signing + exchange, public + private). The `drawlatch init` command handles this automatically for single-machine setups.
+The encrypted channel requires mutual authentication via Ed25519/X25519 keypairs. Each identity gets four PEM files (signing + exchange, public + private). The `drawlatch init` command handles this automatically for single-machine setups.
 
 **Directory structure:**
 
@@ -588,50 +567,30 @@ Issue-caller options (drawlatch issue-caller <alias>):
   --into <keysDir>       Same host: write the key files into a callboard keys dir
 ```
 
-## Library Usage (Local Mode)
+## Package Exports
 
-Import drawlatch directly for in-process use — no server, no encryption:
-
-```typescript
-import { loadRemoteConfig, resolveCallerRoutes, resolveRoutes, resolveSecrets } from "drawlatch/shared/config";
-import { executeProxyRequest } from "drawlatch/remote/tool-dispatch";
-
-const config = loadRemoteConfig();
-const callerRoutes = resolveCallerRoutes(config, "my-laptop");
-const callerEnv = resolveSecrets(config.callers["my-laptop"]?.env ?? {});
-const routes = resolveRoutes(callerRoutes, callerEnv);
-
-const result = await executeProxyRequest(
-  { method: "GET", url: "https://api.github.com/user" },
-  routes,
-);
-```
-
-### Available Exports
+drawlatch is primarily a CLI and daemon, but it also exposes a small set of
+subpath exports for hosts (such as Callboard) that talk to a drawlatch daemon.
+Only these specifiers resolve; any other deep import throws
+`ERR_PACKAGE_PATH_NOT_EXPORTED`.
 
 | Export Path | Description |
 |-------------|-------------|
-| `drawlatch` | MCP proxy server (stdio transport) |
-| `drawlatch/remote/server` | `executeProxyRequest()` and server functions |
-| `drawlatch/remote/ingestors` | `IngestorManager` and ingestor types |
-| `drawlatch/shared/config` | Config loading, route/secret resolution |
-| `drawlatch/shared/connections` | Connection template loading |
-| `drawlatch/shared/env-utils` | Environment variable and secret utilities |
-| `drawlatch/shared/crypto` | Key generation, encrypted channel |
-| `drawlatch/shared/protocol` | Handshake protocol, message types |
+| `@wolpertingerlabs/drawlatch` | MCP stdio proxy entry point (`dist/mcp/server.js`). Importing it starts the stdio server. |
+| `@wolpertingerlabs/drawlatch/shared/crypto` | Key generation and loading, fingerprints, `EncryptedChannel` |
+| `@wolpertingerlabs/drawlatch/shared/protocol` | Handshake (`HandshakeInitiator` / `HandshakeResponder`) and wire message types |
+| `@wolpertingerlabs/drawlatch/shared/migrations` | Idempotent config-dir migrations (`migrateKeyLayout`, `migrateConfigDir`) |
+| `@wolpertingerlabs/drawlatch/remote/server` | Remote daemon entry point. Resolve its path (e.g. `import.meta.resolve`) and spawn it with `node`; it is not a library API |
+| `@wolpertingerlabs/drawlatch/remote/caller-bootstrap` | Caller alias validation (`CALLER_ALIAS_REGEX`) and caller provisioning/issuance helpers |
+| `@wolpertingerlabs/drawlatch/remote/admin-types` | Types shared with the admin API, including the caller bundle format (`CallerBundleV1`) |
 
 ## Security Model
-
-### Both Modes
 
 - **Endpoint allowlisting** — requests only proxied to explicitly configured URL patterns
 - **Per-caller access control** — each caller only sees their assigned connections
 - **Per-caller credential isolation** — same connector, different credentials via `env` overrides
 - **Rate limiting** — configurable per-session (default: 60/min)
 - **Audit logging** — all operations logged with caller identity, session ID, timestamps
-
-### Remote Mode Only
-
 - **Zero secrets on the client** — the MCP proxy never sees API keys or tokens
 - **Mutual authentication** — Ed25519 signatures before any data exchange
 - **End-to-end encryption** — AES-256-GCM with X25519 ECDH session keys

@@ -12,9 +12,6 @@
  * Consumed by:
  *   - The remote secure server's `/request` dispatch (src/remote/server.ts)
  *   - The password-gated admin API (src/remote/admin-mutations.ts)
- *   - Any in-process host (e.g. callboard) that imports
- *     `@wolpertingerlabs/drawlatch/remote/tool-dispatch` instead of
- *     re-implementing a LocalProxy.
  *
  * Pure in the sense that handlers take `routes` + `context` as input rather
  * than reading global session state. The only side effects are the outbound
@@ -129,10 +126,9 @@ export function resolveOutboundTimeout(requested: unknown, routeTimeout: unknown
  *
  * `budgetMs` is the window the local proxy actually armed its own socket for,
  * minus its slack — see `outboundBudgetMs` on ProxyRequest. An **absent** or
- * malformed budget means "no clamp", never zero: three real callers have no
- * local proxy in front of them (an in-process host importing this module, the
- * password-gated admin API, and an older local proxy talking to a newer
- * remote). Guarded explicitly rather than with `??` because
+ * malformed budget means "no clamp", never zero: two real callers arrive
+ * without one (the password-gated admin API, and an older local proxy talking
+ * to a newer remote). Guarded explicitly rather than with `??` because
  * `Math.min(ceiling, undefined - slack)` is silently NaN, which
  * `AbortSignal.timeout()` then rejects outright.
  */
@@ -495,8 +491,8 @@ export interface ToolContext {
    *  of their own (test_connection, test_ingestor, resolve_listener_options)
    *  still stay inside the caller's deadline.
    *
-   *  Absent means **no clamp**, never zero: in-process hosts, the admin API,
-   *  and older local proxies all arrive without one. */
+   *  Absent means **no clamp**, never zero: the admin API and older local
+   *  proxies both arrive without one. */
   outboundBudgetMs?: number;
 }
 
@@ -1404,8 +1400,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
 /**
  * Dispatch a single tool call by name. Throws on unknown tool.
  *
- * The canonical entry point for in-process hosts (admin API, callboard) that
- * want to invoke a tool without going through the encrypted `/request` path.
+ * The canonical entry point for the admin API, which invokes tools without
+ * going through the encrypted `/request` path.
  */
 export async function dispatchTool(
   toolName: string,

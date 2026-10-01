@@ -1,7 +1,7 @@
 /**
  * .env file and secret-status utilities.
  *
- * Shared between the remote server (tool handlers) and callboard (local mode).
+ * Shared by the remote server (tool handlers, admin API) and the drawlatch CLI.
  * All functions use getEnvFilePath() from shared/config for path resolution.
  */
 
@@ -52,14 +52,6 @@ export function loadEnvFile(): Record<string, string> {
   }
 
   return vars;
-}
-
-/** Load .env file into process.env (for startup). */
-export function loadEnvIntoProcess(): void {
-  const vars = loadEnvFile();
-  for (const [key, value] of Object.entries(vars)) {
-    process.env[key] ??= value;
-  }
 }
 
 /**

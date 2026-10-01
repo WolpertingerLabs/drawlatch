@@ -498,11 +498,6 @@ export function loadRemoteConfig(): RemoteServerConfig {
 
 // ── Split config saving ─────────────────────────────────────────────────────
 
-export function saveProxyConfig(config: ProxyConfig): void {
-  fs.mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(getProxyConfigPath(), JSON.stringify(config, null, 2), { mode: 0o600 });
-}
-
 export function saveRemoteConfig(config: RemoteServerConfig): void {
   fs.mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
   fs.writeFileSync(getRemoteConfigPath(), JSON.stringify(config, null, 2), { mode: 0o600 });

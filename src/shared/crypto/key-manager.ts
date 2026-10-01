@@ -115,45 +115,6 @@ export function saveCallerPublicKeys(
 }
 
 /**
- * List all caller aliases (scans `keys/callers/`).
- */
-export function listCallers(opts?: KeyManagerOpts): string[] {
-  const dir = callerKeysDir(opts);
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir, { withFileTypes: true })
-    .filter(
-      (d) =>
-        d.isDirectory() &&
-        (fs.existsSync(path.join(dir, d.name, 'signing.key.pem')) ||
-          fs.existsSync(path.join(dir, d.name, 'signing.pub.pem'))),
-    )
-    .map((d) => d.name);
-}
-
-/**
- * Check if a caller identity exists (has at least public keys).
- */
-export function callerExists(alias: string, opts?: KeyManagerOpts): boolean {
-  const dir = path.join(callerKeysDir(opts), alias);
-  return (
-    fs.existsSync(path.join(dir, 'signing.key.pem')) ||
-    fs.existsSync(path.join(dir, 'signing.pub.pem'))
-  );
-}
-
-/**
- * Check if server keys exist.
- */
-export function serverExists(opts?: KeyManagerOpts): boolean {
-  const dir = serverKeysDir(opts);
-  return (
-    fs.existsSync(path.join(dir, 'signing.key.pem')) ||
-    fs.existsSync(path.join(dir, 'signing.pub.pem'))
-  );
-}
-
-/**
  * Get the fingerprint of a caller's keys.
  */
 export function callerFingerprint(alias: string, opts?: KeyManagerOpts): string {

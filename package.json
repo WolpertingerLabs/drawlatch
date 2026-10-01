@@ -39,35 +39,10 @@
       "import": "./dist/shared/protocol/index.js",
       "default": "./dist/shared/protocol/index.js"
     },
-    "./shared/config": {
-      "types": "./dist/shared/config.d.ts",
-      "import": "./dist/shared/config.js",
-      "default": "./dist/shared/config.js"
-    },
-    "./shared/connections": {
-      "types": "./dist/shared/connections.d.ts",
-      "import": "./dist/shared/connections.js",
-      "default": "./dist/shared/connections.js"
-    },
-    "./shared/env-utils": {
-      "types": "./dist/shared/env-utils.d.ts",
-      "import": "./dist/shared/env-utils.js",
-      "default": "./dist/shared/env-utils.js"
-    },
-    "./shared/crypto/key-manager": {
-      "types": "./dist/shared/crypto/key-manager.d.ts",
-      "import": "./dist/shared/crypto/key-manager.js",
-      "default": "./dist/shared/crypto/key-manager.js"
-    },
     "./remote/server": {
       "types": "./dist/remote/server.d.ts",
       "import": "./dist/remote/server.js",
       "default": "./dist/remote/server.js"
-    },
-    "./remote/tool-dispatch": {
-      "types": "./dist/remote/tool-dispatch.d.ts",
-      "import": "./dist/remote/tool-dispatch.js",
-      "default": "./dist/remote/tool-dispatch.js"
     },
     "./remote/caller-bootstrap": {
       "types": "./dist/remote/caller-bootstrap.d.ts",
@@ -83,16 +58,6 @@
       "types": "./dist/shared/migrations.d.ts",
       "import": "./dist/shared/migrations.js",
       "default": "./dist/shared/migrations.js"
-    },
-    "./remote/ingestors": {
-      "types": "./dist/remote/ingestors/index.d.ts",
-      "import": "./dist/remote/ingestors/index.js",
-      "default": "./dist/remote/ingestors/index.js"
-    },
-    "./remote/tunnel": {
-      "types": "./dist/remote/tunnel.d.ts",
-      "import": "./dist/remote/tunnel.js",
-      "default": "./dist/remote/tunnel.js"
     }
   },
   "scripts": {

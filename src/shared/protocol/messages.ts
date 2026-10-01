@@ -25,7 +25,7 @@ export interface ProxyRequest {
    *  test_ingestor, resolve_listener_options).
    *
    *  Optional, and absence means "no clamp" — an older local proxy talking to a
-   *  newer remote simply omits it, and in-process hosts never set it. Both
+   *  newer remote simply omits it, and the admin API never sets it. Both
    *  sides tolerate absence, so adding it is not a breaking protocol change. */
   outboundBudgetMs?: number;
   /** Timestamp (ms since epoch) */

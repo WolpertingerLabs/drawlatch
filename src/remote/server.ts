@@ -270,9 +270,12 @@ export function cleanupSessions(
   return { expiredSessions, expiredHandshakes };
 }
 
+// unref'd so merely importing this module (e.g. to resolve its path) doesn't
+// hold the event loop open. The running daemon stays alive via its listening
+// HTTP server.
 setInterval(() => {
   cleanupSessions(sessions, pendingHandshakes);
-}, 60_000);
+}, 60_000).unref();
 
 /**
  * Project the active sessions into a sanitized snapshot for read-only use.
