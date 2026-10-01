@@ -1,7 +1,7 @@
 /**
  * .env file and secret-status utilities.
  *
- * Shared between the remote server (tool handlers) and callboard (local mode).
+ * Shared by the remote server (tool handlers, admin API) and the drawlatch CLI.
  * All functions use getEnvFilePath() from shared/config for path resolution.
  */
 

@@ -580,7 +580,7 @@ Only these specifiers resolve; any other deep import throws
 | `@wolpertingerlabs/drawlatch/shared/crypto` | Key generation and loading, fingerprints, `EncryptedChannel` |
 | `@wolpertingerlabs/drawlatch/shared/protocol` | Handshake (`HandshakeInitiator` / `HandshakeResponder`) and wire message types |
 | `@wolpertingerlabs/drawlatch/shared/migrations` | Idempotent config-dir migrations (`migrateKeyLayout`, `migrateConfigDir`) |
-| `@wolpertingerlabs/drawlatch/remote/server` | Remote daemon entry point. Resolve its path (e.g. `import.meta.resolve`) to spawn the daemon; also exports `createApp()` and `main()` |
+| `@wolpertingerlabs/drawlatch/remote/server` | Remote daemon entry point. Resolve its path (e.g. `import.meta.resolve`) and spawn it with `node`; it is not a library API |
 | `@wolpertingerlabs/drawlatch/remote/caller-bootstrap` | Caller alias validation (`CALLER_ALIAS_REGEX`) and caller provisioning/issuance helpers |
 | `@wolpertingerlabs/drawlatch/remote/admin-types` | Types shared with the admin API, including the caller bundle format (`CallerBundleV1`) |
 

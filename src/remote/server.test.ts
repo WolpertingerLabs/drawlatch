@@ -5,6 +5,10 @@
  * matchRoute from tool-dispatch.ts; resolvePlaceholders from shared/config.ts.
  */
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { resolvePlaceholders, type ResolvedRoute } from '../shared/config.js';
 
 import { checkRateLimit, cleanupSessions, SESSION_TTL, HANDSHAKE_TTL } from './server.js';
@@ -308,4 +312,33 @@ describe('cleanupSessions', () => {
     expect(sessionsMap.size).toBe(1);
     expect(pendingMap.size).toBe(1);
   });
+});
+
+// ── module import side effects ─────────────────────────────────────────────
+
+describe('importing server.ts', () => {
+  // Hosts resolve/import this module without running the daemon; a ref'd
+  // timer at module scope would keep their process alive forever.
+  it('does not hold the event loop open', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'server-import-'));
+    try {
+      const serverUrl = new URL('./server.ts', import.meta.url).href;
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--import',
+          import.meta.resolve('tsx'),
+          '--input-type=module',
+          '-e',
+          `await import(${JSON.stringify(serverUrl)});`,
+        ],
+        { cwd, env: { ...process.env, MCP_CONFIG_DIR: cwd }, timeout: 20_000 },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.signal).toBeNull();
+      expect(result.status).toBe(0);
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
