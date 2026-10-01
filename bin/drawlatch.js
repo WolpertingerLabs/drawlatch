@@ -82,7 +82,6 @@ try {
       path: { type: "boolean", default: false },
       full: { type: "boolean", default: false },
       requests: { type: "boolean", default: false },
-      ttl: { type: "string", default: "300" },
       name: { type: "string" },
       connections: { type: "string" },
       endpoint: { type: "string" },
@@ -190,15 +189,6 @@ switch (subcommand) {
       printIssueCallerHelp();
     } else {
       await cmdIssueCaller();
-    }
-    break;
-  case "sync":
-    // Parked: kept in-tree as a high-assurance escape hatch, undocumented in
-    // the main help (superseded by `issue-caller`).
-    if (values.help) {
-      printSyncHelp();
-    } else {
-      await cmdSync();
     }
     break;
   case "set-password":
@@ -817,7 +807,7 @@ async function cmdDoctor() {
         const callerDir = join(callersDir, alias);
         const hasCallerKeys = existsSync(join(callerDir, "signing.pub.pem")) &&
                               existsSync(join(callerDir, "exchange.pub.pem"));
-        check(`Caller keys for "${alias}" (keys/callers/${alias}/)`, hasCallerKeys, `Run: drawlatch generate-keys caller ${alias} (or sync)`);
+        check(`Caller keys for "${alias}" (keys/callers/${alias}/)`, hasCallerKeys, `Run: drawlatch generate-keys caller ${alias}`);
 
         if (hasCallerKeys) {
           try {
@@ -874,123 +864,6 @@ async function cmdDoctor() {
   console.log();
 
   process.exit(failed > 0 ? 1 : 0);
-}
-
-async function cmdSync() {
-  const config = loadRemoteConfig();
-  const port = config.port;
-  const host = config.host;
-  const ttlSeconds = parseInt(values.ttl, 10) || 300;
-  const ttlMs = ttlSeconds * 1000;
-
-  // Check that the server is running
-  const healthy = await healthCheck(host, port);
-  if (!healthy) {
-    console.error(
-      "Error: Drawlatch remote server is not running.\n" +
-        "  Start it first: drawlatch start\n",
-    );
-    process.exit(1);
-  }
-
-  // Import sync helpers from compiled drawlatch code
-  const { generateSyncCode, generateSyncEncryptionKey } = await import(
-    join(PKG_ROOT, "dist/shared/protocol/sync.js")
-  );
-
-  const inviteCode = generateSyncCode();
-  const encryptionKey = generateSyncEncryptionKey();
-
-  console.log("\nStarting key exchange...\n");
-  console.log(`  Invite code:    ${inviteCode}`);
-  console.log(`  Encryption key: ${encryptionKey}`);
-  console.log(
-    "\nGive both values to the callboard operator.",
-  );
-  console.log("They will provide a confirm code.\n");
-
-  // Prompt for confirm code
-  const confirmCode = await promptInput("Enter confirm code: ");
-  if (!confirmCode.trim()) {
-    console.error("No confirm code entered. Aborting.");
-    process.exit(1);
-  }
-
-  // Open the sync session on the running server
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(`http://${host}:${port}/sync/listen`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        inviteCode,
-        confirmCode: confirmCode.trim(),
-        encryptionKey,
-        ttlMs,
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      console.error(`Failed to open sync session: ${body.error || res.statusText}`);
-      process.exit(1);
-    }
-  } catch (err) {
-    console.error(`Failed to reach server: ${err.message}`);
-    process.exit(1);
-  }
-
-  console.log(`\nWaiting for sync from callboard (timeout: ${ttlSeconds}s)...`);
-
-  // Poll for completion
-  const start = Date.now();
-  while (Date.now() - start < ttlMs) {
-    await sleep(1000);
-
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3000);
-      const res = await fetch(`http://${host}:${port}/sync/status`, {
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-
-      if (!res.ok) continue;
-      const status = await res.json();
-
-      if (status.completed) {
-        console.log(`\nSync complete!`);
-        console.log(`  Caller alias:  ${status.callerAlias}`);
-        console.log(`  Fingerprint:   ${status.fingerprint}`);
-        console.log(
-          `  Keys saved to: ${join(CONFIG_DIR, "keys", "callers", status.callerAlias)}/`,
-        );
-        console.log(`\nThe caller can now connect (no server restart needed).`);
-        console.log(`\nTo grant API access, add connections in ${join(CONFIG_DIR, "remote.config.json")}:`);
-        console.log(`  "callers": {`);
-        console.log(`    "${status.callerAlias}": {`);
-        console.log(`      "connections": ["github", "slack", ...]`);
-        console.log(`    }`);
-        console.log(`  }`);
-        console.log(`\nThen set the required secrets in ${ENV_FILE}`);
-        console.log();
-        process.exit(0);
-      }
-
-      if (!status.active) {
-        console.error("\nSync session expired or was cancelled.");
-        process.exit(1);
-      }
-    } catch {
-      // Transient fetch error, keep polling
-    }
-  }
-
-  console.error("\nSync session timed out.");
-  process.exit(1);
 }
 
 // ── issue-caller ──────────────────────────────────────────────────────────
@@ -1118,20 +991,6 @@ function notifyDaemonReloadNeeded() {
   if (readPid()) {
     console.error(`\nNote: restart the daemon so it authorizes the new caller — drawlatch restart`);
   }
-}
-
-async function promptInput(prompt) {
-  const { createInterface } = await import("node:readline");
-  return new Promise((resolve) => {
-    const rl = createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-    rl.question(prompt, (answer) => {
-      rl.close();
-      resolve(answer);
-    });
-  });
 }
 
 // ── set-password / change-password ────────────────────────────────
@@ -1712,30 +1571,6 @@ Options:
 
 Checks config files, keys, peer directories, secrets, and server health.
 Each failure includes the exact command to fix it.
-`);
-}
-
-function printSyncHelp() {
-  console.log(`
-drawlatch sync
-
-Exchange keys with a callboard instance using a double-code approval flow.
-
-Usage: drawlatch sync [options]
-
-Options:
-  --ttl <seconds>    Sync session timeout (default: 300)
-  -h, --help         Show this help message
-
-Flow:
-  1. Run 'drawlatch sync' — displays an invite code and encryption key
-  2. Give both values to the callboard operator
-  3. They enter them into callboard, which generates a confirm code
-  4. Enter the confirm code when prompted
-  5. Callboard sends the encrypted sync request
-  6. Keys are exchanged automatically
-
-The server must be running (drawlatch start) before using this command.
 `);
 }
 

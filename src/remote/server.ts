@@ -23,7 +23,6 @@ import { fileURLToPath } from 'node:url';
 
 import {
   loadRemoteConfig,
-  saveRemoteConfig,
   resolveRoutes,
   resolveCallerRoutes,
   resolveSecrets,
@@ -46,21 +45,6 @@ import {
   type ProxyRequest,
   type ProxyResponse,
 } from '../shared/protocol/index.js';
-import {
-  decryptSyncPayload,
-  encryptSyncPayload,
-  validateSyncRequest,
-  isSyncSessionActive,
-  MAX_SYNC_ATTEMPTS,
-  type SyncSession,
-  type SyncRequest,
-  type SyncResponse,
-} from '../shared/protocol/sync.js';
-import {
-  importCallerPublicKeys,
-  exportServerPublicKeys,
-  callerFingerprint,
-} from '../shared/crypto/key-manager.js';
 import { getCallerKeysDir, getServerKeysDir } from '../shared/config.js';
 import { IngestorManager } from './ingestors/index.js';
 import { listConnectionTemplates } from '../shared/connections.js';
@@ -178,7 +162,7 @@ function resolvePort(envValue: string | undefined, fallback: number): number {
   return parsed;
 }
 
-/** Loopback guard — used by /sync/listen, /sync/status, /events/stream, /admin.
+/** Loopback guard — used by /events/stream, /admin.
  *  Hoisted to module scope so the admin router and its tests can reuse it. */
 export function requireLoopback(
   req: express.Request,
@@ -192,9 +176,6 @@ export function requireLoopback(
     res.status(403).json({ error: 'Forbidden: local access only' });
   }
 }
-
-/** Active sync session (at most one at a time). */
-let activeSyncSession: SyncSession | null = null;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -379,11 +360,6 @@ export function createApp(options: CreateAppOptions = {}) {
   // Raw buffer for encrypted request endpoint (50 MB to accommodate base64-encoded file uploads)
   app.use('/request', express.raw({ type: 'application/octet-stream', limit: '50mb' }));
 
-  // Plain text for sync endpoint (AES-encrypted base64 body)
-  app.use('/sync', express.text({ type: 'text/plain', limit: '64kb' }));
-  // JSON for sync management endpoints (64kb limit — sync listen messages are tiny)
-  app.use('/sync/listen', express.json({ limit: '64kb' }));
-
   // Raw buffer for webhook endpoints (needed for signature verification)
   app.use('/webhooks', express.raw({ type: 'application/json', limit: '1mb' }));
 
@@ -438,7 +414,6 @@ export function createApp(options: CreateAppOptions = {}) {
     }
 
     app.use('/handshake', ipRateLimiter(60_000, 30));
-    app.use('/sync', ipRateLimiter(60_000, 10));
     app.use('/webhooks', ipRateLimiter(60_000, 120));
     app.use('/health', ipRateLimiter(60_000, 60));
     // /api/admin is password-gated but the dashboard polls — give it more headroom than /health
@@ -697,169 +672,6 @@ export function createApp(options: CreateAppOptions = {}) {
     }
   });
 
-  // ── Sync: key exchange endpoints ───────────────────────────────────────
-
-  // Internal management: open a sync session (called by drawlatch CLI)
-  app.post('/sync/listen', requireLoopback, (req, res) => {
-    const { inviteCode, confirmCode, encryptionKey, ttlMs } = req.body;
-
-    if (!inviteCode || !encryptionKey) {
-      res.status(400).json({ error: 'Missing inviteCode or encryptionKey' });
-      return;
-    }
-
-    if (activeSyncSession && isSyncSessionActive(activeSyncSession)) {
-      res.status(409).json({ error: 'A sync session is already active' });
-      return;
-    }
-
-    activeSyncSession = {
-      inviteCode,
-      confirmCode: confirmCode ?? null,
-      encryptionKey,
-      createdAt: Date.now(),
-      ttlMs: ttlMs ?? 5 * 60 * 1000,
-      completed: false,
-      failedAttempts: 0,
-    };
-
-    console.log('[sync] Sync session opened, waiting for callboard...');
-    res.json({ ok: true });
-  });
-
-  // Internal management: check sync session status (polled by CLI)
-  app.get('/sync/status', requireLoopback, (_req, res) => {
-    if (!activeSyncSession) {
-      res.json({ active: false, completed: false });
-      return;
-    }
-
-    const active = isSyncSessionActive(activeSyncSession);
-    res.json({
-      active,
-      completed: activeSyncSession.completed,
-      ...(activeSyncSession.result && {
-        callerAlias: activeSyncSession.result.callerAlias,
-        fingerprint: activeSyncSession.result.fingerprint,
-      }),
-    });
-  });
-
-  // External: called by callboard to exchange keys (encrypted body)
-  app.post('/sync', (req, res) => {
-    // Refuse all sync calls unless actively listening
-    if (!activeSyncSession || !isSyncSessionActive(activeSyncSession)) {
-      res.status(404).json({ error: 'NO_ACTIVE_SESSION' });
-      return;
-    }
-
-    const session = activeSyncSession;
-
-    // Decrypt the request body
-    let decrypted: unknown;
-    try {
-      decrypted = decryptSyncPayload(req.body as string, session.encryptionKey);
-    } catch {
-      res.status(400).json({ error: 'DECRYPTION_FAILED' });
-      return;
-    }
-
-    // Validate payload shape
-    const validationError = validateSyncRequest(decrypted);
-    if (validationError) {
-      res.status(400).json({ error: 'INVALID_PAYLOAD', detail: validationError });
-      return;
-    }
-
-    const syncReq = decrypted as SyncRequest;
-
-    // Validate invite code
-    if (syncReq.inviteCode !== session.inviteCode) {
-      session.failedAttempts++;
-      if (session.failedAttempts >= MAX_SYNC_ATTEMPTS) {
-        console.error('[sync] Too many failed attempts — invalidating session');
-        activeSyncSession = null;
-      }
-      res.status(403).json({ error: 'CODE_MISMATCH' });
-      return;
-    }
-
-    // Validate confirm code (must be set by CLI before callboard calls)
-    if (!session.confirmCode) {
-      res.status(403).json({ error: 'CODE_MISMATCH', detail: 'Confirm code not yet entered' });
-      return;
-    }
-    if (syncReq.confirmCode !== session.confirmCode) {
-      session.failedAttempts++;
-      if (session.failedAttempts >= MAX_SYNC_ATTEMPTS) {
-        console.error('[sync] Too many failed attempts — invalidating session');
-        activeSyncSession = null;
-      }
-      res.status(403).json({ error: 'CODE_MISMATCH' });
-      return;
-    }
-
-    // Check expiry
-    if (Date.now() - session.createdAt > session.ttlMs) {
-      activeSyncSession = null;
-      res.status(410).json({ error: 'SESSION_EXPIRED' });
-      return;
-    }
-
-    // Save callboard's public keys
-    const callerAlias = syncReq.callerAlias;
-    try {
-      importCallerPublicKeys(callerAlias, syncReq.publicKeys);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      res.status(400).json({ error: 'INVALID_PAYLOAD', detail: `Invalid public keys: ${msg}` });
-      return;
-    }
-
-    // Reload config from disk so we don't clobber changes made since startup
-    const freshConfig = options.config ?? loadRemoteConfig();
-
-    // Register caller in config if not already present
-    if (!(callerAlias in freshConfig.callers)) {
-      freshConfig.callers[callerAlias] = {
-        connections: [],
-      };
-      saveRemoteConfig(freshConfig);
-      console.log(
-        `[sync] Registered new caller "${callerAlias}" (0 connections — configure manually)`,
-      );
-    } else {
-      console.log(`[sync] Caller "${callerAlias}" already exists, updated peer keys`);
-    }
-
-    // Reload authorized peers so the new caller can connect immediately
-    const newPeer = loadCallerPeers({ [callerAlias]: freshConfig.callers[callerAlias] });
-    for (const p of newPeer) {
-      if (!authorizedPeers.find((existing) => existing.alias === p.alias)) {
-        authorizedPeers.push(p);
-      }
-    }
-
-    // Build response with remote server's public keys
-    const remotePublicKeys = exportServerPublicKeys();
-    const fp = callerFingerprint(callerAlias);
-
-    const syncResponse: SyncResponse = {
-      remotePublicKeys,
-      callerAlias,
-      fingerprint: fp,
-    };
-
-    // Mark session as completed
-    session.completed = true;
-    session.result = { callerAlias, fingerprint: fp };
-
-    console.log(`[sync] Key exchange complete with "${callerAlias}" (fingerprint: ${fp})`);
-
-    const encryptedResponse = encryptSyncPayload(syncResponse, session.encryptionKey);
-    res.type('text/plain').send(encryptedResponse);
-  });
-
   // ── Health check (unencrypted, no secrets exposed) ─────────────────────
 
   app.get('/health', (_req, res) => {
@@ -1077,15 +889,7 @@ export function createApp(options: CreateAppOptions = {}) {
   const distDir = fileURLToPath(new URL('../../frontend/dist', import.meta.url));
   const indexHtml = path.join(distDir, 'index.html');
   if (fs.existsSync(indexHtml)) {
-    const apiPrefixes = [
-      '/api',
-      '/handshake',
-      '/request',
-      '/sync',
-      '/events',
-      '/webhooks',
-      '/health',
-    ];
+    const apiPrefixes = ['/api', '/handshake', '/request', '/events', '/webhooks', '/health'];
 
     app.use(express.static(distDir));
     app.use((req, res, next) => {
@@ -1162,8 +966,10 @@ export function main(): void {
   }
 
   if (Object.keys(config.callers).length === 0) {
-    console.log('[remote] No callers configured — server will accept sync requests.');
-    console.log('[remote] To add callers, run: drawlatch sync');
+    console.log('[remote] No callers configured.');
+    console.log(
+      '[remote] To add callers, run: drawlatch issue-caller <alias> (or use the dashboard Callers page)',
+    );
   }
 
   // First-boot auto-share: when supervised by a co-located callboard (which sets

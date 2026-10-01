@@ -191,7 +191,7 @@ The pages are views over the `/api/admin/*` JSON API. **Read** endpoints (`/meta
 
 | Method + path | Action |
 |---|---|
-| `POST /callers` | Create a caller **with a fresh keypair** (no interactive sync) |
+| `POST /callers` | Create a caller **with a fresh keypair** |
 | `DELETE /callers/:alias` | Delete a caller (its keys + prefixed env vars); `default` is protected |
 | `POST /callers/:alias/connections/:connection` `{enabled}` | Enable/disable a connection |
 | `PUT  /callers/:alias/connections/:connection/secrets` `{secrets}` | Set/clear secrets (empty string = delete) — **write-only**, read back as booleans |
@@ -201,7 +201,7 @@ The pages are views over the `/api/admin/*` JSON API. **Read** endpoints (`/meta
 
 Secrets are **write-only** through this API: you `PUT` values, and every read path reports only booleans. After any mutation the daemon live-reloads routes/ingestors for the affected caller. The same logic powers the encrypted MCP tools and the admin API through a single shared `tool-dispatch` module, so the two surfaces can never drift.
 
-A loopback-only `POST /sync/auto-enroll` lets a **co-located** client (one that shares drawlatch's filesystem) provision a caller with zero interaction by presenting the one-time token drawlatch writes to `~/.drawlatch/enroll.token` at startup.
+A **co-located** callboard (one that shares drawlatch's filesystem) is provisioned with zero interaction. On every boot with `DRAWLATCH_LOCAL_CALLER_KEYS_DIR` set, the daemon checks for the caller named by `DRAWLATCH_LOCAL_CALLER_ALIAS` (callboard sets this to `default`; drawlatch falls back to `callboard-local`). If the caller's `remote.config.json` entry or its key files under drawlatch's `keys/callers/<alias>/` are missing, it mints a fresh keypair and writes the caller keys to `<dir>/callers/<alias>/` and the server public keys to `<dir>/server/`; otherwise it does nothing. `DRAWLATCH_LOCAL_CALLER_CONNECTIONS` (comma-separated) sets the connections of a newly issued caller; if unset, it keeps the existing entry's connections or copies the `default` caller's.
 
 ### Security model
 
@@ -434,7 +434,6 @@ $MCP_CONFIG_DIR/                 (default: ~/.drawlatch)
   remote.config.json    — RemoteServerConfig (callers, connectors, port, tunnel flag)
   proxy.config.json     — ProxyConfig (local MCP proxy → remote URL)
   .env                  — secret values, prefixed per caller (mode 0600)
-  enroll.token          — one-time loopback auto-enroll token (mode 0600)
   keys/
     server/             — the daemon's own Ed25519 + X25519 keypair
     callers/<alias>/    — one keypair per caller alias
@@ -513,7 +512,7 @@ Remote mode requires mutual authentication via Ed25519/X25519 keypairs. Each ide
 
 Both sides (caller and server) store their keys in the same directory tree. On a single machine, `drawlatch init` generates both and they can authenticate immediately. On separate machines, copy the `*.pub.pem` files to the corresponding directory on the other machine.
 
-**Using [Callboard](https://github.com/WolpertingerLabs/callboard)?** Use `drawlatch sync` to exchange keys automatically via a double-code approval flow — no manual file copying needed.
+**Using [Callboard](https://github.com/WolpertingerLabs/callboard)?** Issue a caller credential bundle with `drawlatch issue-caller <alias> -o <alias>.drawlatch-caller.json` (or **Issue credentials** on the dashboard's Callers page) and import it in callboard — no manual file copying needed. On the same host, `drawlatch issue-caller <alias> --into <callboard keys dir>` writes the key files directly.
 
 ### Multiple Agent Identities
 
@@ -554,7 +553,7 @@ Commands:
   doctor             Validate setup and diagnose issues
   set-password       Set/change the dashboard password (alias: change-password)
   generate-keys      Generate Ed25519 + X25519 keypairs
-  sync               Exchange keys with a callboard instance
+  issue-caller       Issue a caller credential bundle (for a callboard instance)
 
 Options:
   -h, --help         Show help
@@ -580,8 +579,13 @@ Generate-keys subcommands:
   show <path>        Show fingerprint of existing keypair
   --dir <path>       Generate to custom directory
 
-Sync options:
-  --ttl <seconds>    Session timeout (default: 300)
+Issue-caller options (drawlatch issue-caller <alias>):
+  --name <name>          Display name (defaults to the alias)
+  --connections <list>   Connections to authorize (defaults to cloning "default")
+  --endpoint <url>       Endpoint URL to pin in the bundle
+  --passphrase           Encrypt the private keys in the bundle with a passphrase
+  -o, --output <file>    Write the bundle to a file instead of stdout
+  --into <keysDir>       Same host: write the key files into a callboard keys dir
 ```
 
 ## Library Usage (Local Mode)
