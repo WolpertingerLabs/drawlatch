@@ -57,7 +57,7 @@ function formatMessage(level: LevelName, mod: string, msg: string): string {
 
 // ── Logger interface ────────────────────────────────────────────────────
 
-export interface Logger {
+interface Logger {
   error(message: string, ...args: unknown[]): void;
   warn(message: string, ...args: unknown[]): void;
   info(message: string, ...args: unknown[]): void;

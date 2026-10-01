@@ -6,6 +6,6 @@
     "name": "Wolpertinger Labs"
   },
   "homepage": "https://github.com/WolpertingerLabs/drawlatch",
-  "license": "ISC",
+  "license": "MIT",
   "keywords": ["mcp", "security", "proxy", "encryption", "secrets", "api"]
 }

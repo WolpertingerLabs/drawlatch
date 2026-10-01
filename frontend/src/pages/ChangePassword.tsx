@@ -66,8 +66,8 @@ export default function ChangePassword() {
         <h1 className="page-title">Change password</h1>
       </header>
       <div className="subtitle-meta auth-page-subtitle">
-        Update the password for this drawlatch-ui daemon. Other browsers will
-        be signed out.
+        Update the password for this drawlatch daemon. Other browsers will be
+        signed out.
       </div>
 
       <form onSubmit={handleSubmit} className="auth-form-card" noValidate>

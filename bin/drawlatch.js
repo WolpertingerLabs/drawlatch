@@ -28,7 +28,7 @@ const SERVER_ENTRY = join(PKG_ROOT, "dist/remote/server.js");
 const GENERATE_KEYS_ENTRY = join(PKG_ROOT, "dist/cli/generate-keys.js");
 
 // Import config helpers from compiled drawlatch code
-const { getConfigDir, getEnvFilePath, getKeysDir, getCallerKeysDir, getServerKeysDir, getProxyConfigPath, getRemoteConfigPath, loadRemoteConfig } = await import(
+const { getConfigDir, getEnvFilePath, getCallerKeysDir, getServerKeysDir, getProxyConfigPath, getRemoteConfigPath, loadProxyConfig, loadRemoteConfig } = await import(
   join(PKG_ROOT, "dist/shared/config.js")
 );
 
@@ -268,10 +268,14 @@ async function cmdInit() {
   if (existsSync(proxyConfigPath)) {
     steps.push(`Proxy config: already exists`);
   } else {
+    // No proxy.config.json yet, so loadProxyConfig() returns the built-in
+    // defaults. Taking the timeouts from there keeps the scaffold from drifting
+    // past MAX_LOCAL_TIMEOUT_MS, where requestTimeout is silently clamped.
+    const { connectTimeout, requestTimeout } = loadProxyConfig();
     const proxyConfig = {
       remoteUrl: "http://127.0.0.1:9999",
-      connectTimeout: 10000,
-      requestTimeout: 300000,
+      connectTimeout,
+      requestTimeout,
     };
     writeFileSync(proxyConfigPath, JSON.stringify(proxyConfig, null, 2) + "\n", { mode: 0o600 });
     steps.push(`Proxy config: CREATED`);

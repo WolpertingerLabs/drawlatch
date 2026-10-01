@@ -14,7 +14,7 @@ import { createLogger } from '../../shared/logger.js';
 const log = createLogger('ingestor');
 
 /** Signature for a factory that creates an ingestor from its config. */
-export type IngestorFactory = (
+type IngestorFactory = (
   connectionAlias: string,
   config: IngestorConfig,
   secrets: Record<string, string>,

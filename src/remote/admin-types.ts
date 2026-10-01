@@ -183,10 +183,9 @@ export interface AdminSecret {
 
 // ── Daemon reachability envelope ─────────────────────────────────────────
 /**
- * Legacy envelope from the standalone drawlatch-ui backend, which proxied to a
- * separate daemon process and needed to surface an "offline" state when that
- * process was unreachable. Retained as a type for the frontend's transition;
- * same-origin calls in the merged daemon cannot refuse themselves.
+ * Failure envelope the dashboard frontend synthesizes when an admin read fails
+ * (401, or any other non-OK response). The daemon never sends it; see
+ * frontend/src/api.ts.
  */
 export interface DaemonOfflineEnvelope {
   daemon: 'down';

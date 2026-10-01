@@ -53,7 +53,7 @@ import type {
 } from './admin-types.js';
 import path from 'node:path';
 
-export interface AdminRouterDeps extends AdminMutationDeps {
+interface AdminRouterDeps extends AdminMutationDeps {
   /** Sanitized session snapshot — see Session in server.ts. */
   getSessionsSnapshot: () => SessionSnapshot[];
   /** Late-bound so tests can swap the manager without rebuilding the router. */

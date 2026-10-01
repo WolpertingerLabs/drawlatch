@@ -34,14 +34,15 @@ function mockDirent(name: string, isDir: boolean) {
   };
 }
 
-/** Mock readdirSync to return flat top-level JSON files (no subdirs).
- *  Handles both the { withFileTypes: true } call and string-encoding calls. */
+/** Mock readdirSync so CONNECTIONS_DIR holds a single category subdirectory
+ *  containing the given JSON files. The top-level scan uses
+ *  { withFileTypes: true }; the subdirectory scan uses a string encoding. */
 function mockFlatDir(files: string[]) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   vi.spyOn(fs, 'readdirSync').mockImplementation((_dirPath: any, opts?: any) => {
     if (opts?.withFileTypes) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return files.map((f) => mockDirent(f, false)) as any;
+      return [mockDirent('test-category', true)] as any;
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return files as any;
@@ -122,15 +123,15 @@ describe('listAvailableConnections', () => {
     expect(available).toEqual([]);
   });
 
-  it('should filter out non-JSON files', () => {
+  it('should filter out non-JSON files and ignore top-level files', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     vi.spyOn(fs, 'readdirSync').mockImplementation((_dirPath: any, opts?: any) => {
       if (opts?.withFileTypes) {
         return [
-          mockDirent('github.json', false),
+          mockDirent('developer-tools', true),
+          mockDirent('stray.json', false),
           mockDirent('README.md', false),
-          mockDirent('.DS_Store', false),
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ] as any;
       }

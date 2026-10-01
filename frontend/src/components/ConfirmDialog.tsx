@@ -13,7 +13,7 @@ import { useEffect } from "react";
 import { AlertTriangle, Loader2, X } from "lucide-react";
 import "./ConfirmDialog.css";
 
-export interface ConfirmDialogProps {
+interface ConfirmDialogProps {
   /** Headline above the body copy, e.g. `Delete caller "prod"?` */
   title: string;
   /** Body copy. Can include inline elements (`<code>`, `<strong>`, etc.). */
