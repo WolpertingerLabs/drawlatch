@@ -6,9 +6,6 @@ import {
   createCaller,
   exportServerPublicKeys,
   saveCallerPublicKeys,
-  listCallers,
-  callerExists,
-  serverExists,
   callerFingerprint,
   serverFingerprint,
 } from './key-manager.js';
@@ -75,41 +72,6 @@ describe('saveCallerPublicKeys', () => {
 
     expect(saved.signing).toBe(pub.signing);
     expect(saved.exchange).toBe(pub.exchange);
-  });
-});
-
-describe('listCallers', () => {
-  it('lists created callers', () => {
-    expect(listCallers({ configDir: tmpDir })).toEqual([]);
-    createCaller('alice', { configDir: tmpDir });
-    createCaller('bob', { configDir: tmpDir });
-    const callers = listCallers({ configDir: tmpDir }).sort();
-    expect(callers).toEqual(['alice', 'bob']);
-  });
-
-  it('lists imported caller public keys', () => {
-    expect(listCallers({ configDir: tmpDir })).toEqual([]);
-    const bundle = generateKeyBundle();
-    const pub = serializePublicKeys(extractPublicKeys(bundle));
-    saveCallerPublicKeys('peer-a', pub, { configDir: tmpDir });
-    expect(listCallers({ configDir: tmpDir })).toEqual(['peer-a']);
-  });
-});
-
-describe('callerExists / serverExists', () => {
-  it('returns false for nonexistent', () => {
-    expect(callerExists('nope', { configDir: tmpDir })).toBe(false);
-    expect(serverExists({ configDir: tmpDir })).toBe(false);
-  });
-
-  it('returns true after creation', () => {
-    createCaller('exists', { configDir: tmpDir });
-    expect(callerExists('exists', { configDir: tmpDir })).toBe(true);
-  });
-
-  it('returns true for server after save', () => {
-    saveKeyBundle(generateKeyBundle(), path.join(tmpDir, 'keys', 'server'));
-    expect(serverExists({ configDir: tmpDir })).toBe(true);
   });
 });
 

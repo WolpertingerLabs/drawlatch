@@ -144,9 +144,8 @@ describe('applyOutboundBudget', () => {
     expect(applyOutboundBudget(25_000, 180_000)).toBe(25_000);
   });
 
-  // Three real callers arrive with no budget: an in-process host importing
-  // this module, the admin API, and an older local proxy against a newer
-  // remote. `Math.min(ceiling, undefined - slack)` would be NaN.
+  // Two real callers arrive with no budget: the admin API, and an older
+  // local proxy against a newer remote. `Math.min(ceiling, undefined - slack)` would be NaN.
   it('should treat an absent budget as no clamp, not zero', () => {
     expect(applyOutboundBudget(120_000, undefined)).toBe(120_000);
   });

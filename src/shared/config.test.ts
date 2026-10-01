@@ -9,7 +9,6 @@ import {
   resolveCallerRoutes,
   loadProxyConfig,
   loadRemoteConfig,
-  saveProxyConfig,
   saveRemoteConfig,
   getConfigDir,
   getProxyConfigPath,
@@ -1141,33 +1140,6 @@ describe('resolveCallerRoutes', () => {
     existsSpy.mockRestore();
     readdirSpy.mockRestore();
     readSpy.mockRestore();
-  });
-});
-
-describe('saveProxyConfig', () => {
-  it('should create config directory and write proxy config file', () => {
-    const mkdirSpy = vi.spyOn(fs, 'mkdirSync').mockReturnValue(undefined);
-    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined);
-
-    saveProxyConfig({
-      remoteUrl: 'http://localhost:9999',
-      connectTimeout: 10_000,
-      requestTimeout: 30_000,
-    });
-
-    expect(mkdirSpy).toHaveBeenCalledWith(getConfigDir(), { recursive: true, mode: 0o700 });
-    expect(writeSpy).toHaveBeenCalledWith(getProxyConfigPath(), expect.any(String), {
-      mode: 0o600,
-    });
-
-    // Verify written content is valid JSON with flat structure (no .proxy wrapper)
-    const writtenContent = writeSpy.mock.calls[0][1] as string;
-    const parsed = JSON.parse(writtenContent);
-    expect(parsed.remoteUrl).toBe('http://localhost:9999');
-    expect(parsed.proxy).toBeUndefined(); // Should be flat, not nested
-
-    mkdirSpy.mockRestore();
-    writeSpy.mockRestore();
   });
 });
 

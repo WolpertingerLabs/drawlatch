@@ -54,14 +54,6 @@ export function loadEnvFile(): Record<string, string> {
   return vars;
 }
 
-/** Load .env file into process.env (for startup). */
-export function loadEnvIntoProcess(): void {
-  const vars = loadEnvFile();
-  for (const [key, value] of Object.entries(vars)) {
-    process.env[key] ??= value;
-  }
-}
-
 /**
  * Write key-value pairs to .env. Empty string = delete.
  * Also sets process.env immediately for in-process use.

@@ -27,9 +27,6 @@ export {
   createCaller,
   exportServerPublicKeys,
   saveCallerPublicKeys,
-  listCallers,
-  callerExists,
-  serverExists,
   callerFingerprint,
   serverFingerprint,
 } from './key-manager.js';
