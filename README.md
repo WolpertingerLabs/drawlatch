@@ -201,7 +201,7 @@ The pages are views over the `/api/admin/*` JSON API. **Read** endpoints (`/meta
 
 Secrets are **write-only** through this API: you `PUT` values, and every read path reports only booleans. After any mutation the daemon live-reloads routes/ingestors for the affected caller. The same logic powers the encrypted MCP tools and the admin API through a single shared `tool-dispatch` module, so the two surfaces can never drift.
 
-A **co-located** callboard (one that shares drawlatch's filesystem) is provisioned with zero interaction: when the daemon starts with `DRAWLATCH_LOCAL_CALLER_KEYS_DIR` set, it issues a `callboard-local` caller (override with `DRAWLATCH_LOCAL_CALLER_ALIAS`) on first boot and writes the key files straight into that directory.
+A **co-located** callboard (one that shares drawlatch's filesystem) is provisioned with zero interaction. On every boot with `DRAWLATCH_LOCAL_CALLER_KEYS_DIR` set, the daemon checks for the caller named by `DRAWLATCH_LOCAL_CALLER_ALIAS` (callboard sets this to `default`; drawlatch falls back to `callboard-local`). If the caller's `remote.config.json` entry or its key files under drawlatch's `keys/callers/<alias>/` are missing, it mints a fresh keypair and writes the caller keys to `<dir>/callers/<alias>/` and the server public keys to `<dir>/server/`; otherwise it does nothing. `DRAWLATCH_LOCAL_CALLER_CONNECTIONS` (comma-separated) sets the connections of a newly issued caller; if unset, it keeps the existing entry's connections or copies the `default` caller's.
 
 ### Security model
 
