@@ -5,8 +5,7 @@
  *   - proxy.config.json  — MCP proxy (local) settings
  *   - remote.config.json — Remote server settings
  *
- * Each loader falls back to a legacy combined config.json (if present)
- * for backward compatibility, then to built-in defaults.
+ * Each loader falls back to built-in defaults when its file is absent.
  *
  * Keys directory: ~/.drawlatch/keys/
  */
@@ -41,9 +40,6 @@ export type { ListenerConfigField, ListenerConfigOption } from './listener-confi
  *  callboard that configure the path after ESM imports are resolved. */
 export function getConfigDir(): string {
   return process.env.MCP_CONFIG_DIR ?? path.join(os.homedir(), '.drawlatch');
-}
-export function getConfigPath(): string {
-  return path.join(getConfigDir(), 'config.json');
 }
 export function getProxyConfigPath(): string {
   return path.join(getConfigDir(), 'proxy.config.json');
@@ -233,7 +229,7 @@ export interface CallerConfig {
   /** How this caller's keypair was provisioned:
    *   - 'bundle-issued' — minted via the credential-issuance flow (download/CLI)
    *   - 'local-auto'    — auto-shared to a co-located callboard over the filesystem
-   *  Absent for callers created before issuance existed (e.g. via `sync`). */
+   *  Absent for callers created before issuance existed, or added by hand. */
   source?: CallerSource;
   /** List of connection aliases — references built-in templates (e.g., "github")
    *  or custom connector aliases defined in the top-level connectors array. */
@@ -447,8 +443,7 @@ function remoteDefaults(): RemoteServerConfig {
  *
  * Resolution order:
  *   1. proxy.config.json (flat ProxyConfig)
- *   2. config.json → .proxy section (legacy combined format)
- *   3. Built-in defaults
+ *   2. Built-in defaults
  *
  * Key paths are derived automatically:
  *   - Caller keys: keys/callers/{MCP_KEY_ALIAS || "default"}/
@@ -459,14 +454,9 @@ export function loadProxyConfig(): ProxyConfig {
 
   let config: ProxyConfig;
 
-  // Try dedicated proxy config file first
   if (fs.existsSync(getProxyConfigPath())) {
     const raw = JSON.parse(fs.readFileSync(getProxyConfigPath(), 'utf-8'));
     config = { ...def, ...raw };
-  } else if (fs.existsSync(getConfigPath())) {
-    // Fall back to combined config.json
-    const raw = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'));
-    config = raw.proxy ? { ...def, ...raw.proxy } : def;
   } else {
     config = def;
   }
@@ -489,61 +479,18 @@ export function resolveCallerKeyAlias(): string {
  *
  * Resolution order:
  *   1. remote.config.json (flat RemoteServerConfig)
- *   2. config.json → .remote section (legacy combined format)
- *   3. Built-in defaults
- *
- * Legacy configs with `routes`/`authorizedPeersDir`/`connections` are auto-migrated
- * to the caller-centric format with a deprecation warning.
+ *   2. Built-in defaults
  */
 export function loadRemoteConfig(): RemoteServerConfig {
   const def = remoteDefaults();
 
   let config: RemoteServerConfig;
 
-  // Try dedicated remote config file first
   if (fs.existsSync(getRemoteConfigPath())) {
     const raw = JSON.parse(fs.readFileSync(getRemoteConfigPath(), 'utf-8'));
     config = { ...def, ...raw };
-  } else if (fs.existsSync(getConfigPath())) {
-    // Fall back to combined config.json
-    const raw = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'));
-    config = raw.remote ? { ...def, ...raw.remote } : def;
   } else {
     config = def;
-  }
-
-  // Legacy migration: old format had routes/authorizedPeersDir/connections at top level
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reading unknown legacy config shape
-  const rawConfig = config as any;
-  if (rawConfig.routes && !('default' in config.callers) && !rawConfig.connectors) {
-    console.error(
-      '[config] Warning: legacy config format detected (routes/authorizedPeersDir/connections). ' +
-        'Migrating to caller-centric format. Please update your remote.config.json.',
-    );
-
-    const legacyRoutes: Route[] = rawConfig.routes;
-    const legacyConnections: string[] = rawConfig.connections ?? [];
-
-    // Auto-assign aliases to unnamed routes for the default caller
-    const connectors = legacyRoutes.map((r, i) => ({
-      ...r,
-      alias: r.alias ?? r.name?.toLowerCase().replace(/\s+/g, '-') ?? `route-${i}`,
-    }));
-
-    const allConnectionNames = [...legacyConnections, ...connectors.map((c) => c.alias)];
-
-    config = {
-      ...def,
-      host: config.host,
-      port: config.port,
-      connectors,
-      callers: {
-        default: {
-          connections: allConnectionNames,
-        },
-      },
-      rateLimitPerMinute: config.rateLimitPerMinute,
-    };
   }
 
   return config;

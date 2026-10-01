@@ -222,22 +222,6 @@ function auditLog(sessionId: string, action: string, details: Record<string, unk
   console.log(`[audit] ${JSON.stringify(entry)}`);
 }
 
-// Re-export resolvePlaceholders from config for backward compatibility with tests
-export { resolvePlaceholders } from '../shared/config.js';
-
-// Re-export the canonical tool-dispatch surface (item D) so existing importers
-// of './server.js' keep working after the extraction to './tool-dispatch.js'.
-export {
-  toolHandlers,
-  executeProxyRequest,
-  isEndpointAllowed,
-  matchRoute,
-  type ToolContext,
-  type ProxyRequestInput,
-  type ProxyRequestResult,
-  type FileAttachment,
-} from './tool-dispatch.js';
-
 export function checkRateLimit(
   session: Pick<Session, 'windowRequests' | 'windowStart'>,
   limit: number,

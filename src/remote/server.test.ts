@@ -1,21 +1,14 @@
 /**
- * Unit tests for remote-server exported helpers.
+ * Unit tests for the remote server's exported helpers.
  *
- * Tests the actual exported functions from remote-server.ts:
- * isEndpointAllowed, resolvePlaceholders, matchRoute, checkRateLimit, and cleanupSessions.
+ * checkRateLimit and cleanupSessions come from server.ts; isEndpointAllowed and
+ * matchRoute from tool-dispatch.ts; resolvePlaceholders from shared/config.ts.
  */
 import { describe, it, expect } from 'vitest';
-import type { ResolvedRoute } from '../shared/config.js';
+import { resolvePlaceholders, type ResolvedRoute } from '../shared/config.js';
 
-import {
-  isEndpointAllowed,
-  resolvePlaceholders,
-  matchRoute,
-  checkRateLimit,
-  cleanupSessions,
-  SESSION_TTL,
-  HANDSHAKE_TTL,
-} from './server.js';
+import { checkRateLimit, cleanupSessions, SESSION_TTL, HANDSHAKE_TTL } from './server.js';
+import { isEndpointAllowed, matchRoute } from './tool-dispatch.js';
 
 // ── isEndpointAllowed ──────────────────────────────────────────────────────
 

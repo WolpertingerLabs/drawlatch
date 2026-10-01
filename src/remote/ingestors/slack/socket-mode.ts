@@ -48,7 +48,7 @@ export class SlackSocketModeIngestor extends BaseIngestor {
   constructor(
     connectionAlias: string,
     secrets: Record<string, string>,
-    private readonly wsConfig: WebSocketIngestorConfig,
+    wsConfig: WebSocketIngestorConfig,
     bufferSize?: number,
     instanceId?: string,
   ) {

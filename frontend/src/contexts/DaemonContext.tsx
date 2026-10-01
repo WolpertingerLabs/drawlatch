@@ -9,7 +9,7 @@ import {
 import type { AdminMeta } from "drawlatch-admin-types";
 import { api, isDaemonDown } from "../api";
 
-export type DaemonStatus = "up" | "down" | "unknown";
+type DaemonStatus = "up" | "down" | "unknown";
 
 interface DaemonContextValue {
   daemon: DaemonStatus;

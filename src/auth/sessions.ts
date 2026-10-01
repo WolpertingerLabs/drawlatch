@@ -8,7 +8,7 @@ function getSessionsFile(): string {
   return join(getConfigDir(), 'data', 'sessions.json');
 }
 
-export interface SessionData {
+interface SessionData {
   expires_at: number;
   created_at: number;
   ip?: string;

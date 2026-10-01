@@ -336,7 +336,7 @@ function IngestorRow({ ing, now }: { ing: AdminIngestor; now: number }) {
   );
 }
 
-export function StateBadge({ state }: { state: IngestorState }) {
+function StateBadge({ state }: { state: IngestorState }) {
   return (
     <span className={`ingestor-state ingestor-state-${state}`}>{state}</span>
   );

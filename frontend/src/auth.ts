@@ -1,4 +1,4 @@
-// Frontend auth helpers for the drawlatch-ui session cookie flow.
+// Frontend auth helpers for the dashboard's session cookie flow.
 // All requests must send the session cookie via `credentials: "include"`.
 
 export interface AuthCheckResult {

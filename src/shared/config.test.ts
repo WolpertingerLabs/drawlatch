@@ -12,7 +12,6 @@ import {
   saveProxyConfig,
   saveRemoteConfig,
   getConfigDir,
-  getConfigPath,
   getProxyConfigPath,
   getRemoteConfigPath,
   getEnvFilePath,
@@ -679,7 +678,6 @@ describe('config exports', () => {
     process.env = { ...originalEnv };
     delete process.env.MCP_CONFIG_DIR;
     expect(getConfigDir()).toBe(path.join(os.homedir(), '.drawlatch'));
-    expect(getConfigPath()).toContain('config.json');
   });
 
   it('should export split config path getter functions', () => {
@@ -739,28 +737,6 @@ describe('loadProxyConfig', () => {
     expect(config.connectTimeout).toBe(5000);
     // Default values still present
     expect(config.requestTimeout).toBe(185_000);
-
-    existsSpy.mockRestore();
-    readSpy.mockRestore();
-  });
-
-  it('should fall back to config.json when proxy.config.json does not exist', () => {
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
-      // proxy.config.json does not exist, but config.json does
-      return String(p) === getConfigPath();
-    });
-    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
-      JSON.stringify({
-        proxy: { remoteUrl: 'https://legacy.example.com:9999' },
-        remote: { port: 7777 },
-      }),
-    );
-
-    const config = loadProxyConfig();
-
-    expect(config.remoteUrl).toBe('https://legacy.example.com:9999');
-    // Defaults for unspecified fields
-    expect(config.connectTimeout).toBe(10_000);
 
     existsSpy.mockRestore();
     readSpy.mockRestore();
@@ -848,29 +824,6 @@ describe('loadRemoteConfig', () => {
     existsSpy.mockRestore();
     readSpy.mockRestore();
   });
-
-  it('should fall back to config.json when remote.config.json does not exist', () => {
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
-      // remote.config.json does not exist, but config.json does
-      return String(p) === getConfigPath();
-    });
-    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
-      JSON.stringify({
-        proxy: { remoteUrl: 'https://legacy.example.com:9999' },
-        remote: { port: 7777, rateLimitPerMinute: 120, callers: {} },
-      }),
-    );
-
-    const config = loadRemoteConfig();
-
-    expect(config.port).toBe(7777);
-    expect(config.rateLimitPerMinute).toBe(120);
-    // Defaults for unspecified fields
-    expect(config.host).toBe('127.0.0.1');
-
-    existsSpy.mockRestore();
-    readSpy.mockRestore();
-  });
 });
 
 describe('resolveCallerRoutes', () => {
@@ -903,7 +856,7 @@ describe('resolveCallerRoutes', () => {
     });
     const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation((_dir: any, opts?: any) => {
       if (opts?.withFileTypes) {
-        return [{ name: 'test-conn.json', isFile: () => true, isDirectory: () => false }] as any;
+        return [{ name: 'test-category', isFile: () => false, isDirectory: () => true }] as any;
       }
       return ['test-conn.json'] as any;
     });
@@ -961,7 +914,7 @@ describe('resolveCallerRoutes', () => {
     });
     const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation((_dir: any, opts?: any) => {
       if (opts?.withFileTypes) {
-        return [{ name: 'test-conn.json', isFile: () => true, isDirectory: () => false }] as any;
+        return [{ name: 'test-category', isFile: () => false, isDirectory: () => true }] as any;
       }
       return ['test-conn.json'] as any;
     });
@@ -1036,7 +989,7 @@ describe('resolveCallerRoutes', () => {
     });
     const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation((_dir: any, opts?: any) => {
       if (opts?.withFileTypes) {
-        return [{ name: 'test-conn.json', isFile: () => true, isDirectory: () => false }] as any;
+        return [{ name: 'test-category', isFile: () => false, isDirectory: () => true }] as any;
       }
       return ['test-conn.json'] as any;
     });
@@ -1158,7 +1111,7 @@ describe('resolveCallerRoutes', () => {
     });
     const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation((_dir: any, opts?: any) => {
       if (opts?.withFileTypes) {
-        return [{ name: 'test-conn.json', isFile: () => true, isDirectory: () => false }] as any;
+        return [{ name: 'test-category', isFile: () => false, isDirectory: () => true }] as any;
       }
       return ['test-conn.json'] as any;
     });
@@ -1187,38 +1140,6 @@ describe('resolveCallerRoutes', () => {
 
     existsSpy.mockRestore();
     readdirSpy.mockRestore();
-    readSpy.mockRestore();
-  });
-});
-
-describe('loadRemoteConfig legacy migration', () => {
-  it('should migrate old format with routes to caller-centric format', () => {
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {
-      /* noop */
-    });
-    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
-      return String(p) === getRemoteConfigPath();
-    });
-    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(
-      JSON.stringify({
-        host: '0.0.0.0',
-        port: 8080,
-        authorizedPeersDir: '/old/peers',
-        routes: [{ name: 'My API', allowedEndpoints: ['https://api.example.com/**'] }],
-      }),
-    );
-
-    const config = loadRemoteConfig();
-
-    // Should have migrated to caller-centric format
-    expect(config.connectors).toHaveLength(1);
-    expect(config.connectors![0].alias).toBe('my-api'); // auto-generated from name
-    expect(config.callers.default).toBeDefined();
-    expect(config.callers.default.connections).toContain('my-api');
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('legacy config format'));
-
-    consoleSpy.mockRestore();
-    existsSpy.mockRestore();
     readSpy.mockRestore();
   });
 });
@@ -1313,6 +1234,17 @@ describe('resolveLocalTimeout', () => {
 
   it('should fall back to requestTimeout when no timeoutMs is given', () => {
     expect(resolveLocalTimeout({}, config)).toBe(185_000);
+  });
+
+  it('should leave the built-in default requestTimeout unclamped', () => {
+    // `drawlatch init` scaffolds proxy.config.json from these defaults, so a
+    // default above MAX_LOCAL_TIMEOUT_MS would be silently cut down.
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+    const defaults = loadProxyConfig();
+    existsSpy.mockRestore();
+
+    expect(defaults.requestTimeout).toBeLessThanOrEqual(MAX_LOCAL_TIMEOUT_MS);
+    expect(resolveLocalTimeout({}, defaults)).toBe(defaults.requestTimeout);
   });
 
   it('should derive from timeoutMs plus slack when one is given', () => {

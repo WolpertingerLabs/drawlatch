@@ -15,7 +15,7 @@ import type { CallerBundleV1 } from "drawlatch-admin-types";
 import { api } from "../api";
 import "./IssueCredentialsModal.css";
 
-export interface IssueCredentialsModalProps {
+interface IssueCredentialsModalProps {
   alias: string;
   /** Connections currently enabled for the caller (pre-checked defaults). */
   callerConnections: string[];

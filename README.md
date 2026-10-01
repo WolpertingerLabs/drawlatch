@@ -594,7 +594,7 @@ Import drawlatch directly for in-process use — no server, no encryption:
 
 ```typescript
 import { loadRemoteConfig, resolveCallerRoutes, resolveRoutes, resolveSecrets } from "drawlatch/shared/config";
-import { executeProxyRequest } from "drawlatch/remote/server";
+import { executeProxyRequest } from "drawlatch/remote/tool-dispatch";
 
 const config = loadRemoteConfig();
 const callerRoutes = resolveCallerRoutes(config, "my-laptop");

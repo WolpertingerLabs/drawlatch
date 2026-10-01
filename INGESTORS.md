@@ -577,7 +577,6 @@ Callers can customize ingestor behavior without modifying connection templates v
 {
   "callers": {
     "my-laptop": {
-      "peerKeyDir": "...",
       "connections": ["discord-bot"],
       "ingestorOverrides": {
         "discord-bot": {
@@ -698,7 +697,6 @@ Callers can override any of the template's ingestor settings without modifying t
 {
   "callers": {
     "my-caller": {
-      "peerKeyDir": "...",
       "connections": ["discord-bot"],
       "ingestorOverrides": {
         "discord-bot": {

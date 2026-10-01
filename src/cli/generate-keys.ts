@@ -91,33 +91,10 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
 // Ensure base config directory exists
 fs.mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
 
-if (args[0] === 'caller' || args[0] === 'local') {
-  if (args[0] === 'local') {
-    console.error('Note: "local" is deprecated, use "caller" instead.');
-  }
+if (args[0] === 'caller') {
   const alias = args[1] && !args[1].startsWith('-') ? args[1] : 'default';
-  const callersDir = getCallerKeysDir();
-  const targetDir = path.join(callersDir, alias);
-
-  // Check for legacy flat key layout (PEM files directly in keys/callers/)
-  const legacyKeyPath = path.join(callersDir, 'signing.key.pem');
-  if (fs.existsSync(legacyKeyPath)) {
-    console.error(
-      `\n⚠️  Legacy key layout detected: PEM files found directly in ${callersDir}\n` +
-        `   Caller keys are now stored per-alias: keys/callers/<alias>/\n` +
-        `   To migrate, move your existing keys:\n\n` +
-        `     mkdir -p ${targetDir}\n` +
-        `     mv ${callersDir}/signing.* ${targetDir}/\n` +
-        `     mv ${callersDir}/exchange.* ${targetDir}/\n`,
-    );
-    process.exit(1);
-  }
-
-  generateAndSave(targetDir, `caller — alias "${alias}"`);
-} else if (args[0] === 'server' || args[0] === 'remote') {
-  if (args[0] === 'remote') {
-    console.error('Note: "remote" is deprecated, use "server" instead.');
-  }
+  generateAndSave(path.join(getCallerKeysDir(), alias), `caller — alias "${alias}"`);
+} else if (args[0] === 'server') {
   generateAndSave(getServerKeysDir(), 'server');
 } else if (args[0] === '--dir' && args[1]) {
   generateAndSave(args[1], 'custom');

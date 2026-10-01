@@ -6,10 +6,8 @@ Instead of manually configuring connectors for popular APIs, you can use **conne
 {
   "host": "0.0.0.0",
   "port": 9999,
-  "localKeysDir": "~/.drawlatch/keys/remote",
   "callers": {
     "my-laptop": {
-      "peerKeyDir": "~/.drawlatch/keys/peers/my-laptop",
       "connections": ["github", "stripe"]
     }
   },
@@ -133,7 +131,6 @@ STRIPE_SECRET_KEY=sk_live_your_stripe_key_here
 {
   "callers": {
     "my-laptop": {
-      "peerKeyDir": "/keys/peers/my-laptop",
       "connections": ["github", "stripe"]
     }
   }
@@ -159,7 +156,6 @@ You can use built-in connections alongside custom connectors. Custom connectors 
   ],
   "callers": {
     "my-laptop": {
-      "peerKeyDir": "/keys/peers/my-laptop",
       "connections": ["github", "internal-api"]
     }
   }
@@ -176,12 +172,10 @@ When multiple callers share the same connection but need different credentials, 
 {
   "callers": {
     "alice": {
-      "peerKeyDir": "/keys/peers/alice",
       "connections": ["github"],
       "env": { "GITHUB_TOKEN": "${ALICE_GITHUB_TOKEN}" }
     },
     "bob": {
-      "peerKeyDir": "/keys/peers/bob",
       "connections": ["github"],
       "env": { "GITHUB_TOKEN": "${BOB_GITHUB_TOKEN}" }
     }

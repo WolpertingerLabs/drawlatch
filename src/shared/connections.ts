@@ -64,13 +64,12 @@ const CONNECTIONS_DIR = path.join(
 // ── Lazy-cached alias→filepath index ──────────────────────────────────────
 
 /** Cached alias → absolute filepath index. Built lazily on first access.
- *  Supports both flat files (connections/foo.json) and category
- *  subdirectories (connections/ai/anthropic.json). */
+ *  Templates live in category subdirectories (connections/ai/anthropic.json). */
 let connectionIndex: Map<string, string> | null = null;
 
 /** Build the alias→filepath index by scanning CONNECTIONS_DIR.
- *  Files at the top level and files in one level of subdirectories are
- *  both indexed. The alias is always the filename without .json. */
+ *  Templates live one level deep, in category subdirectories. The alias is
+ *  always the filename without .json. */
 function getConnectionIndex(): Map<string, string> {
   if (connectionIndex) return connectionIndex;
 
@@ -80,11 +79,7 @@ function getConnectionIndex(): Map<string, string> {
   const entries = fs.readdirSync(CONNECTIONS_DIR, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (entry.isFile() && entry.name.endsWith('.json')) {
-      // Top-level JSON file (backward compat)
-      const alias = entry.name.replace(/\.json$/, '');
-      connectionIndex.set(alias, path.join(CONNECTIONS_DIR, entry.name));
-    } else if (entry.isDirectory()) {
+    if (entry.isDirectory()) {
       // Category subdirectory — scan one level deep
       const subdir = path.join(CONNECTIONS_DIR, entry.name);
       const subEntries = fs.readdirSync(subdir, 'utf-8');
@@ -167,8 +162,9 @@ function extractPlaceholderNames(str: string): Set<string> {
  *     referenced in headers (used by ingestors, URL placeholders, etc.).
  *
  * Used by:
- *   - callboard's ConnectionManager (local mode, direct import)
- *   - admin_list_connection_templates tool handler (remote mode, Stage 3)
+ *   - the remote server's tool dispatch and boot-time health table
+ *   - the admin dashboard API (src/remote/admin.ts)
+ *   - the drawlatch CLI (bin/drawlatch.js)
  */
 export function listConnectionTemplates(): ConnectionTemplateInfo[] {
   return listAvailableConnections().map((alias) => {
