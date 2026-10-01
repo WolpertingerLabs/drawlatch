@@ -64,8 +64,7 @@ const CONNECTIONS_DIR = path.join(
 // ── Lazy-cached alias→filepath index ──────────────────────────────────────
 
 /** Cached alias → absolute filepath index. Built lazily on first access.
- *  Supports both flat files (connections/foo.json) and category
- *  subdirectories (connections/ai/anthropic.json). */
+ *  Templates live in category subdirectories (connections/ai/anthropic.json). */
 let connectionIndex: Map<string, string> | null = null;
 
 /** Build the alias→filepath index by scanning CONNECTIONS_DIR.
