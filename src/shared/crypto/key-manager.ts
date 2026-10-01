@@ -73,16 +73,6 @@ export function createCaller(alias: string, opts?: KeyManagerOpts): CreateCaller
 }
 
 /**
- * Export public keys for a caller identity.
- * Reads from `keys/callers/<alias>/`.
- */
-export function exportCallerPublicKeys(alias: string, opts?: KeyManagerOpts): SerializedPublicKeys {
-  const dir = path.join(callerKeysDir(opts), alias);
-  const pub = loadPublicKeys(dir);
-  return serializePublicKeys(pub);
-}
-
-/**
  * Export public keys for the server.
  * Reads from `keys/server/`.
  */
@@ -122,35 +112,6 @@ export function saveCallerPublicKeys(
     const p = path.join(dir, f);
     if (fs.existsSync(p)) fs.rmSync(p, { force: true });
   }
-}
-
-/**
- * Import a caller's public keys. Saves under `keys/callers/<alias>/`.
- * Used by the server to store received caller public keys (e.g., via sync).
- *
- * Alias for {@link saveCallerPublicKeys} — both are the public-only persist path.
- */
-export function importCallerPublicKeys(
-  alias: string,
-  keys: SerializedPublicKeys,
-  opts?: KeyManagerOpts,
-): void {
-  saveCallerPublicKeys(alias, keys, opts);
-}
-
-/**
- * Save server public keys. Writes to `keys/server/`.
- * Used by callboard to store the remote server's public keys (e.g., via sync).
- */
-export function saveServerPublicKeys(keys: SerializedPublicKeys, opts?: KeyManagerOpts): void {
-  const dir = serverKeysDir(opts);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-
-  // Validate the keys are parseable before writing
-  deserializePublicKeys(keys);
-
-  fs.writeFileSync(path.join(dir, 'signing.pub.pem'), keys.signing, { mode: 0o644 });
-  fs.writeFileSync(path.join(dir, 'exchange.pub.pem'), keys.exchange, { mode: 0o644 });
 }
 
 /**

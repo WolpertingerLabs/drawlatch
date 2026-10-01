@@ -191,7 +191,7 @@ The pages are views over the `/api/admin/*` JSON API. **Read** endpoints (`/meta
 
 | Method + path | Action |
 |---|---|
-| `POST /callers` | Create a caller **with a fresh keypair** (no interactive sync) |
+| `POST /callers` | Create a caller **with a fresh keypair** |
 | `DELETE /callers/:alias` | Delete a caller (its keys + prefixed env vars); `default` is protected |
 | `POST /callers/:alias/connections/:connection` `{enabled}` | Enable/disable a connection |
 | `PUT  /callers/:alias/connections/:connection/secrets` `{secrets}` | Set/clear secrets (empty string = delete) — **write-only**, read back as booleans |
@@ -201,7 +201,7 @@ The pages are views over the `/api/admin/*` JSON API. **Read** endpoints (`/meta
 
 Secrets are **write-only** through this API: you `PUT` values, and every read path reports only booleans. After any mutation the daemon live-reloads routes/ingestors for the affected caller. The same logic powers the encrypted MCP tools and the admin API through a single shared `tool-dispatch` module, so the two surfaces can never drift.
 
-A loopback-only `POST /sync/auto-enroll` lets a **co-located** client (one that shares drawlatch's filesystem) provision a caller with zero interaction by presenting the one-time token drawlatch writes to `~/.drawlatch/enroll.token` at startup.
+A **co-located** callboard (one that shares drawlatch's filesystem) is provisioned with zero interaction: when the daemon starts with `DRAWLATCH_LOCAL_CALLER_KEYS_DIR` set, it issues a `callboard-local` caller (override with `DRAWLATCH_LOCAL_CALLER_ALIAS`) on first boot and writes the key files straight into that directory.
 
 ### Security model
 
@@ -434,7 +434,6 @@ $MCP_CONFIG_DIR/                 (default: ~/.drawlatch)
   remote.config.json    — RemoteServerConfig (callers, connectors, port, tunnel flag)
   proxy.config.json     — ProxyConfig (local MCP proxy → remote URL)
   .env                  — secret values, prefixed per caller (mode 0600)
-  enroll.token          — one-time loopback auto-enroll token (mode 0600)
   keys/
     server/             — the daemon's own Ed25519 + X25519 keypair
     callers/<alias>/    — one keypair per caller alias
@@ -554,7 +553,7 @@ Commands:
   doctor             Validate setup and diagnose issues
   set-password       Set/change the dashboard password (alias: change-password)
   generate-keys      Generate Ed25519 + X25519 keypairs
-  sync               Exchange keys with a callboard instance
+  issue-caller       Issue a caller credential bundle (for a callboard instance)
 
 Options:
   -h, --help         Show help
@@ -580,8 +579,13 @@ Generate-keys subcommands:
   show <path>        Show fingerprint of existing keypair
   --dir <path>       Generate to custom directory
 
-Sync options:
-  --ttl <seconds>    Session timeout (default: 300)
+Issue-caller options (drawlatch issue-caller <alias>):
+  --name <name>          Display name (defaults to the alias)
+  --connections <list>   Connections to authorize (defaults to cloning "default")
+  --endpoint <url>       Endpoint URL to pin in the bundle
+  --passphrase           Encrypt the private keys in the bundle with a passphrase
+  -o, --output <file>    Write the bundle to a file instead of stdout
+  --into <keysDir>       Same host: write the key files into a callboard keys dir
 ```
 
 ## Library Usage (Local Mode)

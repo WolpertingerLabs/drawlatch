@@ -25,11 +25,8 @@ export {
 export {
   type CreateCallerResult,
   createCaller,
-  exportCallerPublicKeys,
   exportServerPublicKeys,
-  importCallerPublicKeys,
   saveCallerPublicKeys,
-  saveServerPublicKeys,
   listCallers,
   callerExists,
   serverExists,
