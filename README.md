@@ -513,7 +513,7 @@ Remote mode requires mutual authentication via Ed25519/X25519 keypairs. Each ide
 
 Both sides (caller and server) store their keys in the same directory tree. On a single machine, `drawlatch init` generates both and they can authenticate immediately. On separate machines, copy the `*.pub.pem` files to the corresponding directory on the other machine.
 
-**Using [Callboard](https://github.com/WolpertingerLabs/callboard)?** Use `drawlatch sync` to exchange keys automatically via a double-code approval flow — no manual file copying needed.
+**Using [Callboard](https://github.com/WolpertingerLabs/callboard)?** Issue a caller credential bundle with `drawlatch issue-caller <alias> -o <alias>.drawlatch-caller.json` (or **Issue credentials** on the dashboard's Callers page) and import it in callboard — no manual file copying needed. On the same host, `drawlatch issue-caller <alias> --into <callboard keys dir>` writes the key files directly.
 
 ### Multiple Agent Identities
 

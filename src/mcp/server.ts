@@ -72,7 +72,9 @@ async function establishChannel(): Promise<EncryptedChannel> {
     );
   }
   if (!existsSync(serverKeysDir)) {
-    throw new Error(`Server public keys not found at ${serverKeysDir}. Run: drawlatch sync`);
+    throw new Error(
+      `Server public keys not found at ${serverKeysDir}. Run: drawlatch init (same host), or copy the remote server's *.pub.pem files there`,
+    );
   }
 
   let ownKeys, remotePub;
@@ -89,7 +91,7 @@ async function establishChannel(): Promise<EncryptedChannel> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `Failed to load server public keys from ${serverKeysDir}: ${msg}. Run: drawlatch sync`,
+      `Failed to load server public keys from ${serverKeysDir}: ${msg}. Run: drawlatch init (same host), or copy the remote server's *.pub.pem files there`,
     );
   }
 

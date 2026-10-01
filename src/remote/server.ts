@@ -1163,7 +1163,9 @@ export function main(): void {
 
   if (Object.keys(config.callers).length === 0) {
     console.log('[remote] No callers configured — server will accept sync requests.');
-    console.log('[remote] To add callers, run: drawlatch sync');
+    console.log(
+      '[remote] To add callers, run: drawlatch issue-caller <alias> (or use the dashboard Callers page)',
+    );
   }
 
   // First-boot auto-share: when supervised by a co-located callboard (which sets
