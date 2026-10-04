@@ -147,6 +147,10 @@ async function flush(): Promise<void> {
 }
 
 afterEach(() => {
+  // Start every test from zero holds and not draining, so one failing test
+  // that leaves a wait parked cannot cascade into unrelated ones.
+  releaseAllWaits();
+  resumeWaits();
   vi.useRealTimers();
 });
 
@@ -528,10 +532,6 @@ describe('wait_for_events', () => {
   });
 
   describe('releaseAllWaits (shutdown)', () => {
-    afterEach(() => {
-      resumeWaits();
-    });
-
     it('answers every held wait with timedOut:true and frees all resources', async () => {
       vi.useFakeTimers();
       const mgr = await makeManager();
@@ -559,12 +559,18 @@ describe('wait_for_events', () => {
       expect(vi.getTimerCount()).toBe(0);
     });
 
-    it('stops new waits from holding while draining, so clients cannot re-park', async () => {
+    it('rejects new waits while draining, so clients back off instead of spinning', async () => {
       const mgr = await makeManager();
       releaseAllWaits();
 
-      const result = await wait(ctx(mgr), { cursors: seenAll(mgr), timeout_ms: 30_000 });
-      expect(result.timedOut).toBe(true);
+      // An instant timedOut reply would make a watcher re-issue at once and
+      // burn its whole rate limit; a tool error sends it into backoff.
+      const rejected = wait(ctx(mgr), { cursors: seenAll(mgr), timeout_ms: 30_000 });
+      await expect(rejected).rejects.toThrow('server shutting down');
+      await expect(rejected).rejects.not.toThrow(/Unknown tool/);
+      await expect(wait(ctx(mgr), { cursors: seenAll(mgr), timeout_ms: 0 })).rejects.toThrow(
+        'server shutting down',
+      );
       expect(activeWaitCount()).toBe(0);
       expect(mgr.eventListenerCount).toBe(0);
 
@@ -573,7 +579,22 @@ describe('wait_for_events', () => {
       await flush();
       expect(activeWaitCount()).toBe(1);
       releaseAllWaits();
-      await held;
+      expect((await held).timedOut).toBe(true);
+    });
+
+    it('still hands out already-buffered events while draining', async () => {
+      // Ring buffers are in memory: events not delivered now are lost on restart.
+      const mgr = await makeManager();
+      const cursors = seenAll(mgr);
+      fake('alice', 'chat').push('last-words', { bye: true });
+      releaseAllWaits();
+
+      const result = await wait(ctx(mgr), { cursors, timeout_ms: 30_000 });
+      expect(result.streams['chat:_default'].events.map((e) => e.data)).toEqual([{ bye: true }]);
+
+      // Once caught up, the next call is rejected rather than answered empty.
+      const caughtUp = { ...cursors, 'chat:_default': result.streams['chat:_default'].cursor };
+      await expect(wait(ctx(mgr), { cursors: caughtUp })).rejects.toThrow('server shutting down');
     });
   });
 

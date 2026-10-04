@@ -18,8 +18,9 @@
  * Over a cap the call fails immediately instead of queueing.
  *
  * Held requests would also keep `server.close()` waiting on shutdown, so the
- * daemon calls releaseAllWaits() first: every hold is answered `timedOut: true`
- * and new waits stop holding until resumeWaits().
+ * daemon calls releaseAllWaits() first: every hold is answered `timedOut: true`,
+ * and until resumeWaits() a new wait with nothing buffered fails with
+ * "server shutting down" instead of holding.
  */
 
 import type { IngestedEvent } from './ingestors/types.js';
@@ -63,7 +64,7 @@ let totalHolds = 0;
 /** Answer-now callbacks for every held wait, used by releaseAllWaits(). */
 const activeReleasers = new Set<() => void>();
 
-/** While true, waits answer immediately instead of holding (shutdown). */
+/** While true, new waits with nothing to return are rejected (shutdown). */
 let draining = false;
 
 /** Number of waits currently holding, hub-wide. */
@@ -97,10 +98,17 @@ function releaseHold(sessionKey: string, callerAlias: string): void {
 }
 
 /**
- * Answer every held wait now, as if its timeout had fired, and stop new waits
- * from holding. Called on shutdown before `server.close()`: otherwise a held
- * wait keeps its request open past the forced-exit timer, and a client that
- * re-polls on the reply would park a fresh wait on the dying process.
+ * Answer every held wait now, as if its timeout had fired, and start
+ * draining. Called on shutdown before `server.close()`: otherwise a held wait
+ * keeps its request open past the forced-exit timer.
+ *
+ * While draining, a new wait still receives events already buffered past its
+ * cursor (the buffers do not survive the restart), but one that would hold or
+ * answer empty fails with "server shutting down". Answering it `timedOut: true`
+ * instead would make a watcher that re-issues on success spin through its
+ * whole rate limit against the dying process; a tool error sends it into
+ * backoff, and its next attempt reaches the new process. The message must not
+ * look like "Unknown tool", which clients read as "fall back to polling".
  *
  * Returns the number of waits released.
  */
@@ -111,7 +119,8 @@ export function releaseAllWaits(): number {
   return releasers.length;
 }
 
-/** Let waits hold again after releaseAllWaits() (in-process hosts, tests). */
+/** Stop draining after releaseAllWaits(). createApp() calls this, so a host
+ *  that shuts down and builds a new app in-process is not left draining. */
 export function resumeWaits(): void {
   draining = false;
 }
@@ -188,7 +197,8 @@ export function waitForEvents(
 
   const first = collect(context, cursors);
   if (first.hasEvents) return Promise.resolve(first.result);
-  if (timeoutMs === 0 || draining) return Promise.resolve({ ...first.result, timedOut: true });
+  if (draining) return Promise.reject(new Error('server shutting down'));
+  if (timeoutMs === 0) return Promise.resolve({ ...first.result, timedOut: true });
   if (signal?.aborted) return Promise.reject(new Error('wait aborted: client disconnected'));
 
   // The admin API has no session; key it by caller so it is still capped.

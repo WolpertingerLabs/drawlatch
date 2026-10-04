@@ -50,7 +50,7 @@ import { IngestorManager } from './ingestors/index.js';
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller } from '../shared/env-utils.js';
 import { toolHandlers, type ToolContext } from './tool-dispatch.js';
-import { releaseAllWaits } from './wait-for-events.js';
+import { releaseAllWaits, resumeWaits } from './wait-for-events.js';
 import { setTunnelUrl, getTunnelUrl } from './tunnel-state.js';
 import { migrateConfigDir } from '../shared/migrations.js';
 import { maybeIssueLocalCaller } from './caller-bootstrap.js';
@@ -430,6 +430,10 @@ export function createApp(options: CreateAppOptions = {}) {
   const port = resolvePort(process.env.DRAWLATCH_PORT, config.port);
 
   rateLimitPerMinute = config.rateLimitPerMinute;
+
+  // A host that ran gracefulShutdown() and builds a new app in the same
+  // process must not inherit the old app's draining state.
+  resumeWaits();
 
   // Create or use the provided ingestor manager.
   // When config is loaded from disk (production), pass loadRemoteConfig as the
@@ -948,9 +952,10 @@ export function createApp(options: CreateAppOptions = {}) {
  *
  * Held `wait_for_events` requests are released first. Otherwise each one keeps
  * its request open for up to 55s, `server.close()` cannot finish, and the
- * forced-exit timer turns every restart into exit(1). Releasing also stops new
- * waits from holding, so a client that re-polls on the reply cannot park a
- * fresh wait on the dying process.
+ * forced-exit timer turns every restart into exit(1). Releasing also starts
+ * draining: a client that re-polls on the reply gets "server shutting down"
+ * and backs off instead of parking a fresh wait on (or spinning against) the
+ * dying process.
  */
 export async function gracefulShutdown(
   server: import('node:http').Server,

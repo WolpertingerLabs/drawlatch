@@ -5,7 +5,7 @@
  * encrypted `/request` endpoint, so the abort-on-disconnect wiring and the
  * Retry-After header are tested where they live rather than through mocks.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import crypto from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -28,7 +28,13 @@ import {
 import { BaseIngestor } from './ingestors/base-ingestor.js';
 import { IngestorManager } from './ingestors/manager.js';
 import { registerIngestorFactory } from './ingestors/registry.js';
-import { activeWaitCount, resumeWaits, type WaitForEventsResult } from './wait-for-events.js';
+import { toolHandlers } from './tool-dispatch.js';
+import {
+  activeWaitCount,
+  releaseAllWaits,
+  resumeWaits,
+  type WaitForEventsResult,
+} from './wait-for-events.js';
 
 class FakeIngestor extends BaseIngestor {
   start(): Promise<void> {
@@ -101,6 +107,12 @@ beforeAll(async () => {
       resolve();
     });
   });
+});
+
+afterEach(() => {
+  // Start every test from zero holds and not draining (see the unit tests).
+  releaseAllWaits();
+  resumeWaits();
 });
 
 afterAll(async () => {
@@ -280,5 +292,37 @@ describe('graceful shutdown with a wait held', () => {
       shutdownServer.closeAllConnections();
       shutdownServer.close();
     }
+  });
+});
+
+describe('createApp after a shutdown', () => {
+  it('clears draining, so waits hold again in the new app', async () => {
+    releaseAllWaits(); // what gracefulShutdown leaves behind
+
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      callers: { 'test-client': { connections: [] } },
+      rateLimitPerMinute: RATE_LIMIT,
+    };
+    const freshMgr = new IngestorManager(config);
+    createApp({
+      config,
+      ownKeys: serverKeys,
+      authorizedPeers: [],
+      ingestorManager: freshMgr,
+      disableRateLimiting: true,
+    });
+
+    const pending = toolHandlers.wait_for_events({ timeout_ms: 30_000 }, [], {
+      callerAlias: 'test-client',
+      ingestorManager: freshMgr,
+      refreshRoutes: () => undefined,
+      sessionId: 'post-restart',
+    }) as Promise<WaitForEventsResult>;
+    await vi.waitFor(() => expect(activeWaitCount()).toBe(1));
+
+    releaseAllWaits();
+    expect((await pending).timedOut).toBe(true);
   });
 });
