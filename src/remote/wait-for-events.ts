@@ -13,8 +13,13 @@
  * across instances would skip events.
  *
  * Holding a request open is a resource, so it is capped: MAX_WAITS_PER_SESSION
- * concurrent holds per session and MAX_WAITS_TOTAL hub-wide. Over a cap the
- * call fails immediately instead of queueing.
+ * concurrent holds per session, MAX_WAITS_PER_CALLER per caller (so one caller
+ * opening many sessions cannot starve the rest), and MAX_WAITS_TOTAL hub-wide.
+ * Over a cap the call fails immediately instead of queueing.
+ *
+ * Held requests would also keep `server.close()` waiting on shutdown, so the
+ * daemon calls releaseAllWaits() first: every hold is answered `timedOut: true`
+ * and new waits stop holding until resumeWaits().
  */
 
 import type { IngestedEvent } from './ingestors/types.js';
@@ -25,6 +30,7 @@ import type { ToolContext } from './tool-dispatch.js';
 export const WAIT_DEFAULT_TIMEOUT_MS = 25_000;
 export const WAIT_MAX_TIMEOUT_MS = 55_000;
 export const MAX_WAITS_PER_SESSION = 2;
+export const MAX_WAITS_PER_CALLER = 8;
 export const MAX_WAITS_TOTAL = 64;
 
 /**
@@ -51,27 +57,63 @@ export function clampWaitTimeout(requested: unknown, budgetMs?: unknown): number
 // ── Hold accounting ────────────────────────────────────────────────────────
 
 const holdsBySession = new Map<string, number>();
+const holdsByCaller = new Map<string, number>();
 let totalHolds = 0;
+
+/** Answer-now callbacks for every held wait, used by releaseAllWaits(). */
+const activeReleasers = new Set<() => void>();
+
+/** While true, waits answer immediately instead of holding (shutdown). */
+let draining = false;
 
 /** Number of waits currently holding, hub-wide. */
 export function activeWaitCount(): number {
   return totalHolds;
 }
 
-function acquireHold(sessionKey: string): void {
-  const current = holdsBySession.get(sessionKey) ?? 0;
-  if (current >= MAX_WAITS_PER_SESSION || totalHolds >= MAX_WAITS_TOTAL) {
+function bump(map: Map<string, number>, key: string, delta: number): void {
+  const next = (map.get(key) ?? 0) + delta;
+  if (next <= 0) map.delete(key);
+  else map.set(key, next);
+}
+
+function acquireHold(sessionKey: string, callerAlias: string): void {
+  if (
+    (holdsBySession.get(sessionKey) ?? 0) >= MAX_WAITS_PER_SESSION ||
+    (holdsByCaller.get(callerAlias) ?? 0) >= MAX_WAITS_PER_CALLER ||
+    totalHolds >= MAX_WAITS_TOTAL
+  ) {
     throw new Error('too many concurrent waits');
   }
-  holdsBySession.set(sessionKey, current + 1);
+  bump(holdsBySession, sessionKey, 1);
+  bump(holdsByCaller, callerAlias, 1);
   totalHolds++;
 }
 
-function releaseHold(sessionKey: string): void {
-  const current = holdsBySession.get(sessionKey) ?? 0;
-  if (current <= 1) holdsBySession.delete(sessionKey);
-  else holdsBySession.set(sessionKey, current - 1);
+function releaseHold(sessionKey: string, callerAlias: string): void {
+  bump(holdsBySession, sessionKey, -1);
+  bump(holdsByCaller, callerAlias, -1);
   totalHolds--;
+}
+
+/**
+ * Answer every held wait now, as if its timeout had fired, and stop new waits
+ * from holding. Called on shutdown before `server.close()`: otherwise a held
+ * wait keeps its request open past the forced-exit timer, and a client that
+ * re-polls on the reply would park a fresh wait on the dying process.
+ *
+ * Returns the number of waits released.
+ */
+export function releaseAllWaits(): number {
+  draining = true;
+  const releasers = [...activeReleasers];
+  for (const release of releasers) release();
+  return releasers.length;
+}
+
+/** Let waits hold again after releaseAllWaits() (in-process hosts, tests). */
+export function resumeWaits(): void {
+  draining = false;
 }
 
 // ── Wire types ─────────────────────────────────────────────────────────────
@@ -146,12 +188,13 @@ export function waitForEvents(
 
   const first = collect(context, cursors);
   if (first.hasEvents) return Promise.resolve(first.result);
-  if (timeoutMs === 0) return Promise.resolve({ ...first.result, timedOut: true });
+  if (timeoutMs === 0 || draining) return Promise.resolve({ ...first.result, timedOut: true });
   if (signal?.aborted) return Promise.reject(new Error('wait aborted: client disconnected'));
 
   // The admin API has no session; key it by caller so it is still capped.
   const sessionKey = context.sessionId ?? `caller:${context.callerAlias}`;
-  acquireHold(sessionKey);
+  const { callerAlias } = context;
+  acquireHold(sessionKey, callerAlias);
 
   const mgr = context.ingestorManager;
 
@@ -164,7 +207,8 @@ export function waitForEvents(
       clearTimeout(timer);
       mgr.offEvent(onEvent);
       signal?.removeEventListener('abort', onAbort);
-      releaseHold(sessionKey);
+      activeReleasers.delete(answerTimedOut);
+      releaseHold(sessionKey, callerAlias);
       let value: WaitForEventsResult | Error;
       try {
         value = outcome();
@@ -178,7 +222,7 @@ export function waitForEvents(
     // Collection is synchronous and the listener is registered in the same
     // tick as the first check, so no event can slip between the two.
     function onEvent(event: IngestedEvent): void {
-      if (event.callerAlias !== context.callerAlias) return;
+      if (event.callerAlias !== callerAlias) return;
       // A wake whose stream has nothing past its cursor (cursor ahead of the
       // buffer) keeps holding rather than answering empty.
       let next: ReturnType<typeof collect>;
@@ -195,13 +239,16 @@ export function waitForEvents(
       finish(() => new Error('wait aborted: client disconnected'));
     }
 
-    const timer = setTimeout(() => {
+    function answerTimedOut(): void {
       finish(() => {
         const last = collect(context, cursors);
         return last.hasEvents ? last.result : { ...last.result, timedOut: true };
       });
-    }, timeoutMs);
+    }
 
+    const timer = setTimeout(answerTimedOut, timeoutMs);
+
+    activeReleasers.add(answerTimedOut);
     mgr.onEvent(onEvent);
     signal?.addEventListener('abort', onAbort, { once: true });
   });

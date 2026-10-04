@@ -50,6 +50,7 @@ import { IngestorManager } from './ingestors/index.js';
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller } from '../shared/env-utils.js';
 import { toolHandlers, type ToolContext } from './tool-dispatch.js';
+import { releaseAllWaits } from './wait-for-events.js';
 import { setTunnelUrl, getTunnelUrl } from './tunnel-state.js';
 import { migrateConfigDir } from '../shared/migrations.js';
 import { maybeIssueLocalCaller } from './caller-bootstrap.js';
@@ -939,6 +940,43 @@ export function createApp(options: CreateAppOptions = {}) {
   return app;
 }
 
+// ── Shutdown ───────────────────────────────────────────────────────────────
+
+/**
+ * Graceful shutdown: answer held waits, stop the tunnel, stop ingestors, then
+ * close the HTTP server. Resolves once the server has closed.
+ *
+ * Held `wait_for_events` requests are released first. Otherwise each one keeps
+ * its request open for up to 55s, `server.close()` cannot finish, and the
+ * forced-exit timer turns every restart into exit(1). Releasing also stops new
+ * waits from holding, so a client that re-polls on the reply cannot park a
+ * fresh wait on the dying process.
+ */
+export async function gracefulShutdown(
+  server: import('node:http').Server,
+  ingestorManager: IngestorManager,
+  stopTunnel?: () => Promise<void>,
+): Promise<void> {
+  const released = releaseAllWaits();
+  if (released > 0) console.log(`[remote] Released ${released} held wait(s)`);
+
+  // Stop tunnel first (fast — just kills a child process)
+  setTunnelUrl(null);
+  if (stopTunnel) {
+    await stopTunnel().catch((err: unknown) => {
+      console.error('[remote] Error stopping tunnel:', err);
+    });
+  }
+
+  await ingestorManager.stopAll().catch((err: unknown) => {
+    console.error('[remote] Error stopping ingestors:', err);
+  });
+
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
 // waitForTunnelReady is now exported from tunnel.ts — imported dynamically
 // alongside startTunnel in the tunnel startup block below.
 
@@ -1088,30 +1126,14 @@ export function main(): void {
       })(),
   );
 
-  // Graceful shutdown: stop tunnel, then ingestors, then close the server.
+  // Graceful shutdown: release held waits, stop tunnel, then ingestors, then
+  // close the server.
   const shutdown = () => {
     console.log('[remote] Shutting down gracefully...');
 
-    // Stop tunnel first (fast — just kills a child process)
-    setTunnelUrl(null);
-    const tunnelDone = stopTunnel
-      ? stopTunnel().catch((err: unknown) => {
-          console.error('[remote] Error stopping tunnel:', err);
-        })
-      : Promise.resolve();
-
-    void tunnelDone.then(() => {
-      ingestorManager
-        .stopAll()
-        .catch((err: unknown) => {
-          console.error('[remote] Error stopping ingestors:', err);
-        })
-        .finally(() => {
-          server.close(() => {
-            console.log('[remote] Server closed.');
-            process.exit(0);
-          });
-        });
+    void gracefulShutdown(server, ingestorManager, stopTunnel).then(() => {
+      console.log('[remote] Server closed.');
+      process.exit(0);
     });
 
     // Force exit after 10 seconds if connections don't drain

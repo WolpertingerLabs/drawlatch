@@ -16,8 +16,11 @@ import { toolHandlers, type ToolContext } from './tool-dispatch.js';
 import {
   activeWaitCount,
   clampWaitTimeout,
+  MAX_WAITS_PER_CALLER,
   MAX_WAITS_PER_SESSION,
   MAX_WAITS_TOTAL,
+  releaseAllWaits,
+  resumeWaits,
   WAIT_DEFAULT_TIMEOUT_MS,
   WAIT_MAX_TIMEOUT_MS,
   type WaitForEventsResult,
@@ -58,16 +61,20 @@ beforeAll(() => {
   );
 });
 
-/** Find the fake for a caller's connection instance (`_default` = single-instance). */
+/** Find the live fake for a caller's connection instance (`_default` = single-instance).
+ *  The most recent match wins, so a restarted instance resolves to its replacement. */
 function fake(caller: string, connection: string, instanceId = '_default'): FakeIngestor {
-  const match = fakes.find(
-    (f) =>
+  for (let i = fakes.length - 1; i >= 0; i--) {
+    const f = fakes[i];
+    if (
       f.callerAlias === caller &&
       f.connection === connection &&
-      (f.instance ?? '_default') === instanceId,
-  );
-  if (!match) throw new Error(`no fake for ${caller}:${connection}:${instanceId}`);
-  return match;
+      (f.instance ?? '_default') === instanceId
+    ) {
+      return f;
+    }
+  }
+  throw new Error(`no fake for ${caller}:${connection}:${instanceId}`);
 }
 
 const fakeIngestor = {
@@ -207,6 +214,64 @@ describe('wait_for_events', () => {
     expect(result.streams['chat:_default'].events).toEqual([]);
     expect(activeWaitCount()).toBe(0);
     expect(mgr.eventListenerCount).toBe(0);
+  });
+
+  it('sees an event emitted synchronously right after the call', async () => {
+    // Pins that the subscription happens in the same tick as the first check:
+    // an `async` refactor that subscribes after a yield would lose this event.
+    vi.useFakeTimers();
+    const mgr = await makeManager();
+    const pending = wait(ctx(mgr), { cursors: seenAll(mgr), timeout_ms: 1_000 });
+    fake('alice', 'chat').push('sync');
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await flush();
+    expect(settled).toBe(true);
+    expect((await pending).timedOut).toBe(false);
+  });
+
+  it('wakes on the replacement after an ingestor is restarted mid-wait', async () => {
+    vi.useFakeTimers();
+    const mgr = await makeManager();
+    const old = fake('alice', 'chat');
+    old.push('before-restart');
+    const cursors = seenAll(mgr);
+    const pending = wait(ctx(mgr), { cursors, timeout_ms: 5_000 });
+    await flush();
+
+    await mgr.restartOne('alice', 'chat');
+    const replacement = fake('alice', 'chat');
+    expect(replacement).not.toBe(old);
+    expect(activeWaitCount()).toBe(1); // the restart alone does not answer
+
+    replacement.push('after-restart', { fresh: true });
+    const result = await pending;
+
+    expect(result.timedOut).toBe(false);
+    // New epoch ids sit above the old cursor, so the stale cursor still works.
+    expect(result.streams['chat:_default'].events.map((e) => e.data)).toEqual([{ fresh: true }]);
+    expect(result.streams['chat:_default'].cursor).toBeGreaterThan(cursors['chat:_default']);
+    expect(mgr.eventListenerCount).toBe(0);
+  });
+
+  it('drops a stream stopped mid-wait and still wakes on the others', async () => {
+    vi.useFakeTimers();
+    const mgr = await makeManager();
+    const cursors = seenAll(mgr);
+    const pending = wait(ctx(mgr), { cursors, timeout_ms: 5_000 });
+    await flush();
+
+    await mgr.stopOne('alice', 'boards', 'b1');
+    expect(activeWaitCount()).toBe(1);
+    fake('alice', 'boards', 'b2').push('still-here');
+    const result = await pending;
+
+    expect(result.timedOut).toBe(false);
+    expect(result.streams).not.toHaveProperty('boards:b1');
+    expect(result.unknownStreams).toEqual(['boards:b1']);
+    expect(result.streams['boards:b2'].events).toHaveLength(1);
   });
 
   it('returns empty with timedOut:true when nothing arrives', async () => {
@@ -405,18 +470,53 @@ describe('wait_for_events', () => {
       expect(result.streams['chat:_default'].events).toHaveLength(1);
     });
 
+    it(`allows ${MAX_WAITS_PER_CALLER} concurrent waits per caller across sessions and rejects the next`, async () => {
+      vi.useFakeTimers();
+      const mgr = await makeManager();
+      expect(MAX_WAITS_PER_CALLER).toBe(8);
+      const input = { cursors: seenAll(mgr), timeout_ms: 1_000 };
+      const held: Promise<WaitForEventsResult>[] = [];
+      // Spread over sessions so the per-session cap is never the one that bites.
+      for (let i = 0; i < MAX_WAITS_PER_CALLER; i++) {
+        held.push(wait(ctx(mgr, 'alice', { sessionId: `alice-s${Math.floor(i / 2)}` }), input));
+      }
+      await flush();
+      expect(activeWaitCount()).toBe(MAX_WAITS_PER_CALLER);
+
+      await expect(wait(ctx(mgr, 'alice', { sessionId: 'alice-fresh' }), input)).rejects.toThrow(
+        'too many concurrent waits',
+      );
+
+      // Another caller still gets a slot.
+      const bob = wait(ctx(mgr, 'bob'), { cursors: seenAll(mgr, 'bob'), timeout_ms: 1_000 });
+      await flush();
+      expect(activeWaitCount()).toBe(MAX_WAITS_PER_CALLER + 1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await Promise.all([...held, bob]);
+      expect(activeWaitCount()).toBe(0);
+
+      // Released: the caller can hold again.
+      const again = wait(ctx(mgr, 'alice', { sessionId: 'alice-fresh' }), input);
+      await flush();
+      expect(activeWaitCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await again;
+    });
+
     it(`allows ${MAX_WAITS_TOTAL} concurrent waits hub-wide and rejects the next`, async () => {
       vi.useFakeTimers();
       const mgr = await makeManager();
       const input = { cursors: seenAll(mgr), timeout_ms: 1_000 };
       const held: Promise<WaitForEventsResult>[] = [];
+      // Spread over callers so the per-caller cap is never the one that bites.
       for (let i = 0; i < MAX_WAITS_TOTAL; i++) {
-        held.push(wait(ctx(mgr, 'alice', { sessionId: `s${i}` }), input));
+        held.push(wait(ctx(mgr, `caller${i % 16}`, { sessionId: `s${i}` }), input));
       }
       await flush();
       expect(activeWaitCount()).toBe(MAX_WAITS_TOTAL);
 
-      await expect(wait(ctx(mgr, 'alice', { sessionId: 'fresh' }), input)).rejects.toThrow(
+      await expect(wait(ctx(mgr, 'caller-new', { sessionId: 'fresh' }), input)).rejects.toThrow(
         'too many concurrent waits',
       );
 
@@ -424,6 +524,56 @@ describe('wait_for_events', () => {
       await Promise.all(held);
       expect(activeWaitCount()).toBe(0);
       expect(mgr.eventListenerCount).toBe(0);
+    });
+  });
+
+  describe('releaseAllWaits (shutdown)', () => {
+    afterEach(() => {
+      resumeWaits();
+    });
+
+    it('answers every held wait with timedOut:true and frees all resources', async () => {
+      vi.useFakeTimers();
+      const mgr = await makeManager();
+      const ac = new AbortController();
+      const held = [
+        wait(ctx(mgr, 'alice', { signal: ac.signal }), {
+          cursors: seenAll(mgr),
+          timeout_ms: 30_000,
+        }),
+        wait(ctx(mgr, 'bob'), { cursors: seenAll(mgr, 'bob'), timeout_ms: 30_000 }),
+      ];
+      await flush();
+      expect(activeWaitCount()).toBe(2);
+      expect(mgr.eventListenerCount).toBe(2);
+
+      expect(releaseAllWaits()).toBe(2);
+      const [alice, bob] = await Promise.all(held);
+
+      expect(alice.timedOut).toBe(true);
+      expect(Object.keys(alice.streams)).toHaveLength(3);
+      expect(bob.timedOut).toBe(true);
+      expect(activeWaitCount()).toBe(0);
+      expect(mgr.eventListenerCount).toBe(0);
+      expect(getEventListeners(ac.signal, 'abort')).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('stops new waits from holding while draining, so clients cannot re-park', async () => {
+      const mgr = await makeManager();
+      releaseAllWaits();
+
+      const result = await wait(ctx(mgr), { cursors: seenAll(mgr), timeout_ms: 30_000 });
+      expect(result.timedOut).toBe(true);
+      expect(activeWaitCount()).toBe(0);
+      expect(mgr.eventListenerCount).toBe(0);
+
+      resumeWaits();
+      const held = wait(ctx(mgr), { cursors: seenAll(mgr), timeout_ms: 30_000 });
+      await flush();
+      expect(activeWaitCount()).toBe(1);
+      releaseAllWaits();
+      await held;
     });
   });
 

@@ -10,7 +10,7 @@ import crypto from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { createApp, getSessionsSnapshot } from './server.js';
+import { createApp, getSessionsSnapshot, gracefulShutdown } from './server.js';
 import type { RemoteServerConfig } from '../shared/config.js';
 import {
   generateKeyBundle,
@@ -28,7 +28,7 @@ import {
 import { BaseIngestor } from './ingestors/base-ingestor.js';
 import { IngestorManager } from './ingestors/manager.js';
 import { registerIngestorFactory } from './ingestors/registry.js';
-import { activeWaitCount, type WaitForEventsResult } from './wait-for-events.js';
+import { activeWaitCount, resumeWaits, type WaitForEventsResult } from './wait-for-events.js';
 
 class FakeIngestor extends BaseIngestor {
   start(): Promise<void> {
@@ -50,6 +50,7 @@ let server: Server;
 let baseUrl: string;
 let clientKeys: KeyBundle;
 let serverPub: PublicKeyBundle;
+let serverKeys: KeyBundle;
 let mgr: IngestorManager;
 let chat: FakeIngestor;
 
@@ -63,7 +64,7 @@ beforeAll(async () => {
   );
 
   clientKeys = generateKeyBundle();
-  const serverKeys = generateKeyBundle();
+  serverKeys = generateKeyBundle();
   serverPub = extractPublicKeys(serverKeys);
 
   const config: RemoteServerConfig = {
@@ -110,15 +111,15 @@ afterAll(async () => {
   await mgr.stopAll();
 });
 
-async function handshake(): Promise<EncryptedChannel> {
+async function handshake(url = baseUrl): Promise<EncryptedChannel> {
   const initiator = new HandshakeInitiator(clientKeys, serverPub);
-  const initResp = await fetch(`${baseUrl}/handshake/init`, {
+  const initResp = await fetch(`${url}/handshake/init`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(initiator.createInit()),
   });
   const keys = initiator.processReply((await initResp.json()) as HandshakeReply);
-  const finishResp = await fetch(`${baseUrl}/handshake/finish`, {
+  const finishResp = await fetch(`${url}/handshake/finish`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Session-Id': keys.sessionId },
     body: JSON.stringify(initiator.createFinish(keys)),
@@ -132,6 +133,7 @@ function post(
   toolName: string,
   toolInput: Record<string, unknown>,
   signal?: AbortSignal,
+  url = baseUrl,
 ): Promise<Response> {
   const request: ProxyRequest = {
     type: 'proxy_request',
@@ -140,7 +142,7 @@ function post(
     toolInput,
     timestamp: Date.now(),
   };
-  return fetch(`${baseUrl}/request`, {
+  return fetch(`${url}/request`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream', 'X-Session-Id': channel.sessionId },
     body: new Uint8Array(channel.encryptJSON(request)),
@@ -232,5 +234,51 @@ describe('per-session 429', () => {
     expect(Number.isInteger(retryAfter)).toBe(true);
     expect(retryAfter).toBeGreaterThanOrEqual(58);
     expect(retryAfter).toBeLessThanOrEqual(60);
+  });
+});
+
+describe('graceful shutdown with a wait held', () => {
+  it('answers the wait with timedOut:true and closes promptly', async () => {
+    // A separate app and manager: gracefulShutdown stops both. The caller has
+    // no ingestors, so the wait has nothing to wake it and would hold 50s.
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 0,
+      callers: { 'test-client': { connections: [] } },
+      rateLimitPerMinute: RATE_LIMIT,
+    };
+    const shutdownMgr = new IngestorManager(config);
+    const app = createApp({
+      config,
+      ownKeys: serverKeys,
+      authorizedPeers: [{ alias: 'test-client', keys: extractPublicKeys(clientKeys) }],
+      ingestorManager: shutdownMgr,
+      disableRateLimiting: true,
+    });
+    const shutdownServer = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const url = `http://127.0.0.1:${(shutdownServer.address() as AddressInfo).port}`;
+
+    try {
+      const channel = await handshake(url);
+      const pending = post(channel, 'wait_for_events', { timeout_ms: 50_000 }, undefined, url);
+      await vi.waitFor(() => expect(activeWaitCount()).toBe(1));
+
+      const started = Date.now();
+      await gracefulShutdown(shutdownServer, shutdownMgr);
+      const closeMs = Date.now() - started;
+
+      expect(closeMs).toBeLessThan(2_000);
+      expect(activeWaitCount()).toBe(0);
+      expect(shutdownMgr.eventListenerCount).toBe(0);
+      const response = await decrypt(channel, await pending);
+      expect(response.success).toBe(true);
+      expect((response.result as WaitForEventsResult).timedOut).toBe(true);
+    } finally {
+      resumeWaits();
+      shutdownServer.closeAllConnections();
+      shutdownServer.close();
+    }
   });
 });
