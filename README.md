@@ -226,7 +226,7 @@ Once connected, agents get these tools:
   "port": 9999,
   "connectors": [],
   "callers": {},
-  "rateLimitPerMinute": 60
+  "rateLimitPerMinute": 240
 }
 ```
 
@@ -236,7 +236,7 @@ Once connected, agents get these tools:
 | `port` | Listen port | `9999` |
 | `connectors` | Custom connector definitions (see below) | `[]` |
 | `callers` | Per-caller access control (see below) | `{}` |
-| `rateLimitPerMinute` | Max requests per minute per session | `60` |
+| `rateLimitPerMinute` | Max requests per minute per session. A per-session 429 carries `Retry-After` (seconds until the window resets). | `240` |
 
 Server keys are always loaded from `keys/server/` inside the config directory.
 
@@ -471,6 +471,8 @@ Drawlatch can collect real-time events from external services and buffer them fo
 
 Events are stored in per-caller ring buffers (default 200, max 1000) with monotonic IDs for cursor-based pagination. Agents retrieve events via `poll_events` and check status via `ingestor_status`.
 
+Long-running watchers (e.g. callboard) can instead call the remote-only `wait_for_events` tool over the encrypted channel: it takes one cursor per stream (`{ "cursors": { "<connection>:<instanceId>": <id> }, "timeout_ms": 25000 }`, with `_default` as the instance of single-instance connections), returns at once if any stream has newer events, and otherwise holds until one does or the timeout (default 25s, max 55s) passes. The reply lists every active stream for the caller with its new events and cursor, plus `unknownStreams` and `timedOut`. A held wait counts as one request against the rate limit; at most 2 waits may hold per session and 64 per server. It is not exposed through the local MCP server.
+
 For webhook ingestors, the remote server must be publicly accessible (or behind a tunnel). Use `drawlatch start --tunnel` to automatically start a Cloudflare tunnel.
 
 See **[INGESTORS.md](INGESTORS.md)** for full configuration reference.
@@ -589,7 +591,7 @@ Only these specifiers resolve; any other deep import throws
 - **Endpoint allowlisting** — requests only proxied to explicitly configured URL patterns
 - **Per-caller access control** — each caller only sees their assigned connections
 - **Per-caller credential isolation** — same connector, different credentials via `env` overrides
-- **Rate limiting** — configurable per-session (default: 60/min)
+- **Rate limiting** — configurable per-session (default: 240/min), with `Retry-After` on 429
 - **Audit logging** — all operations logged with caller identity, session ID, timestamps
 - **Zero secrets on the client** — the MCP proxy never sees API keys or tokens
 - **Mutual authentication** — Ed25519 signatures before any data exchange

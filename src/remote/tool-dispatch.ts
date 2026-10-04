@@ -2,7 +2,7 @@
  * Canonical MCP tool implementations — the single source of truth.
  *
  * These handlers implement every proxy/management tool drawlatch exposes:
- *   http_request, list_routes, poll_events, ingestor_status,
+ *   http_request, list_routes, poll_events, wait_for_events, ingestor_status,
  *   test_connection, test_ingestor, control_listener,
  *   list_listener_configs, resolve_listener_options,
  *   get/set_listener_params, list/delete_listener_instance,
@@ -31,6 +31,7 @@ import {
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller, setCallerSecrets } from '../shared/env-utils.js';
 import type { IngestorManager } from './ingestors/index.js';
+import { waitForEvents } from './wait-for-events.js';
 
 // ── Endpoint matching ────────────────────────────────────────────────────────
 
@@ -494,6 +495,12 @@ export interface ToolContext {
    *  Absent means **no clamp**, never zero: the admin API and older local
    *  proxies both arrive without one. */
   outboundBudgetMs?: number;
+  /** The encrypted session making this request. Scopes per-session limits
+   *  (e.g. concurrent `wait_for_events` holds). Absent on the admin API. */
+  sessionId?: string;
+  /** Aborts when the client goes away (the HTTP request closes), so
+   *  long-held handlers like `wait_for_events` can release early. */
+  signal?: AbortSignal;
 }
 
 export type ToolHandler = (
@@ -586,6 +593,15 @@ export const toolHandlers: Record<string, ToolHandler> = {
       );
     }
     return Promise.resolve(context.ingestorManager.getAllEvents(context.callerAlias, afterId));
+  },
+
+  /**
+   * Long-poll across every ingestor stream this caller owns. Returns as soon
+   * as any stream has events past its cursor, else holds until one does or
+   * the timeout fires. See wait-for-events.ts for the wire contract.
+   */
+  wait_for_events(input, _routes, context) {
+    return waitForEvents(input, context);
   },
 
   /**

@@ -238,6 +238,19 @@ export function checkRateLimit(
   return session.windowRequests <= limit;
 }
 
+/**
+ * Whole seconds until the session's rate-limit window resets, minimum 1.
+ * Sent as `Retry-After` on a per-session 429 so clients can back off precisely
+ * instead of guessing.
+ */
+export function retryAfterSeconds(
+  session: Pick<Session, 'windowStart'>,
+  now: number = Date.now(),
+): number {
+  const resetAt = session.windowStart + 60_000;
+  return Math.max(1, Math.ceil((resetAt - now) / 1000));
+}
+
 // ── Session cleanup ────────────────────────────────────────────────────────
 
 export const SESSION_TTL = 30 * 60 * 1000; // 30 minutes
@@ -578,12 +591,22 @@ export function createApp(options: CreateAppOptions = {}) {
     // Rate limit check
     if (!checkRateLimit(session, rateLimitPerMinute)) {
       auditLog(sessionId, 'rate_limited', { caller: session.callerAlias });
+      res.set('Retry-After', String(retryAfterSeconds(session)));
       res.status(429).send('Rate limit exceeded');
       return;
     }
 
     session.lastActivity = Date.now();
     session.requestCount++;
+
+    // Aborts when the client goes away before we respond, so long-held tools
+    // (wait_for_events) release their waiter instead of holding until timeout.
+    // `res` 'close' rather than `req` 'close': the latter fires as soon as the
+    // request body has been consumed.
+    const disconnect = new AbortController();
+    res.on('close', () => {
+      if (!res.writableFinished) disconnect.abort();
+    });
 
     try {
       // Decrypt the request
@@ -607,6 +630,8 @@ export function createApp(options: CreateAppOptions = {}) {
         callerAlias: session.callerAlias,
         ingestorManager: app.locals.ingestorManager as IngestorManager,
         refreshRoutes: () => refreshCallerSessions(session.callerAlias),
+        sessionId,
+        signal: disconnect.signal,
         // Absent on requests from older local proxies — that means "no clamp",
         // i.e. the pre-existing behavior, not a zero budget.
         ...(request.outboundBudgetMs !== undefined && {
@@ -636,6 +661,11 @@ export function createApp(options: CreateAppOptions = {}) {
       res.set('Content-Type', 'application/octet-stream');
       res.send(encrypted);
     } catch (err) {
+      if (disconnect.signal.aborted) {
+        // Nobody is listening; there is no response to send.
+        auditLog(sessionId, 'client_disconnected', { caller: session.callerAlias });
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[remote] Request error (${sessionId}):`, message);
 

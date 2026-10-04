@@ -11,7 +11,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { resolvePlaceholders, type ResolvedRoute } from '../shared/config.js';
 
-import { checkRateLimit, cleanupSessions, SESSION_TTL, HANDSHAKE_TTL } from './server.js';
+import {
+  checkRateLimit,
+  cleanupSessions,
+  retryAfterSeconds,
+  SESSION_TTL,
+  HANDSHAKE_TTL,
+} from './server.js';
 import { isEndpointAllowed, matchRoute } from './tool-dispatch.js';
 
 // ── isEndpointAllowed ──────────────────────────────────────────────────────
@@ -227,6 +233,25 @@ describe('checkRateLimit', () => {
     expect(checkRateLimit(session, 5)).toBe(true);
     // 6th request - should exceed
     expect(checkRateLimit(session, 5)).toBe(false);
+  });
+});
+
+// ── retryAfterSeconds ──────────────────────────────────────────────────────
+
+describe('retryAfterSeconds', () => {
+  const start = 1_000_000;
+
+  it('returns the whole seconds left in the window, rounded up', () => {
+    expect(retryAfterSeconds({ windowStart: start }, start)).toBe(60);
+    expect(retryAfterSeconds({ windowStart: start }, start + 100)).toBe(60);
+    expect(retryAfterSeconds({ windowStart: start }, start + 30_000)).toBe(30);
+    expect(retryAfterSeconds({ windowStart: start }, start + 58_001)).toBe(2);
+  });
+
+  it('never returns less than 1', () => {
+    expect(retryAfterSeconds({ windowStart: start }, start + 59_999)).toBe(1);
+    expect(retryAfterSeconds({ windowStart: start }, start + 60_000)).toBe(1);
+    expect(retryAfterSeconds({ windowStart: start }, start + 600_000)).toBe(1);
   });
 });
 
