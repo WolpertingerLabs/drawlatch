@@ -50,6 +50,7 @@ import { IngestorManager } from './ingestors/index.js';
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller } from '../shared/env-utils.js';
 import { toolHandlers, type ToolContext } from './tool-dispatch.js';
+import { releaseAllWaits, resumeWaits } from './wait-for-events.js';
 import { setTunnelUrl, getTunnelUrl } from './tunnel-state.js';
 import { migrateConfigDir } from '../shared/migrations.js';
 import { maybeIssueLocalCaller } from './caller-bootstrap.js';
@@ -238,6 +239,19 @@ export function checkRateLimit(
   return session.windowRequests <= limit;
 }
 
+/**
+ * Whole seconds until the session's rate-limit window resets, minimum 1.
+ * Sent as `Retry-After` on a per-session 429 so clients can back off precisely
+ * instead of guessing.
+ */
+export function retryAfterSeconds(
+  session: Pick<Session, 'windowStart'>,
+  now: number = Date.now(),
+): number {
+  const resetAt = session.windowStart + 60_000;
+  return Math.max(1, Math.ceil((resetAt - now) / 1000));
+}
+
 // ── Session cleanup ────────────────────────────────────────────────────────
 
 export const SESSION_TTL = 30 * 60 * 1000; // 30 minutes
@@ -417,6 +431,10 @@ export function createApp(options: CreateAppOptions = {}) {
 
   rateLimitPerMinute = config.rateLimitPerMinute;
 
+  // A host that ran gracefulShutdown() and builds a new app in the same
+  // process must not inherit the old app's draining state.
+  resumeWaits();
+
   // Create or use the provided ingestor manager.
   // When config is loaded from disk (production), pass loadRemoteConfig as the
   // config loader so startOne()/restartOne() read fresh config, picking up
@@ -578,12 +596,22 @@ export function createApp(options: CreateAppOptions = {}) {
     // Rate limit check
     if (!checkRateLimit(session, rateLimitPerMinute)) {
       auditLog(sessionId, 'rate_limited', { caller: session.callerAlias });
+      res.set('Retry-After', String(retryAfterSeconds(session)));
       res.status(429).send('Rate limit exceeded');
       return;
     }
 
     session.lastActivity = Date.now();
     session.requestCount++;
+
+    // Aborts when the client goes away before we respond, so long-held tools
+    // (wait_for_events) release their waiter instead of holding until timeout.
+    // `res` 'close' rather than `req` 'close': the latter fires as soon as the
+    // request body has been consumed.
+    const disconnect = new AbortController();
+    res.on('close', () => {
+      if (!res.writableFinished) disconnect.abort();
+    });
 
     try {
       // Decrypt the request
@@ -607,6 +635,8 @@ export function createApp(options: CreateAppOptions = {}) {
         callerAlias: session.callerAlias,
         ingestorManager: app.locals.ingestorManager as IngestorManager,
         refreshRoutes: () => refreshCallerSessions(session.callerAlias),
+        sessionId,
+        signal: disconnect.signal,
         // Absent on requests from older local proxies — that means "no clamp",
         // i.e. the pre-existing behavior, not a zero budget.
         ...(request.outboundBudgetMs !== undefined && {
@@ -636,6 +666,11 @@ export function createApp(options: CreateAppOptions = {}) {
       res.set('Content-Type', 'application/octet-stream');
       res.send(encrypted);
     } catch (err) {
+      if (disconnect.signal.aborted) {
+        // Nobody is listening; there is no response to send.
+        auditLog(sessionId, 'client_disconnected', { caller: session.callerAlias });
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[remote] Request error (${sessionId}):`, message);
 
@@ -909,6 +944,44 @@ export function createApp(options: CreateAppOptions = {}) {
   return app;
 }
 
+// ── Shutdown ───────────────────────────────────────────────────────────────
+
+/**
+ * Graceful shutdown: answer held waits, stop the tunnel, stop ingestors, then
+ * close the HTTP server. Resolves once the server has closed.
+ *
+ * Held `wait_for_events` requests are released first. Otherwise each one keeps
+ * its request open for up to 55s, `server.close()` cannot finish, and the
+ * forced-exit timer turns every restart into exit(1). Releasing also starts
+ * draining: a client that re-polls on the reply gets "server shutting down"
+ * and backs off instead of parking a fresh wait on (or spinning against) the
+ * dying process.
+ */
+export async function gracefulShutdown(
+  server: import('node:http').Server,
+  ingestorManager: IngestorManager,
+  stopTunnel?: () => Promise<void>,
+): Promise<void> {
+  const released = releaseAllWaits();
+  if (released > 0) console.log(`[remote] Released ${released} held wait(s)`);
+
+  // Stop tunnel first (fast — just kills a child process)
+  setTunnelUrl(null);
+  if (stopTunnel) {
+    await stopTunnel().catch((err: unknown) => {
+      console.error('[remote] Error stopping tunnel:', err);
+    });
+  }
+
+  await ingestorManager.stopAll().catch((err: unknown) => {
+    console.error('[remote] Error stopping ingestors:', err);
+  });
+
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
 // waitForTunnelReady is now exported from tunnel.ts — imported dynamically
 // alongside startTunnel in the tunnel startup block below.
 
@@ -1058,30 +1131,14 @@ export function main(): void {
       })(),
   );
 
-  // Graceful shutdown: stop tunnel, then ingestors, then close the server.
+  // Graceful shutdown: release held waits, stop tunnel, then ingestors, then
+  // close the server.
   const shutdown = () => {
     console.log('[remote] Shutting down gracefully...');
 
-    // Stop tunnel first (fast — just kills a child process)
-    setTunnelUrl(null);
-    const tunnelDone = stopTunnel
-      ? stopTunnel().catch((err: unknown) => {
-          console.error('[remote] Error stopping tunnel:', err);
-        })
-      : Promise.resolve();
-
-    void tunnelDone.then(() => {
-      ingestorManager
-        .stopAll()
-        .catch((err: unknown) => {
-          console.error('[remote] Error stopping ingestors:', err);
-        })
-        .finally(() => {
-          server.close(() => {
-            console.log('[remote] Server closed.');
-            process.exit(0);
-          });
-        });
+    void gracefulShutdown(server, ingestorManager, stopTunnel).then(() => {
+      console.log('[remote] Server closed.');
+      process.exit(0);
     });
 
     // Force exit after 10 seconds if connections don't drain

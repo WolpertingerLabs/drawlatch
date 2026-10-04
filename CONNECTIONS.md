@@ -11,7 +11,7 @@ Instead of manually configuring connectors for popular APIs, you can use **conne
       "connections": ["github", "stripe"]
     }
   },
-  "rateLimitPerMinute": 60
+  "rateLimitPerMinute": 240
 }
 ```
 

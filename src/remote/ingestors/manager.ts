@@ -354,6 +354,23 @@ export class IngestorManager {
   }
 
   /**
+   * List every active ingestor instance ("stream") owned by a caller, for
+   * `wait_for_events`. Matches on the parsed caller segment rather than a
+   * key prefix so one caller's alias can never select another's streams.
+   */
+  getStreams(
+    callerAlias: string,
+  ): { connection: string; instanceId: string; ingestor: BaseIngestor }[] {
+    const streams: { connection: string; instanceId: string; ingestor: BaseIngestor }[] = [];
+    for (const [key, ingestor] of this.ingestors) {
+      const { caller, connection, instance } = parseKey(key);
+      if (caller !== callerAlias) continue;
+      streams.push({ connection, instanceId: instance, ingestor });
+    }
+    return streams;
+  }
+
+  /**
    * Get status of all ingestors for a caller.
    */
   getStatuses(callerAlias: string): IngestorStatus[] {
@@ -393,6 +410,11 @@ export class IngestorManager {
   /** Unsubscribe a global event listener. */
   offEvent(listener: (event: IngestedEvent) => void): void {
     this.eventListeners.delete(listener);
+  }
+
+  /** Number of global event listeners currently subscribed (leak checks). */
+  get eventListenerCount(): number {
+    return this.eventListeners.size;
   }
 
   /** Forward an ingestor event to all global listeners. */
