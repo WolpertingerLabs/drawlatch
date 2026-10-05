@@ -5,92 +5,40 @@ description: Run the full build, lint, format, commit, push, and redeploy pipeli
 
 ## Steps
 
-1. **Build** the project:
+1. **Build:** `npm run build` (TypeScript, connection templates, dashboard). Fix any errors before continuing.
 
-   ```
-   npm run build
-   ```
+2. **Lint:** `npm run lint:fix` (ESLint on `src/`). Fix anything it could not auto-fix.
 
-   Stop and fix any build errors before continuing.
+3. **Format:** `npm run format` (Prettier on `src/**/*.ts` and root `*.json`/`*.ts`/`*.js`; markdown is not covered).
 
-2. **Lint** all files:
-
-   ```
-   npm run lint:fix
-   ```
-
-   Stop and fix any lint errors that could not be auto-fixed.
-
-3. **Format** — format only touched (uncommitted) files:
-
-   ```
-   npm run format
-   ```
-
-4. **Git commit** — stage all changes (including any formatting/lint fixes from above) and commit with a descriptive message summarizing what changed:
+4. **Commit** everything, including lint and format fixes, with a message that describes the change:
 
    ```
    git add -A
    git commit -m "<descriptive message>"
    ```
 
-5. **Detect branch and worktree context** before pushing:
-   - Check if on a **non-primary branch** (i.e. not `main` or `master`):
-     ```
-     git branch --show-current
-     ```
-   - Check if in a **git worktree** (not the main working tree):
-     ```
-     git rev-parse --git-common-dir
-     ```
-     If the output of `git rev-parse --git-common-dir` differs from `git rev-parse --git-dir`, you are in a worktree.
+5. **Detect context:**
+   - Branch: `git branch --show-current`. Anything other than `main`/`master` is a feature branch.
+   - Worktree: you are in one if `git rev-parse --git-common-dir` differs from `git rev-parse --git-dir`.
 
-6. **Git push**:
+6. **Push:** `git push`, or `git push -u origin <branch>` on a branch's first push.
 
-   ```
-   git push
-   ```
+7. **Open a PR** (feature branches only): `gh pr create --fill`. Skip this if `gh pr view` shows one already exists.
 
-   If on a non-primary branch and pushing for the first time, use `git push -u origin <branch>`.
-
-7. **Create PR** (only if on a non-primary branch):
-
-   ```
-   gh pr create --fill
-   ```
-
-   If a PR already exists for the branch, skip this step (check with `gh pr view` first).
-
-8. **Install and restart production** (skip if in a worktree):
-
-   If in a worktree, **skip this step** — production runs from the main working tree, not from worktrees.
-
-   Otherwise, pack the build, install globally, and restart.
-   Read the version from `package.json` to construct the tarball filename:
+8. **Reinstall and restart production** (main working tree only; skip in a worktree):
 
    ```
    npm pack --pack-destination /tmp
-   ```
-
-   ```
    npm install -g /tmp/wolpertingerlabs-drawlatch-<version>.tgz && rm /tmp/wolpertingerlabs-drawlatch-<version>.tgz
-   ```
-
-   (Replace `<version>` with the actual version from package.json, e.g. `1.0.0-alpha.1`)
-
-   ```
    drawlatch restart
-   ```
-
-   Confirm the server is running:
-
-   ```
    drawlatch status
    ```
 
-## Important
+   `<version>` is the `version` field in `package.json` (for example, `1.0.0-alpha.61`). `npm run reload` does the same, with an extra install and build first.
 
-- If any step fails, **stop immediately**, diagnose the issue, fix it, and restart from the failed step.
-- The commit message should accurately describe the changes — do NOT use a generic message like "save and reboot".
-- After the final step, if production was restarted, confirm with `drawlatch status`.
-- If in a worktree, the pipeline ends after pushing (and creating a PR if on a non-primary branch).
+## Rules
+
+- If a step fails, stop, fix it, and resume from that step.
+- Don't use a generic commit message like "save and reboot".
+- In a worktree, the pipeline ends after the push (and the PR, on a feature branch).
