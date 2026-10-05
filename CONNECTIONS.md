@@ -10,7 +10,7 @@ Then set the secrets for that caller. Caller `default` reads `GITHUB_TOKEN` from
 
 ## Available connections
 
-**Bold** secrets are needed for API calls. The others are used only by the event listener, if at all. Listener types are described in [INGESTORS.md](INGESTORS.md).
+**Bold** secrets are needed for API calls. The others are used only by the event listener, if at all. `doctor` and the dashboard flag missing secrets only when they're used in headers, so they won't catch a missing Telegram or Trello token. Listener types are described in [INGESTORS.md](INGESTORS.md).
 
 | Connection | API | Secrets | Auth | Listener |
 | --- | --- | --- | --- | --- |
@@ -43,7 +43,7 @@ Then set the secrets for that caller. Caller `default` reads `GITHUB_TOKEN` from
 | `twitch` | [Twitch Helix](https://dev.twitch.tv/docs/api/reference/) | **`TWITCH_ACCESS_TOKEN`**, **`TWITCH_CLIENT_ID`**, `TWITCH_USER_ID` | Bearer + `Client-Id` | poll |
 | `x` | [X API v2](https://developer.x.com/en/docs/x-api) | **`X_BEARER_TOKEN`**, `X_SEARCH_QUERY` | Bearer | poll |
 
-Every template has a built-in `test_connection` request. The Exa and Parallel tests run a real one-result search, which uses a little credit.
+Every template has a built-in `test_connection` request. Three of them cost a little credit: the Anthropic test sends a 1-token message, Exa runs a one-result search, and Parallel runs a small `turbo` search.
 
 A secret that isn't set is sent as the literal placeholder (for example, `Bearer ${LICHESS_API_TOKEN}`). Set every bold secret even for APIs with public endpoints.
 

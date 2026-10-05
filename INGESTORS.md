@@ -48,11 +48,13 @@ Every event has this shape:
   "source": "github",
   "instanceId": "my-repo",
   "eventType": "push",
-  "data": { "…": "raw payload from the service" }
+  "data": { "deliveryId": "…", "event": "push", "payload": { "…": "GitHub's payload" } }
 }
 ```
 
-- **`id`** increases monotonically within one listener instance. It is `epoch × 1,000,000 + counter`, and each new instance (including after a restart) claims a higher `epoch` than every earlier one. So every ID from a newer listener is larger than every ID from an older one.
+`data` is the raw item for poll and Discord events. Webhook listeners wrap the body: GitHub `{ deliveryId, event, payload }`, Stripe `{ eventId, type, payload }`, Trello `{ actionId, actionType, payload }`. Slack stores the envelope's `payload`.
+
+- **`id`** increases monotonically within one listener instance. It is `epoch × 1,000,000 + counter`, and within one daemon process each new instance (including after a listener restart) claims a higher `epoch` than every earlier one. So every ID from a newer listener is larger than every ID from an older one. After a daemon restart, buffers start empty.
 - **`idempotencyKey`** comes from the service where possible: GitHub delivery ID, Stripe event ID, Slack envelope ID, Trello action ID, Discord session and sequence number, or the poll dedup field. A listener drops events whose key it has recently seen.
 - **`instanceId`** is present only for multi-instance listeners.
 
@@ -81,7 +83,7 @@ Listeners start when the daemon starts, for every caller connection that has an 
 | `get_listener_params` / `set_listener_params` | Read or merge `params`. Unknown keys are rejected. With `instance_id` it writes `listenerInstances` (pass `create_instance: true` to add one); without, it writes `ingestorOverrides`. A running listener is restarted to apply the change. A newly created instance is not started; use `control_listener`. |
 | `list_listener_instances` / `delete_listener_instance` | List instances, or stop one, remove it from config, and unregister its webhook. |
 | `resolve_listener_options` | Live choices for fields with dynamic options: Discord `guildIds` and Trello `boardId`. |
-| `test_ingestor` | Webhooks: checks that the signing secret is set. Others: makes a test request to the service. |
+| `test_ingestor` | Webhooks: checks that the signing secret is set. Others: makes a test request to the service. (Slack's test currently always fails with a header conflict.) |
 
 ## Per-caller listener settings
 
@@ -113,7 +115,7 @@ Set these in the caller's entry in `remote.config.json`, keyed by connection:
 | `bufferSize` | all | Ring buffer capacity (default 200). The oldest events are evicted when it's full. Use 10–1000; the daemon doesn't enforce limits, and 0 breaks the buffer. |
 | `intervalMs` | poll | Poll interval. Minimum 5000. |
 | `eventFilter` | WebSocket | Keep only these event types. Empty means all. |
-| `guildIds`, `channelIds`, `userIds` | Discord (Slack: `channelIds`, `userIds`) | Keep only events from these IDs. Filters are ANDed together, and an event that lacks the field passes. User ID is read from `author.id`, `user.id`, or `user_id`. |
+| `guildIds`, `channelIds`, `userIds` | Discord (Slack: `channelIds`, `userIds`) | Keep only events from these IDs. Filters are ANDed together, and an event that lacks the field passes. Discord reads the user ID from `author.id`, `user.id`, or `user_id`; Slack from `user`, `user_id`, or `user.id`. |
 | `intents` | Discord | Gateway intents bitmask. |
 | `params` | listener fields | Values for the connection's listener fields (see below). |
 
@@ -217,9 +219,9 @@ Listener fields shown in the dashboard come from the template's `listenerConfig`
       "name": "new-issues",
       "source": "github",
       "eventTypes": ["issues"],
-      "filter": { "action": ["opened"] },
+      "filter": { "payload.action": ["opened"] },
       "target": { "type": "remote_trigger", "triggerId": "trig_…" },
-      "throttle": { "maxPerMinute": 10, "deduplicateBy": "issue.id" }
+      "throttle": { "maxPerMinute": 10, "deduplicateBy": "payload.issue.id" }
     }
   ]
 }

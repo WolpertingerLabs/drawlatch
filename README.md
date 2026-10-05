@@ -60,7 +60,7 @@ drawlatch doctor    # config, keys, required secrets, daemon health
 drawlatch status    # PID, port, uptime, active sessions, dashboard URL
 ```
 
-This repo is also a Claude Code plugin marketplace (`.claude-plugin/`): `/plugin marketplace add WolpertingerLabs/drawlatch`, then `/plugin install drawlatch@drawlatch`. Its MCP server is named `secure-proxy` and uses the default config directory.
+This repo is also a Claude Code plugin marketplace (`.claude-plugin/`): `/plugin marketplace add WolpertingerLabs/drawlatch`, then `/plugin install drawlatch@drawlatch`. Its MCP server is named `secure-proxy` and passes `MCP_CONFIG_DIR` and `MCP_KEY_ALIAS` through from your environment.
 
 ## Daemon and MCP server on different machines
 
@@ -83,13 +83,13 @@ The local MCP server exposes these tools. Every call goes through the encrypted 
 
 | Tool | Purpose |
 | --- | --- |
-| `secure_request` | HTTP request to an allowlisted URL. Connection headers are injected for you. `${VAR}` placeholders in the URL and headers resolve server-side from the matched connection's secrets (in the body only if the connection sets `resolveSecretsInBody`). Supports multipart uploads from local files (25 MB per file) and a per-call `timeoutMs`. |
-| `list_routes` | The caller's connections: docs links, allowed endpoint patterns, secret *names*, auto-injected header names, timeouts, listener info. |
-| `test_connection` | Run a connection's built-in read-only credential check. |
-| `list_connection_templates` | All built-in and custom connections, with which are enabled and which secrets are set (booleans). |
+| `secure_request` | HTTP request to an allowlisted URL. Connection headers are injected for you. `${VAR}` placeholders in the URL and headers resolve server-side from the matched connection's secrets (in the body only if the connection sets `resolveSecretsInBody`). Supports multipart uploads from local files (25 MB per file, 50 MB per base64-encoded request) and a per-call `timeoutMs`. |
+| `list_routes` | The caller's connections: docs links, allowed endpoint patterns, the *names* of secrets that are set, auto-injected header names, timeouts, listener info. |
+| `test_connection` | Run a connection's built-in credential check. Some cost a little credit; see [CONNECTIONS.md](CONNECTIONS.md#available-connections). |
+| `list_connection_templates` | All built-in templates, with which are enabled for this caller and which secrets are set (booleans). Custom connectors aren't listed. |
 | `set_connection_enabled` | Enable or disable a connection for this caller. |
 | `set_secrets` | Set or delete (empty string) this caller's secrets. Write-only. |
-| `get_secret_status` | Which required and optional secrets are set for a connection (booleans). |
+| `get_secret_status` | Which required and optional secrets are set for a built-in connection (booleans). |
 | `poll_events` | Read buffered listener events after a cursor. |
 | `ingestor_status` | State, buffer size, event counts, and errors for this caller's listeners. |
 | `control_listener` | Start, stop, or restart a listener. |
@@ -164,7 +164,7 @@ Connections reference secrets as `${NAME}` (for example, `${GITHUB_TOKEN}`). For
 
 A bare `GITHUB_TOKEN` is never used. This keeps one caller from picking up another's credentials. The daemon loads `.env` at startup, so restart after editing it by hand. The dashboard and `set_secrets` write `<ALIAS>_<NAME>` to `.env` and apply the change immediately.
 
-If a secret isn't set, its placeholder is sent literally (for example, `Authorization: Bearer ${GITHUB_TOKEN}`), and the upstream API will usually answer `401`. `drawlatch doctor`, `drawlatch config`, and the dashboard's Secrets page show what's missing.
+If a secret isn't set, its placeholder is sent literally (for example, `Authorization: Bearer ${GITHUB_TOKEN}`), and the upstream API will usually answer `401`. `drawlatch doctor`, `drawlatch config`, and the dashboard's Secrets page show what's missing. They check only secrets used in a connection's headers, so they don't flag a token that goes in the URL (Telegram, Trello).
 
 > **Known issue:** an `env` value that redirects to another variable, such as `"GITHUB_TOKEN": "${ALICE_TOKEN}"`, is not resolved, and the secret is reported as set when it isn't. Use a literal value or the prefixed variable name instead.
 
@@ -201,7 +201,7 @@ With this connector, caller `default` reads `ADMIN_KEY` from `DEFAULT_ADMIN_KEY`
 
 ### Proxy config (`proxy.config.json`)
 
-Read by the local MCP server. `init` writes the defaults shown.
+Read by the local MCP server, which won't connect without this file. `init` writes it. Fields missing from the file fall back to these defaults.
 
 | Field | Default | Description |
 | --- | --- | --- |
@@ -226,7 +226,7 @@ A proxied call has three nested deadlines. The innermost fires first, because on
 - `list_routes` reports each connection's `defaultTimeoutMs` and `maxTimeoutMs` under the current budget.
 - The 290 s outbound maximum sits below undici's internal 300 s headers timeout, which would otherwise fire first with an opaque error.
 - A timed-out call is cancelled at the socket and reported as `Upstream request timed out after <n>ms`. If the local budget was the binding limit, the error names the setting to raise. A host that never accepts the connection is reported as `Upstream never accepted the connection`.
-- Zero, negative, or non-numeric `timeoutMs` values fall back to the connection default. A malformed `requestTimeoutMs` on a connection falls back to 25 s; it doesn't remove the ceiling.
+- The MCP server accepts `timeoutMs` only as a positive integer up to 290000. The daemon treats invalid values from other clients as unset. A malformed `requestTimeoutMs` on a connection falls back to 25 s; it doesn't remove the ceiling.
 
 ### Webhooks and the tunnel
 
@@ -234,9 +234,9 @@ Webhook listeners (GitHub, Stripe, Trello) receive `POST /webhooks/<path>` on th
 
 ## Admin dashboard
 
-The daemon serves a web dashboard and its JSON API from the same port as the MCP protocol: `http://127.0.0.1:9999/` by default. From it you can create, issue, and delete callers; enable connections; set secrets; configure, test, and control listeners; and watch events, ingestors, sessions, and a secrets matrix. Changes are live-reloaded into running sessions and listeners.
+The daemon serves a web dashboard and its JSON API from the same port as the MCP protocol: `http://127.0.0.1:9999/` by default. From it you can create, issue, and delete callers; enable connections; set secrets; configure, test, and control listeners; and watch events, ingestors, sessions, and a secrets matrix. Connection and secret changes apply to open sessions immediately. Running listeners pick up new secrets, or a newly enabled connection, only when they are (re)started: use the listener controls or `drawlatch restart`. Listener parameter changes restart the listener.
 
-**Password.** The dashboard stays locked until a password is set. `drawlatch set-password` (alias `change-password`) prompts on a TTY or reads the password twice from stdin (`printf 'pw\npw\n' | drawlatch set-password`). It stores a scrypt hash and salt in `.env` as `AUTH_PASSWORD_HASH` / `AUTH_PASSWORD_SALT`. Restart the daemon after setting it from the CLI. Changing it from the dashboard (**Settings → Password**) applies immediately and signs out every other session.
+**Password.** The dashboard stays locked until a password is set. `drawlatch set-password` (alias `change-password`) prompts on a TTY or reads the password twice from stdin (`printf '%s\n%s\n' "$PW" "$PW" | drawlatch set-password`). It stores a scrypt hash and salt in `.env` as `AUTH_PASSWORD_HASH` / `AUTH_PASSWORD_SALT`. Restart the daemon after setting it from the CLI. Changing it from the dashboard (**Change password**, `/settings/password`) applies immediately and signs out every other session.
 
 **Security.**
 
@@ -248,7 +248,7 @@ The daemon serves a web dashboard and its JSON API from the same port as the MCP
   - `/handshake`: 30/min
   - `/webhooks`: 120/min
   - `/health`: 60/min
-  - `/api/admin`: 300/min
+  - `/api/admin`: 300/min, with credential issuance limited to 10/min
 - Without a password, the MCP protocol still works. Login, auth checks, and `/api/admin/*` return `503`.
 
 **API.** The dashboard is a client of `/api/admin/*`. Read endpoints report secrets as booleans only. Write endpoints:
@@ -281,10 +281,9 @@ config                   Show effective config and per-caller secret status (--p
 doctor                   Check config, keys, required secrets and daemon health
 generate-keys caller [alias]   Caller keypair in keys/callers/<alias>/ (default alias "default")
 generate-keys server           Server keypair in keys/server/
-generate-keys --dir <path>     Keypair in a custom directory
 generate-keys show <path>      Fingerprint of an existing keypair
 issue-caller <alias>     Issue a caller credential bundle (for Callboard)
-    --name <name>          Display name (default: the alias)
+    --name <name>          Display name (default: keep existing, else the alias)
     --connections <a,b>    Connections (default: keep existing, else copy "default")
     --endpoint <url>       Daemon URL pinned in the bundle (default: this daemon's host:port)
     --passphrase           Encrypt the bundle's private keys (scrypt + AES-256-GCM)
