@@ -265,7 +265,7 @@ Write endpoints (`…` = `/callers/:alias/connections/:connection`):
 | --- | --- |
 | `POST /callers` `{alias, name?, connections?}` | Create a caller with a keypair on drawlatch's disk |
 | `POST /callers/:alias/issue` `{connections?, endpointUrl?, passphrase?, name?}` | Issue or rotate a credential bundle (10/min) |
-| `DELETE /callers/:alias` | Delete a caller, its keys and prefixed secrets (`default` is protected) |
+| `DELETE /callers/:alias` | Delete a caller, its keys, and the secrets recorded in its `env` map (set via the dashboard or `set_secrets`; hand-added `.env` lines remain). `default` is protected |
 | `PUT /tunnel` `{enabled}` | Persist the tunnel flag (applies on restart) |
 | `POST …` `{enabled}` | Enable or disable a connection |
 | `PUT …/secrets` `{secrets}` | Set secrets; empty string deletes |
