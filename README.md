@@ -1,286 +1,176 @@
 # Drawlatch
 
-> **Alpha Software:** Expect breaking changes between updates.
+> **Alpha software:** expect breaking changes between updates.
 
-Drawlatch is a config-driven proxy that gives AI agents authenticated access to external APIs. Define your connections and secrets in a single config file — agents get structured, allowlisted access to 23 pre-built APIs without ever seeing your credentials.
+Drawlatch gives AI agents authenticated access to external APIs without giving them the credentials. A daemon holds your secrets and makes the API calls. Agents reach it through a local MCP server over an end-to-end encrypted, mutually authenticated channel, and can only call the URL patterns each connection allows.
 
-**Using [Callboard](https://github.com/WolpertingerLabs/callboard)?** Drawlatch is built in — Callboard manages connections, secrets, and agent identities through its UI. You don't need to set up drawlatch separately.
+- **28 pre-built connections** (GitHub, Slack, Discord, Stripe, Notion, Linear, OpenAI, …) plus your own custom connectors. See [CONNECTIONS.md](CONNECTIONS.md).
+- **Per-caller access control.** Each agent identity (caller) sees only its own connections and secrets.
+- **Real-time events.** WebSocket, webhook, and polling listeners buffer events for agents to read. See [INGESTORS.md](INGESTORS.md).
+- **Admin dashboard** for callers, connections, secrets, and listeners, served by the daemon itself.
 
-## Key Features
+**Using [Callboard](https://github.com/WolpertingerLabs/callboard)?** Drawlatch is built in. Callboard manages connections, secrets, and agent identities through its UI, so you don't need to set up drawlatch separately.
 
-- **23 pre-built connections** — GitHub, Slack, Discord, Stripe, Notion, Linear, OpenAI, and [more](CONNECTIONS.md)
-- **Endpoint allowlisting** — agents can only reach explicitly configured URL patterns
-- **Per-caller access control** — each agent identity sees only its assigned connections
-- **Real-time event ingestion** — WebSocket, webhook, and polling listeners for incoming events ([details](INGESTORS.md))
-- **Zero secrets on the client** — a local MCP stdio proxy forwards end-to-end encrypted requests to a daemon that holds the credentials
-
-## How It Works
-
-The local MCP proxy holds no secrets. It encrypts requests and forwards them to a remote server that injects credentials and makes the actual API calls.
+## How it works
 
 ```
-┌──────────────┐                          ┌──────────────────┐                    ┌──────────────┐
-│  Claude Code  │◄── stdio ──► MCP Proxy  │◄── HTTP + E2EE ──►  Remote Server    │── HTTPS ────►│  External API │
-│              │              (no secrets) │                   │  (holds secrets)  │              │               │
-└──────────────┘                          └──────────────────┘                    └──────────────┘
+Claude Code ◄─ stdio ─► MCP server (local, no secrets) ◄─ HTTP + E2EE ─► drawlatch daemon (holds secrets) ─ HTTPS ─► API
 ```
 
-The crypto layer uses Ed25519 signatures for mutual authentication and X25519 ECDH to derive AES-256-GCM session keys — all built on Node.js native `crypto` with zero external dependencies.
+The local MCP server holds only its caller keypair and the daemon's public keys. Each session starts with a handshake: Ed25519 signatures for mutual authentication, then X25519 ECDH to derive AES-256-GCM session keys. The daemon matches each request to an allowlisted connection, injects that connection's headers and secrets, and makes the call. All crypto uses Node's built-in `crypto` module.
 
-## Quick Start
+## Quick start (single machine)
 
-Get from zero to working in three commands:
+Requires Node.js 22 or later.
 
 ```bash
-# Install globally
 npm install -g @wolpertingerlabs/drawlatch
 
-# Set up keys, config, and .env in one step
-drawlatch init --connections github
-
-# Set your API token (edit the file or run this)
-echo "GITHUB_TOKEN=ghp_your_token_here" >> ~/.drawlatch/.env
-
-# Start the remote server
-drawlatch start
+drawlatch init            # server keypair, configs and .env in ~/.drawlatch
+drawlatch set-password    # dashboard password (at least 8 characters)
+drawlatch start           # start the daemon in the background
 ```
 
-Verify your setup:
+`init` is idempotent and never overwrites existing files. It writes `"host": "0.0.0.0"`, so the daemon listens on every interface (the dashboard is password-protected; set `"host": "127.0.0.1"` in `~/.drawlatch/remote.config.json` for loopback only). It does not create a caller. Create one next.
+
+**Create a caller.** The local MCP server authenticates as the caller named by `MCP_KEY_ALIAS` (default: `default`), using the keypair in `~/.drawlatch/keys/callers/<alias>/`. Either:
+
+- **Dashboard:** open `http://127.0.0.1:9999/`, go to **Callers → New caller**, name it `default`, then on **Connections** enable `github` and set `GITHUB_TOKEN`. Changes apply immediately.
+- **CLI:**
+
+  ```bash
+  drawlatch generate-keys caller default
+  # In ~/.drawlatch/remote.config.json, set:  "callers": { "default": { "connections": ["github"] } }
+  echo 'DEFAULT_GITHUB_TOKEN=ghp_your_token' >> ~/.drawlatch/.env   # secrets are prefixed with the caller alias
+  drawlatch restart
+  ```
+
+**Register the MCP server with Claude Code:**
 
 ```bash
-drawlatch doctor    # Validate full setup
-drawlatch status    # Check server is running
-drawlatch config    # View configuration and secret status
+claude mcp add drawlatch -- node "$(npm root -g)/@wolpertingerlabs/drawlatch/dist/mcp/server.js"
 ```
 
-The `init` command generates keys, creates configs, exchanges public keys, and scaffolds the `.env` file. All steps are idempotent — safe to re-run.
+Add `-e MCP_KEY_ALIAS=<alias>` (before `--`) to use a caller other than `default`, and `-e MCP_CONFIG_DIR=/abs/path` for a config directory other than `~/.drawlatch`. Use absolute paths: a `~` inside an MCP `env` value is not expanded.
 
-### Connect to Claude Code
-
-**Option 1: Claude Code Plugin (Recommended)**
-
-```shell
-# Install the plugin
-/plugin install drawlatch@drawlatch
-```
-
-The plugin's MCP server starts automatically. The proxy uses `~/.drawlatch/` by default — see [Advanced Configuration](#advanced-configuration) to use a custom path.
-
-**Option 2: Auto-Discovery**
-
-This repo includes a `.mcp.json` file, so Claude Code automatically discovers the MCP proxy when you open the project. Approve the server when prompted.
-
-**Option 3: Manual Registration**
+**Check the setup:**
 
 ```bash
-claude mcp add drawlatch \
-  -e MCP_CONFIG_DIR=~/.drawlatch \
-  -- node /path/to/drawlatch/dist/mcp/server.js
+drawlatch doctor    # config, keys, required secrets, daemon health
+drawlatch status    # PID, port, uptime, active sessions, dashboard URL
 ```
 
-> **Note:** Auto-discovery and manual registration use `dist/mcp/server.js`. The `dist/` directory is built automatically via `npm install` (prepare script). Rebuild manually with `npm run build` if needed.
+This repo is also a Claude Code plugin marketplace (`.claude-plugin/`): `/plugin marketplace add WolpertingerLabs/drawlatch`, then `/plugin install drawlatch@drawlatch`. Its MCP server is named `secure-proxy` and uses the default config directory.
 
-### Manual Setup
+## Daemon and MCP server on different machines
 
-For custom setups (different aliases, multiple callers, different machines), you can configure everything manually instead of using `drawlatch init`.
+The MCP server reads PEM files only, so you exchange public keys by hand:
 
-**1. Generate keys:**
+1. **Client machine:** install drawlatch, run `drawlatch generate-keys caller laptop`, and create `~/.drawlatch/proxy.config.json` with `"remoteUrl": "http://<daemon-host>:9999"` (see [Proxy config](#proxy-config-proxyconfigjson)). Don't run `init` here; it would create an unrelated server keypair.
+2. Copy the client's `keys/callers/laptop/*.pub.pem` to the daemon machine's `~/.drawlatch/keys/callers/laptop/`, and add `"laptop": { "connections": [...] }` to its `callers`.
+3. Copy the daemon's `keys/server/*.pub.pem` to the client's `~/.drawlatch/keys/server/`.
+4. `drawlatch restart` on the daemon, then register the MCP server on the client with `-e MCP_KEY_ALIAS=laptop`.
 
-```bash
-drawlatch generate-keys caller my-laptop
-drawlatch generate-keys server
+Traffic is encrypted end to end, but the dashboard cookie is not marked `secure`. Put the daemon behind a TLS-terminating proxy if you expose it beyond a trusted network.
+
+**Callboard instances** use credential bundles instead: `drawlatch issue-caller <alias> -o <alias>.drawlatch-caller.json` (or **Issue credentials** on the dashboard's caller page), then import the file in Callboard. On the same host, `--into <callboard keys dir>` writes the key files directly. Issuing mints a new keypair and keeps only its public half, so **issuing for an existing alias rotates its keys** and deletes any private key drawlatch held for it. After a CLI issue, `drawlatch restart` so a running daemon accepts the new key; dashboard issues apply immediately.
+
+A co-located Callboard can also provision itself. When the daemon starts with `DRAWLATCH_LOCAL_CALLER_KEYS_DIR` set and the caller named by `DRAWLATCH_LOCAL_CALLER_ALIAS` (default `callboard-local`; Callboard sets `default`) is missing from config or has no keys, drawlatch issues it and writes the caller keys to `<dir>/callers/<alias>/` and the server public keys to `<dir>/server/`. `DRAWLATCH_LOCAL_CALLER_CONNECTIONS` (comma-separated) sets its connections. If that is unset, it keeps the existing entry's connections or copies the `default` caller's.
+
+## MCP tools
+
+The local MCP server exposes these tools. Every call goes through the encrypted channel and runs as the authenticated caller.
+
+| Tool | Purpose |
+| --- | --- |
+| `secure_request` | HTTP request to an allowlisted URL. Connection headers are injected for you. `${VAR}` placeholders in the URL and headers resolve server-side from the matched connection's secrets (in the body only if the connection sets `resolveSecretsInBody`). Supports multipart uploads from local files (25 MB per file) and a per-call `timeoutMs`. |
+| `list_routes` | The caller's connections: docs links, allowed endpoint patterns, secret *names*, auto-injected header names, timeouts, listener info. |
+| `test_connection` | Run a connection's built-in read-only credential check. |
+| `list_connection_templates` | All built-in and custom connections, with which are enabled and which secrets are set (booleans). |
+| `set_connection_enabled` | Enable or disable a connection for this caller. |
+| `set_secrets` | Set or delete (empty string) this caller's secrets. Write-only. |
+| `get_secret_status` | Which required and optional secrets are set for a connection (booleans). |
+| `poll_events` | Read buffered listener events after a cursor. |
+| `ingestor_status` | State, buffer size, event counts, and errors for this caller's listeners. |
+| `control_listener` | Start, stop, or restart a listener. |
+| `list_listener_configs` | Configurable listener fields per connection. |
+| `get_listener_params` / `set_listener_params` | Read or change listener parameters. |
+| `resolve_listener_options` | Fetch dynamic choices for a listener field (for example, your Trello boards). |
+| `list_listener_instances` / `delete_listener_instance` | Manage multi-instance listeners. |
+| `test_ingestor` | Check a listener's configuration and credentials. |
+
+Note that `set_secrets` and `set_connection_enabled` let an agent change its own caller's configuration. It still can't read secret values or reach URLs outside the allowlists.
+
+The daemon also accepts `wait_for_events`, a long-poll over all of a caller's event streams. The local MCP server doesn't expose it; long-running clients such as Callboard call it over the encrypted channel. See [INGESTORS.md](INGESTORS.md#reading-events).
+
+## Configuration
+
+### Config directory
+
+Everything lives in `~/.drawlatch/`, or `$MCP_CONFIG_DIR` if set:
+
+```
+remote.config.json     daemon config: callers, custom connectors, host/port, rate limit, tunnel
+proxy.config.json      local MCP server config: daemon URL and timeouts
+.env                   secrets (mode 0600), plus the dashboard password hash
+keys/server/           the daemon's Ed25519 + X25519 keypair
+keys/callers/<alias>/  one keypair per caller (public half only, when issued as a bundle)
+logs/drawlatch.log     daemon log (drawlatch logs)
+data/sessions.json     dashboard login sessions
+drawlatch.pid          PID of the background daemon
 ```
 
-**2. Exchange public keys** — on separate machines, copy `*.pub.pem` files to the matching `keys/callers/<alias>/` or `keys/server/` directory on the other machine. See [Key Exchange](#key-exchange) for details.
+Each key directory holds `signing.{pub,key}.pem` and `exchange.{pub,key}.pem`. Private keys are written `0600` and key directories `0700`. On startup the daemon moves the legacy `keys/local`, `keys/remote`, and `keys/peers/*` layouts into this one.
 
-**3. Create configs** — copy the example files and edit:
+### Daemon config (`remote.config.json`)
 
-```bash
-cp remote.config.example.json ~/.drawlatch/remote.config.json
-cp proxy.config.example.json ~/.drawlatch/proxy.config.json
-```
+| Field | Default | Description |
+| --- | --- | --- |
+| `host` | `127.0.0.1` (`init` writes `0.0.0.0`) | Bind address. Env override: `DRAWLATCH_HOST`, or `drawlatch start --host`. |
+| `port` | `9999` | Listen port. Env override: `DRAWLATCH_PORT`, or `--port`. |
+| `rateLimitPerMinute` | `240` (`init` writes `60`) | Encrypted requests per minute per session. Over the limit, the daemon returns `429` with `Retry-After`. |
+| `callers` | `{}` | Caller aliases and what each may use (see below). |
+| `connectors` | `[]` | Custom connector definitions (see below). |
+| `tunnel` | `false` | Start a Cloudflare quick tunnel at boot. Env override: `DRAWLATCH_TUNNEL=1`, or `--tunnel`. |
 
-**4. Create a `.env` file** with your API secrets:
-
-```bash
-cat > ~/.drawlatch/.env << 'EOF'
-# GITHUB_TOKEN=ghp_your_token_here
-# DISCORD_BOT_TOKEN=your_bot_token_here
-EOF
-```
-
-**5. Start the server:**
-
-```bash
-drawlatch start
-drawlatch doctor    # Validate full setup
-```
-
-## Admin Dashboard
-
-`drawlatch start` serves a built-in web dashboard — a React single-page app — that **fully manages** your running daemon: enable/disable connections per caller, set and clear secrets, create and delete callers, configure and control event listeners (start/stop/restart, multi-instance management), and watch the live event/log feed — all from the browser, no config-file editing required. Every change is applied with a **live reload** (the daemon re-resolves routes and ingestors in place), so there is no "restart to apply" step. drawlatch owns 100% of its own state through this password-gated surface; nothing external writes its config.
-
-### Architecture
-
-There is no separate UI service to run. The React app, the `/api/admin/*` API, and the MCP protocol endpoints (`/handshake`, `/request`, `/events`, `/webhooks`, …) are all served by the **same Express process on the same port** as the daemon (default `http://127.0.0.1:9999/`):
-
-```
-┌────────────────────────────── drawlatch daemon (one process, port 9999) ──────────────────────────────┐
-│                                                                                                        │
-│   GET /                 →  React SPA (served from frontend/dist in production)                          │
-│   /api/admin/*          →  read + mutating JSON API  ──┐                                                │
-│   POST /api/auth/*      →  login / logout / check       ├─ password-gated (session cookie)              │
-│   /handshake /request … →  MCP protocol (E2EE)         ─┘  ← unaffected by dashboard auth               │
-│                                                                                                        │
-└────────────────────────────────────────────────────────────────────────────────────────────────────┘
-```
-
-Any unmatched non-API GET falls back to `index.html` so client-side routing works. The MCP protocol endpoints are independent of the dashboard — they keep serving agents even when the dashboard is locked (see below).
-
-### Setup
-
-**1. Set a password** (required — the dashboard is locked until one is set):
-
-```bash
-drawlatch set-password          # prompts on a TTY, or reads a password piped on stdin
-# echo 'my-strong-password' | drawlatch set-password   # non-interactive
-```
-
-The password is hashed with **scrypt** (random 16-byte salt, verified with a constant-time compare); the hash + salt are written to `~/.drawlatch/.env` (`AUTH_PASSWORD_HASH` / `AUTH_PASSWORD_SALT`, mode `0600`). Your plaintext password is never stored. Use `drawlatch change-password` (an alias of the same command) to rotate it later — rotating signs out every other session.
-
-**2. Open the dashboard** at `http://127.0.0.1:9999/` and log in. `drawlatch status` prints the dashboard URL and whether a password is configured.
-
-### Pages
-
-| Page | Route | What it shows | Refresh |
-|------|-------|---------------|---------|
-| **Overview** | `/` | Daemon health at a glance: status, PID, port, version, uptime, active session count, ingestor state breakdown, and secrets-configured progress. | on load |
-| **Connections** | `/connections` | Full management: connections grouped by category with search + a stable/beta/dev filter; a caller selector with create/delete-caller; per-connection enable toggle, secrets modal, test connection/listener, listener config panel (all field types + multi-instance), and quick start/stop/restart — with live ingestor state dots and secret-status badges. | live (5s) |
-| **Logs** | `/logs` | Live event/log feed per caller — ingestor status cards, source filter pills, and expandable event rows (eventType, ids, timestamps, pretty-printed JSON payload). | every 5s |
-| **Callers** | `/callers` | Registered MCP callers — alias, name, connection count, key fingerprint, and whether their keys directory exists. Click through for a caller's connections and secret status. | on load |
-| **Ingestors** | `/ingestors` | Live table of every running ingestor (WebSocket / webhook / poll) — state, buffered event count, total events received, last activity, and any error. | every 2s |
-| **Sessions** | `/sessions` | Active MCP proxy sessions — caller alias, created/last-active times, request count, and current per-window request rate. | every 5s |
-| **Secrets** | `/secrets` | A (caller × connection × secret) matrix showing required/optional and present/missing — with a "only missing" filter. **Never shows secret values**, only whether each is set. | every 10s |
-
-### The `/api/admin/*` API
-
-The pages are views over the `/api/admin/*` JSON API. **Read** endpoints (`/meta`, `/health`, `/connections`, `/callers`, `/callers/:alias/connection-status`, `/callers/:alias/connections`, `/callers/:alias/ingestors`, `/callers/:alias/events`, `/ingestors`, `/sessions`, `/secrets`) **never return a secret value** — caller `env` maps are reduced to key *names*, secret state is reported as booleans, and session crypto material is never serialized.
-
-**Mutating** endpoints (all behind the password gate) let the dashboard own management end-to-end:
-
-| Method + path | Action |
-|---|---|
-| `POST /callers` | Create a caller **with a fresh keypair** |
-| `DELETE /callers/:alias` | Delete a caller (its keys + prefixed env vars); `default` is protected |
-| `POST /callers/:alias/connections/:connection` `{enabled}` | Enable/disable a connection |
-| `PUT  /callers/:alias/connections/:connection/secrets` `{secrets}` | Set/clear secrets (empty string = delete) — **write-only**, read back as booleans |
-| `POST /callers/:alias/connections/:connection/test` · `/test-ingestor` | Run a connection / listener test |
-| `POST /callers/:alias/connections/:connection/listener/control` `{action,instance_id?}` | Start/stop/restart a listener |
-| `GET/PUT /…/listener/params`, `GET/POST/DELETE /…/listener/instances[/:id]`, `POST /…/listener/resolve-options` | Listener params + multi-instance management |
-
-Secrets are **write-only** through this API: you `PUT` values, and every read path reports only booleans. After any mutation the daemon live-reloads routes/ingestors for the affected caller. The same logic powers the encrypted MCP tools and the admin API through a single shared `tool-dispatch` module, so the two surfaces can never drift.
-
-A **co-located** callboard (one that shares drawlatch's filesystem) is provisioned with zero interaction. On every boot with `DRAWLATCH_LOCAL_CALLER_KEYS_DIR` set, the daemon checks for the caller named by `DRAWLATCH_LOCAL_CALLER_ALIAS` (callboard sets this to `default`; drawlatch falls back to `callboard-local`). If the caller's `remote.config.json` entry or its key files under drawlatch's `keys/callers/<alias>/` are missing, it mints a fresh keypair and writes the caller keys to `<dir>/callers/<alias>/` and the server public keys to `<dir>/server/`; otherwise it does nothing. `DRAWLATCH_LOCAL_CALLER_CONNECTIONS` (comma-separated) sets the connections of a newly issued caller; if unset, it keeps the existing entry's connections or copies the `default` caller's.
-
-### Security model
-
-The **password is the trust boundary** for the dashboard and `/api/admin/*` — not loopback. That lets you expose the dashboard to a LAN by binding a non-loopback host:
-
-```bash
-DRAWLATCH_HOST=0.0.0.0 drawlatch start    # or: drawlatch start --host 0.0.0.0
-```
-
-Auth uses a `drawlatch_session` cookie that is `httpOnly` and `sameSite=strict`, with a **7-day rolling expiry** (every authenticated request extends it). Login, password-change, and auth-check endpoints are rate-limited per IP (5/min for login & change-password, 20/min for checks). If **no** password is configured, the daemon still starts and serves MCP normally — only the dashboard is locked: `/api/auth/*` and `/api/admin/*` return `503` and the SPA shows a locked state prompting `drawlatch set-password`. The daemon never exits just because the dashboard is unconfigured.
-
-> **Cookies run over plain HTTP** on loopback/LAN (no `secure` flag). Put the daemon behind a TLS-terminating reverse proxy if you expose it beyond a trusted network.
-
-> **Migrating from `drawlatch-ui`?** The standalone `drawlatch-ui` service and its `~/.drawlatch-ui/` config directory are abandoned — its dashboard, auth gate, and password now live inside drawlatch. There is no automatic migration: just run `drawlatch set-password` once to set the password in `~/.drawlatch/.env`.
-
-## MCP Tools
-
-Once connected, agents get these tools:
-
-| Tool | Description |
-|------|-------------|
-| `secure_request` | Make authenticated HTTP requests. Route-level headers (auth tokens, API keys) are injected automatically — the agent never sees secret values. Supports JSON and multipart/form-data file uploads. |
-| `list_routes` | Discover available APIs with metadata, docs links, allowed endpoints, and available secret placeholders. |
-| `poll_events` | Retrieve buffered events from ingestors (Discord messages, GitHub webhooks, etc.) with cursor-based pagination. |
-| `ingestor_status` | Get connection state, buffer sizes, event counts, and errors for all active ingestors. |
-| `test_connection` | Verify API credentials with a pre-configured read-only request. |
-| `control_listener` | Start, stop, or restart an event listener. |
-| `list_listener_configs` | Get configurable fields for event listeners. |
-| `set_listener_params` | Configure listener parameters (filters, buffer sizes, etc.). |
-| `get_listener_params` | Read current listener parameter overrides. |
-| `resolve_listener_options` | Fetch dynamic options for listener config fields (e.g., list of Trello boards). |
-| `list_listener_instances` | List instances of a multi-instance listener. |
-| `delete_listener_instance` | Remove a multi-instance listener instance. |
-| `test_ingestor` | Test event listener configuration and credentials. |
-
-## Configuration Reference
-
-### Remote Server Config (`remote.config.json`)
-
-```json
-{
-  "host": "0.0.0.0",
-  "port": 9999,
-  "connectors": [],
-  "callers": {},
-  "rateLimitPerMinute": 240
-}
-```
-
-| Field | Description | Default |
-|-------|-------------|---------|
-| `host` | Network interface to bind | `127.0.0.1` |
-| `port` | Listen port | `9999` |
-| `connectors` | Custom connector definitions (see below) | `[]` |
-| `callers` | Per-caller access control (see below) | `{}` |
-| `rateLimitPerMinute` | Max requests per minute per session. A per-session 429 carries `Retry-After` (seconds until the window resets). | `240` |
-
-Server keys are always loaded from `keys/server/` inside the config directory.
+The daemon re-reads `remote.config.json` for each new session and after dashboard changes. Hand edits that add callers or change listeners need `drawlatch restart`.
 
 ### Callers
-
-Each caller is identified by their public key and declares which connections they can access:
 
 ```json
 {
   "callers": {
-    "alice": {
-      "name": "Alice (senior engineer)",
-      "connections": ["github", "stripe", "internal-api"],
-      "env": {
-        "GITHUB_TOKEN": "${ALICE_GITHUB_TOKEN}"
-      }
-    },
-    "ci-server": {
-      "name": "GitHub Actions CI",
-      "connections": ["github"]
-    }
+    "default": { "connections": ["github", "stripe", "internal-api"] },
+    "ci": { "name": "CI runner", "connections": ["github"] }
   }
 }
 ```
 
-Caller public keys are loaded automatically from `keys/callers/<alias>/` — no path configuration needed.
+| Field | Description |
+| --- | --- |
+| `connections` | Required. Built-in connection names or custom connector aliases. |
+| `name` | Display name for logs and the dashboard. |
+| `env` | Per-caller secret values (see [Secrets](#secrets)). |
+| `ingestorOverrides`, `listenerInstances` | Listener settings ([INGESTORS.md](INGESTORS.md#per-caller-listener-settings)). |
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `connections` | Yes | Array of connection names (built-in or custom connector aliases) |
-| `name` | No | Human-readable name for audit logs |
-| `env` | No | Per-caller env var overrides — redirect secret resolution per caller |
-| `ingestorOverrides` | No | Per-caller ingestor config overrides ([details](INGESTORS.md#caller-level-ingestor-overrides)) |
+Caller public keys are read from `keys/callers/<alias>/`. Aliases must match `^[a-zA-Z0-9][a-zA-Z0-9_-]*$`.
 
-The `env` map lets multiple callers share the same connection with different credentials:
-- Keys are the env var names connectors reference (e.g., `GITHUB_TOKEN`)
-- Values are `"${REAL_ENV_VAR}"` (redirect) or literal strings (direct injection)
-- Checked before prefixed env vars during secret resolution
+### Secrets
 
-Without an explicit `env` mapping, secrets resolve via prefixed env vars (e.g., caller "alice" + `GITHUB_TOKEN` → `ALICE_GITHUB_TOKEN`).
+Connections reference secrets as `${NAME}` (for example, `${GITHUB_TOKEN}`). For caller `<alias>`, the daemon looks up `NAME` in this order:
 
-### Custom Connectors
+1. A literal value in the caller's `env` map: `"env": { "GITHUB_TOKEN": "ghp_..." }`.
+2. The environment variable `<ALIAS>_<NAME>`, with the alias uppercased and `-` replaced by `_`. Examples: `DEFAULT_GITHUB_TOKEN`, `MY_AGENT_GITHUB_TOKEN`.
 
-Define reusable route templates for APIs not covered by built-in connections:
+A bare `GITHUB_TOKEN` is never used. This keeps one caller from picking up another's credentials. The daemon loads `.env` at startup, so restart after editing it by hand. The dashboard and `set_secrets` write `<ALIAS>_<NAME>` to `.env` and apply the change immediately.
+
+If a secret isn't set, its placeholder is sent literally (for example, `Authorization: Bearer ${GITHUB_TOKEN}`), and the upstream API will usually answer `401`. `drawlatch doctor`, `drawlatch config`, and the dashboard's Secrets page show what's missing.
+
+> **Known issue:** an `env` value that redirects to another variable, such as `"GITHUB_TOKEN": "${ALICE_TOKEN}"`, is not resolved, and the secret is reported as set when it isn't. Use a literal value or the prefixed variable name instead.
+
+### Custom connectors
+
+Use these for APIs without a built-in template, or to override one: a connector whose `alias` matches a built-in name replaces that template.
 
 ```json
 {
@@ -288,356 +178,169 @@ Define reusable route templates for APIs not covered by built-in connections:
     {
       "alias": "internal-api",
       "name": "Internal Admin API",
-      "allowedEndpoints": ["https://admin.internal.com/**"],
+      "allowedEndpoints": ["https://admin.internal.example/**"],
       "headers": { "Authorization": "Bearer ${ADMIN_KEY}" },
-      "secrets": { "ADMIN_KEY": "${INTERNAL_ADMIN_KEY}" }
+      "secrets": { "ADMIN_KEY": "${ADMIN_KEY}" }
     }
   ]
 }
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `alias` | Yes | Unique name for referencing from caller `connections` lists |
-| `allowedEndpoints` | Yes | Glob patterns for allowed URLs |
-| `name` | No | Human-readable name |
-| `description` | No | Short description |
-| `docsUrl` | No | URL to API documentation |
-| `headers` | No | Headers to auto-inject (`${VAR}` placeholders resolved from `secrets`) |
-| `secrets` | No | Key-value pairs — literal strings or `${ENV_VAR}` references |
-| `resolveSecretsInBody` | No | Resolve `${VAR}` in request bodies (default: `false`) |
-| `requestTimeoutMs` | No | Outbound timeout (ms) for calls to this API — also the ceiling a caller may request (default: `25000`, max `290000`) |
+With this connector, caller `default` reads `ADMIN_KEY` from `DEFAULT_ADMIN_KEY`.
 
-Custom connectors with an `alias` matching a built-in connection name take precedence.
+| Field | Description |
+| --- | --- |
+| `alias` | Required. Name referenced from a caller's `connections`. |
+| `allowedEndpoints` | Required. URL globs: `*` matches within a path segment, `**` across segments. An empty list matches nothing. |
+| `headers` | Headers injected into every request. `${VAR}` resolves against `secrets`. A request that sets the same header itself is rejected. |
+| `secrets` | `NAME → value`. The value is a literal, or `${VAR}` resolved per caller as in [Secrets](#secrets). |
+| `resolveSecretsInBody` | Resolve `${VAR}` in request bodies. Default `false`, which stops an agent from writing a placeholder into a resource and reading the secret back. |
+| `requestTimeoutMs` | Default outbound timeout for this API, and the most a caller may request (see [Request timeouts](#request-timeouts)). |
+| `name`, `description`, `docsUrl`, `openApiUrl` | Shown to agents by `list_routes`. |
+| `testConnection`, `ingestor`, `listenerConfig`, `testIngestor` | Credential test and event listener definitions. Built-in templates in `src/connections/` are the reference. |
 
-### Proxy Config (`proxy.config.json`)
+### Proxy config (`proxy.config.json`)
 
-Used by the local MCP proxy to connect to the remote server:
+Read by the local MCP server. `init` writes the defaults shown.
 
-```json
-{
-  "remoteUrl": "http://127.0.0.1:9999",
-  "connectTimeout": 10000,
-  "requestTimeout": 185000
-}
-```
+| Field | Default | Description |
+| --- | --- | --- |
+| `remoteUrl` | `http://localhost:9999` (`init` writes `http://127.0.0.1:9999`) | Daemon URL. |
+| `connectTimeout` | `10000` | Handshake timeout (ms). |
+| `requestTimeout` | `185000` | Local → daemon deadline (ms) for calls that don't pass `timeoutMs`. It also caps the daemon's outbound budget. |
 
-| Field | Description | Default |
-|-------|-------------|---------|
-| `remoteUrl` | URL of the remote server | `http://localhost:9999` |
-| `connectTimeout` | Handshake timeout (ms) | `10000` |
-| `requestTimeout` | Local → remote request timeout (ms), used when a call does not carry its own `timeoutMs`; also sets the remote's outbound budget | `185000` |
+Keys are read from `keys/callers/<MCP_KEY_ALIAS or "default">/` and `keys/server/`.
 
-Key paths are derived automatically — no configuration needed:
-- Caller keys: `keys/callers/{MCP_KEY_ALIAS || "default"}/`
-- Server public keys: `keys/server/`
+### Request timeouts
 
-#### Request timeouts
+A proxied call has three nested deadlines. The innermost fires first, because only the daemon's outbound fetch can actually cancel the upstream call:
 
-A proxied call passes through three nested deadlines. They are ordered so the
-**innermost fires first** — only the remote's outbound fetch can actually cancel
-the upstream API call, so it must be the one to give up. The outbound leg is
-never longer than the local leg, whether or not a call carries its own
-`timeoutMs`; at a `requestTimeout` below ~6s the two converge to equal, since
-the budget cannot be floored above the deadline it is derived from:
+| Layer | Deadline | Default |
+| --- | --- | --- |
+| daemon → upstream API | per-call `timeoutMs`, else the connection's `requestTimeoutMs`, else 25 s. Capped by the connection's `requestTimeoutMs` (or 290 s), then by the local budget. | `25000` |
+| MCP server → daemon | `timeoutMs + 5000`, else `requestTimeout` | `185000` |
+| MCP client → MCP server | your client's tool timeout (`MCP_TOOL_TIMEOUT` in Claude Code) | `60000` |
 
-| Layer | Deadline | Set by | Default |
-|-------|----------|--------|---------|
-| remote → upstream API | `timeoutMs` (per request) → connection's `requestTimeoutMs` → built-in default, then clamped to the local proxy's budget | `secure_request`, connection template | `25000` |
-| local proxy → remote | `timeoutMs` + 5000ms slack, or `requestTimeout` when no `timeoutMs` is given | `proxy.config.json` | `185000` |
-| MCP client → local proxy | `MCP_TOOL_TIMEOUT` | your MCP client | `60000` |
+- The MCP server sends the daemon an outbound budget of its own deadline minus 5 s, so the outbound leg always finishes first. Passing `timeoutMs` widens the local deadline to match.
+- `exa`, `firecrawl`, and `parallel` allow up to 120 s, and `perplexity` up to 180 s. All four exceed the MCP client's 60 s default, so raise `MCP_TOOL_TIMEOUT` to use the full ceiling. They already fit under the default `requestTimeout`. For long jobs, prefer the API's async submit-and-poll endpoints.
+- `list_routes` reports each connection's `defaultTimeoutMs` and `maxTimeoutMs` under the current budget.
+- The 290 s outbound maximum sits below undici's internal 300 s headers timeout, which would otherwise fire first with an opaque error.
+- A timed-out call is cancelled at the socket and reported as `Upstream request timed out after <n>ms`. If the local budget was the binding limit, the error names the setting to raise. A host that never accepts the connection is reported as `Upstream never accepted the connection`.
+- Zero, negative, or non-numeric `timeoutMs` values fall back to the connection default. A malformed `requestTimeoutMs` on a connection falls back to 25 s; it doesn't remove the ceiling.
 
-The two directions that keep the ordering true:
+### Webhooks and the tunnel
 
-- **Downward.** Every request carries an `outboundBudgetMs` derived from the
-  deadline the local proxy actually armed, minus its 5000ms slack. The remote
-  clamps each outbound fetch to that budget, so the outbound leg is always
-  smaller than the local leg — including for tools that expose no `timeoutMs`
-  of their own, such as `test_connection`.
-- **Upward.** A caller-supplied `timeoutMs` raises the local deadline to
-  `timeoutMs + 5000`, so asking for a longer upstream call widens the outer
-  layer to match instead of being cut short by it.
+Webhook listeners (GitHub, Stripe, Trello) receive `POST /webhooks/<path>` on the daemon's port, so the daemon must be reachable from the internet. `drawlatch start --tunnel` (or `"tunnel": true`) runs a Cloudflare quick tunnel; [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) must be installed. The tunnel URL appears in `drawlatch status`, and the daemon sets any unset callback-URL variable a webhook template references (for example, `TRELLO_CALLBACK_URL`) before starting listeners. Details: [INGESTORS.md](INGESTORS.md#webhooks).
 
-Practical notes:
+## Admin dashboard
 
-- `timeoutMs` on `secure_request` sets the outbound deadline for a single call.
-  It is clamped to the matched connection's `requestTimeoutMs` when that
-  connection sets one, to `290000` otherwise, and then to the local proxy's
-  budget. Zero, negative, and non-finite values fall back to the connection
-  default. A *present but malformed* `requestTimeoutMs` on a connection (a
-  string, `null`, `0`) falls back to the `25000` default rather than removing
-  the ceiling.
-- `requestTimeout` in `proxy.config.json` is a **liveness** bound ("is the
-  remote wedged"), not a work budget. A hung upstream still fails at its own
-  much smaller deadline; only a totally unresponsive remote takes the long
-  path, and the MCP client's cap bounds that anyway. It ships at `185000` so
-  that the slowest bundled connection ceiling is reachable. Raising it does not
-  slow ordinary calls: a connection with no `requestTimeoutMs` still gets
-  `25000`.
-- The global outbound maximum is `290000`, deliberately below undici's 300s
-  internal headers timeout. Passing an `AbortSignal` does not disable that
-  timeout, it races it — so a larger value would be unreachable and would
-  surface as an opaque `UND_ERR_HEADERS_TIMEOUT` instead of a drawlatch error.
-- **Reachability: above ~55s still requires client configuration.** The MCP
-  client's 60s cap is the one layer drawlatch cannot set for you. Any connection
-  whose ceiling exceeds it — `exa`, `firecrawl`, and `parallel` at `120000`,
-  `perplexity` at `180000` — needs `MCP_TOOL_TIMEOUT` raised in your MCP client
-  before you can use the full ceiling. Every shipped ceiling does fit under the
-  default budget, so `requestTimeout` needs no adjustment. Nothing here is
-  silent — `list_routes` reports each
-  connection's `defaultTimeoutMs` and `maxTimeoutMs` under the budget currently
-  in force, and a clamped timeout error names the value to raise. Prefer the
-  API's async job pattern where one exists.
-- A call that exceeds its outbound deadline is cancelled at the socket and
-  reported as `Upstream request timed out after <n>ms` — including when the
-  deadline fires while reading a slow response body. If the local proxy's
-  budget was the binding constraint, the error says so and names the value to
-  raise. A host that never accepts the connection is reported separately, as
-  `Upstream never accepted the connection`, because raising `timeoutMs` will
-  not help there.
+The daemon serves a web dashboard and its JSON API from the same port as the MCP protocol: `http://127.0.0.1:9999/` by default. From it you can create, issue, and delete callers; enable connections; set secrets; configure, test, and control listeners; and watch events, ingestors, sessions, and a secrets matrix. Changes are live-reloaded into running sessions and listeners.
 
-### Advanced Configuration
+**Password.** The dashboard stays locked until a password is set. `drawlatch set-password` (alias `change-password`) prompts on a TTY or reads the password twice from stdin (`printf 'pw\npw\n' | drawlatch set-password`). It stores a scrypt hash and salt in `.env` as `AUTH_PASSWORD_HASH` / `AUTH_PASSWORD_SALT`. Restart the daemon after setting it from the CLI. Changing it from the dashboard (**Settings → Password**) applies immediately and signs out every other session.
 
-#### `MCP_CONFIG_DIR` — the config-dir contract
+**Security.**
 
-By default, all config and key files live in `~/.drawlatch/`. Override with:
+- The password, not loopback, is the trust boundary. That's why the daemon can bind `0.0.0.0`.
+- The session cookie (`drawlatch_session`) is `httpOnly` and `sameSite=strict`, with a 7-day rolling expiry. It has no `secure` flag, so use a TLS-terminating proxy beyond a trusted network.
+- Per-IP rate limits:
+  - login and password change: 3/min combined
+  - auth check and logout: 20/min
+  - `/handshake`: 30/min
+  - `/webhooks`: 120/min
+  - `/health`: 60/min
+  - `/api/admin`: 300/min
+- Without a password, the MCP protocol still works. Login, auth checks, and `/api/admin/*` return `503`.
 
-```bash
-export MCP_CONFIG_DIR=/custom/path/to/config
-```
+**API.** The dashboard is a client of `/api/admin/*`. Read endpoints report secrets as booleans only. Write endpoints:
 
-Useful for CI environments or running multiple independent setups on the same machine. drawlatch **owns this layout as a stable contract** (and migrates legacy key layouts into it automatically on startup):
+- create, issue, and delete callers: `POST /callers`, `POST /callers/:alias/issue`, `DELETE /callers/:alias`
+- enable a connection, set secrets, run tests, and control or configure listeners under `/callers/:alias/connections/:connection/…`
+- toggle the tunnel flag: `PUT /tunnel` (takes effect on restart)
+
+Connection and listener operations share their implementation with the MCP tools (`src/remote/tool-dispatch.ts`). The unauthenticated `GET /health` returns status, active session count, uptime, and the tunnel URL.
+
+## CLI reference
 
 ```
-$MCP_CONFIG_DIR/                 (default: ~/.drawlatch)
-  remote.config.json    — RemoteServerConfig (callers, connectors, port, tunnel flag)
-  proxy.config.json     — ProxyConfig (local MCP proxy → remote URL)
-  .env                  — secret values, prefixed per caller (mode 0600)
-  keys/
-    server/             — the daemon's own Ed25519 + X25519 keypair
-    callers/<alias>/    — one keypair per caller alias
+drawlatch [command] [options]          (no command: status if running, else help)
+
+init                     Create server keys, proxy/remote configs and .env (idempotent)
+start                    Start the daemon in the background
+    -f, --foreground       Run in the foreground (for process managers)
+    -t, --tunnel           Also start a Cloudflare quick tunnel (requires cloudflared)
+    --port <n>, --host <addr>
+stop | restart           Stop (SIGTERM, then SIGKILL after 5s) / restart; restart keeps an active tunnel
+status                   PID, address, dashboard URL, password state, uptime, health, sessions
+logs                     Show the log (~/.drawlatch/logs/drawlatch.log)
+    -n, --lines <n>        Lines to show (default 50)
+    --follow               Keep tailing
+    --requests             Include per-request [audit] lines (hidden by default)
+watch [connection]       Stream listener events live (loopback only)
+    --full                 Print full payloads instead of a 100-character preview
+config                   Show effective config and per-caller secret status (--path: config file path)
+doctor                   Check config, keys, required secrets and daemon health
+generate-keys caller [alias]   Caller keypair in keys/callers/<alias>/ (default alias "default")
+generate-keys server           Server keypair in keys/server/
+generate-keys --dir <path>     Keypair in a custom directory
+generate-keys show <path>      Fingerprint of an existing keypair
+issue-caller <alias>     Issue a caller credential bundle (for Callboard)
+    --name <name>          Display name (default: the alias)
+    --connections <a,b>    Connections (default: keep existing, else copy "default")
+    --endpoint <url>       Daemon URL pinned in the bundle (default: this daemon's host:port)
+    --passphrase           Encrypt the bundle's private keys (scrypt + AES-256-GCM)
+    -o, --output <file>    Write to a 0600 file instead of stdout
+    --into <keysDir>       Same host: write key files into a Callboard keys directory
+set-password             Set the dashboard password (alias: change-password)
+-h, --help / -v, --version
 ```
 
-Legacy `keys/local`, `keys/remote`, and `keys/peers/*` directories are migrated to `keys/callers` / `keys/server` on first start — idempotent and safe to re-run.
+## Security model
 
-#### Self-managed tunnel
+- **Endpoint allowlisting:** requests go only to URLs matching the caller's connections.
+- **Per-caller isolation:** each caller sees only its connections, and secrets resolve only from its own `env` or `<ALIAS>_`-prefixed variables.
+- **No secrets on the client:** the MCP server never holds API credentials. Secret placeholders resolve server-side, in request bodies only when a connection opts in.
+- **Mutual authentication:** Ed25519-signed handshake against a pinned server key and registered caller keys.
+- **Encryption:** AES-256-GCM with per-session X25519 ECDH keys, and monotonic counters against replay.
+- **Sessions** expire after 30 minutes idle.
+- **Rate limits** apply per session (`rateLimitPerMinute`) and per IP on unauthenticated endpoints.
+- **Audit log:** every request and response is logged with caller and session (`drawlatch logs --requests`).
 
-Set `"tunnel": true` in `remote.config.json` (or `DRAWLATCH_TUNNEL=1` / `drawlatch start --tunnel`) and drawlatch brings up and supervises its own Cloudflare quick tunnel on startup: it learns the public URL, injects it into callback-dependent connection configs (e.g. `TRELLO_CALLBACK_URL`) **before** secret resolution and ingestor start, and surfaces it in `drawlatch status`, the Overview page, and `/api/admin/meta`. It is a config flag, not a runtime control surface.
+## Package exports
 
-#### Daemon lifecycle
+Drawlatch is mainly a CLI and daemon. Hosts such as Callboard can import these subpaths; any other deep import fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`.
 
-`drawlatch start` runs the **whole** daemon in one process (MCP protocol + admin API + dashboard UI + optional tunnel). It is daemon-first and cleanly supervisable: a PID file, a deterministic `start` / `stop` / `restart` / `status`, an unauthenticated `/health` endpoint, and `drawlatch start --foreground` for running under a process manager. Local and remote deployments differ only by host binding (`DRAWLATCH_HOST`) and the dashboard password.
-
-## Connections
-
-23 pre-built connection templates ship with drawlatch. Reference them by name in a caller's `connections` list:
-
-| Connection | API | Required Env Var(s) |
-|------------|-----|---------------------|
-| `anthropic` | Anthropic Claude API | `ANTHROPIC_API_KEY` |
-| `bluesky` | Bluesky (AT Protocol) | `BLUESKY_ACCESS_TOKEN` |
-| `devin` | Devin AI API | `DEVIN_API_KEY` |
-| `discord-bot` | Discord Bot API | `DISCORD_BOT_TOKEN` |
-| `discord-oauth` | Discord OAuth2 API | `DISCORD_OAUTH_TOKEN` |
-| `github` | GitHub REST API | `GITHUB_TOKEN` |
-| `google` | Google Workspace APIs | `GOOGLE_API_TOKEN` |
-| `google-ai` | Google AI (Gemini) | `GOOGLE_AI_API_KEY` |
-| `hex` | Hex API | `HEX_TOKEN` |
-| `lichess` | Lichess API | `LICHESS_API_TOKEN` |
-| `linear` | Linear GraphQL API | `LINEAR_API_KEY` |
-| `mastodon` | Mastodon API | `MASTODON_ACCESS_TOKEN` |
-| `notion` | Notion API | `NOTION_API_KEY` |
-| `openai` | OpenAI API | `OPENAI_API_KEY` |
-| `openrouter` | OpenRouter API | `OPENROUTER_API_KEY` |
-| `reddit` | Reddit API | `REDDIT_ACCESS_TOKEN` |
-| `slack` | Slack Web API | `SLACK_BOT_TOKEN` |
-| `stripe` | Stripe Payments API | `STRIPE_SECRET_KEY` |
-| `telegram` | Telegram Bot API | `TELEGRAM_BOT_TOKEN` |
-| `trello` | Trello API | `TRELLO_API_KEY`, `TRELLO_TOKEN` |
-| `twitch` | Twitch Helix API | `TWITCH_ACCESS_TOKEN`, `TWITCH_CLIENT_ID` |
-| `x` | X (Twitter) API v2 | `X_BEARER_TOKEN` |
-
-See **[CONNECTIONS.md](CONNECTIONS.md)** for auth details, optional env vars, and usage notes per connection.
-
-## Event Ingestion
-
-Drawlatch can collect real-time events from external services and buffer them for agents to poll. Three ingestor types are supported:
-
-| Type | How It Works | Connections |
-|------|-------------|-------------|
-| **WebSocket** | Persistent connections to event gateways | Discord Gateway, Slack Socket Mode |
-| **Webhook** | HTTP receivers with signature verification | GitHub, Stripe, Trello |
-| **Poll** | Interval-based HTTP requests | Notion, Linear, Reddit, X, Bluesky, Mastodon, Telegram, Twitch |
-
-Events are stored in per-caller ring buffers (default 200, max 1000) with monotonic IDs for cursor-based pagination. Agents retrieve events via `poll_events` and check status via `ingestor_status`.
-
-Long-running watchers (e.g. callboard) can instead call the remote-only `wait_for_events` tool over the encrypted channel: it takes one cursor per stream (`{ "cursors": { "<connection>:<instanceId>": <id> }, "timeout_ms": 25000 }`, with `_default` as the instance of single-instance connections), returns at once if any stream has newer events, and otherwise holds until one does or the timeout (default 25s, max 55s) passes. The reply lists every active stream for the caller with its new events and cursor, plus `unknownStreams` and `timedOut`. A held wait counts as one request against the rate limit; at most 2 waits may hold per session, 8 per caller, and 64 per server. On shutdown the server answers held waits with `timedOut: true` before closing; new waits during shutdown fail with `server shutting down`, so clients back off. It is not exposed through the local MCP server.
-
-For webhook ingestors, the remote server must be publicly accessible (or behind a tunnel). Use `drawlatch start --tunnel` to automatically start a Cloudflare tunnel.
-
-See **[INGESTORS.md](INGESTORS.md)** for full configuration reference.
-
-## Key Exchange
-
-The encrypted channel requires mutual authentication via Ed25519/X25519 keypairs. Each identity gets four PEM files (signing + exchange, public + private). The `drawlatch init` command handles this automatically for single-machine setups.
-
-**Directory structure:**
-
-```
-~/.drawlatch/keys/
-├── callers/
-│   ├── default/           # Default caller keypair
-│   └── alice/             # Additional caller keypair
-└── server/                # Server keypair
-```
-
-Both sides (caller and server) store their keys in the same directory tree. On a single machine, `drawlatch init` generates both and they can authenticate immediately. On separate machines, copy the `*.pub.pem` files to the corresponding directory on the other machine.
-
-**Using [Callboard](https://github.com/WolpertingerLabs/callboard)?** Issue a caller credential bundle with `drawlatch issue-caller <alias> -o <alias>.drawlatch-caller.json` (or **Issue credentials** on the dashboard's Callers page) and import it in callboard — no manual file copying needed. On the same host, `drawlatch issue-caller <alias> --into <callboard keys dir>` writes the key files directly.
-
-### Multiple Agent Identities
-
-Generate a keypair per agent and set `MCP_KEY_ALIAS` at spawn time:
-
-```bash
-drawlatch generate-keys caller alice
-drawlatch generate-keys caller bob
-```
-
-```json
-{
-  "mcpServers": {
-    "drawlatch": {
-      "command": "node",
-      "args": ["dist/mcp/server.js"],
-      "env": { "MCP_CONFIG_DIR": "~/.drawlatch", "MCP_KEY_ALIAS": "alice" }
-    }
-  }
-}
-```
-
-Register each agent as a separate caller in `remote.config.json`.
-
-## CLI Reference
-
-```
-drawlatch [command] [options]
-
-Commands:
-  init               Set up drawlatch (keys, config, .env) in one step
-  start              Start the remote server (background daemon)
-  stop               Stop the remote server
-  restart            Restart the remote server
-  status             Show server status (PID, port, uptime, health, sessions, dashboard URL)
-  logs               View server logs
-  config             Show effective configuration and secret status
-  doctor             Validate setup and diagnose issues
-  set-password       Set/change the dashboard password (alias: change-password)
-  generate-keys      Generate Ed25519 + X25519 keypairs
-  issue-caller       Issue a caller credential bundle (for a callboard instance)
-
-Options:
-  -h, --help         Show help
-  -v, --version      Show version
-
-Init options:
-  --connections <list>  Comma-separated connections to enable (e.g., github,slack)
-  --alias <name>        Caller alias (default: "default")
-
-Start options:
-  -f, --foreground   Run in foreground
-  -t, --tunnel       Start a Cloudflare tunnel for webhooks
-  --port <number>    Override configured port
-  --host <address>   Override configured host
-
-Logs options:
-  -n, --lines <num>  Number of lines (default: 50)
-  --follow           Tail the log output
-
-Generate-keys subcommands:
-  caller [alias]     Generate caller keypair (default alias: "default")
-  server             Generate server keypair
-  show <path>        Show fingerprint of existing keypair
-  --dir <path>       Generate to custom directory
-
-Issue-caller options (drawlatch issue-caller <alias>):
-  --name <name>          Display name (defaults to the alias)
-  --connections <list>   Connections to authorize (defaults to cloning "default")
-  --endpoint <url>       Endpoint URL to pin in the bundle
-  --passphrase           Encrypt the private keys in the bundle with a passphrase
-  -o, --output <file>    Write the bundle to a file instead of stdout
-  --into <keysDir>       Same host: write the key files into a callboard keys dir
-```
-
-## Package Exports
-
-drawlatch is primarily a CLI and daemon, but it also exposes a small set of
-subpath exports for hosts (such as Callboard) that talk to a drawlatch daemon.
-Only these specifiers resolve; any other deep import throws
-`ERR_PACKAGE_PATH_NOT_EXPORTED`.
-
-| Export Path | Description |
-|-------------|-------------|
-| `@wolpertingerlabs/drawlatch` | MCP stdio proxy entry point (`dist/mcp/server.js`). Importing it starts the stdio server. |
-| `@wolpertingerlabs/drawlatch/shared/crypto` | Key generation and loading, fingerprints, `EncryptedChannel` |
-| `@wolpertingerlabs/drawlatch/shared/protocol` | Handshake (`HandshakeInitiator` / `HandshakeResponder`) and wire message types |
-| `@wolpertingerlabs/drawlatch/shared/migrations` | Idempotent config-dir migrations (`migrateKeyLayout`, `migrateConfigDir`) |
-| `@wolpertingerlabs/drawlatch/remote/server` | Remote daemon entry point. Resolve its path (e.g. `import.meta.resolve`) and spawn it with `node`; it is not a library API |
-| `@wolpertingerlabs/drawlatch/remote/caller-bootstrap` | Caller alias validation (`CALLER_ALIAS_REGEX`) and caller provisioning/issuance helpers |
-| `@wolpertingerlabs/drawlatch/remote/admin-types` | Types shared with the admin API, including the caller bundle format (`CallerBundleV1`) |
-
-## Security Model
-
-- **Endpoint allowlisting** — requests only proxied to explicitly configured URL patterns
-- **Per-caller access control** — each caller only sees their assigned connections
-- **Per-caller credential isolation** — same connector, different credentials via `env` overrides
-- **Rate limiting** — configurable per-session (default: 240/min), with `Retry-After` on 429
-- **Audit logging** — all operations logged with caller identity, session ID, timestamps
-- **Zero secrets on the client** — the MCP proxy never sees API keys or tokens
-- **Mutual authentication** — Ed25519 signatures before any data exchange
-- **End-to-end encryption** — AES-256-GCM with X25519 ECDH session keys
-- **Replay protection** — monotonic counters on all encrypted messages
-- **Session isolation** — unique session keys per handshake, 30-minute TTL
-- **File permissions** — private keys `0600`, key directories `0700`
+| Export | Contents |
+| --- | --- |
+| `@wolpertingerlabs/drawlatch` | The MCP stdio server (`dist/mcp/server.js`). Importing it starts the server. |
+| `…/shared/crypto` | Key generation, loading and fingerprints, `EncryptedChannel` |
+| `…/shared/protocol` | `HandshakeInitiator` / `HandshakeResponder` and wire message types |
+| `…/shared/migrations` | Idempotent config-dir migrations (`migrateKeyLayout`, `migrateConfigDir`) |
+| `…/remote/server` | Daemon entry point. Resolve its path and run it with `node`; it isn't a library API. |
+| `…/remote/caller-bootstrap` | `CALLER_ALIAS_REGEX` and caller creation and issuance helpers |
+| `…/remote/admin-types` | Admin API types, including the caller bundle format (`CallerBundleV1`) |
 
 ## Development
 
 ```bash
-npm test                  # Run tests
-npm run test:watch        # Watch mode
-npm run test:coverage     # Coverage report
-npm run lint              # Lint
-npm run format            # Format
-
-npm run dev:remote        # Remote server with hot reload
-npm run dev:mcp           # MCP proxy with hot reload
+npm install               # also builds (prepare script)
+npm run build             # tsc + copy connection templates + build the dashboard
+npm test                  # unit tests (vitest); npm run test:e2e for live-API tests (.env.e2e)
+npm run lint              # eslint src/
+npm run format            # prettier
+npm run dev:remote        # daemon via tsx, config in ~/.drawlatch-dev
+npm run dev:mcp           # MCP server via tsx, config in ~/.drawlatch-dev
 ```
 
-### Source Structure
-
 ```
-src/
-├── cli/                     # Key generation CLI
-├── connections/             # 23 pre-built route templates (JSON)
-├── auth/                    # Dashboard auth (scrypt password, session cookies)
-├── mcp/server.ts            # Local MCP proxy (stdio transport)
-├── remote/
-│   ├── server.ts            # Remote secure server (Express) — also serves the dashboard
-│   ├── admin.ts             # Read-only /api/admin/* API
-│   └── ingestors/           # Event ingestion system
-│       ├── discord/         # Discord Gateway WebSocket
-│       ├── slack/           # Slack Socket Mode WebSocket
-│       ├── webhook/         # GitHub, Stripe, Trello webhooks
-│       └── poll/            # Interval-based HTTP polling
-└── shared/
-    ├── config.ts            # Config loading, route resolution
-    ├── connections.ts       # Connection template loading
-    ├── env-utils.ts         # Environment variable utilities
-    ├── crypto/              # Ed25519/X25519 keys, AES-256-GCM channel
-    └── protocol/            # Handshake, message types
-
-frontend/                    # React + Vite dashboard SPA (built to frontend/dist)
-└── src/pages/               # Overview, Connections, Callers, Ingestors, Sessions, Secrets
+bin/drawlatch.js          CLI
+src/mcp/server.ts         local MCP stdio server
+src/remote/server.ts      daemon: handshake, /request, webhooks, dashboard, admin API
+src/remote/tool-dispatch.ts   tool implementations shared by MCP and the admin API
+src/remote/ingestors/     WebSocket, webhook and poll listeners
+src/connections/<category>/<name>.json   built-in connection templates
+src/shared/               config, secrets, crypto, handshake protocol
+src/auth/                 dashboard password and sessions
+frontend/                 React + Vite dashboard (built to frontend/dist)
 ```
 
 ## License
