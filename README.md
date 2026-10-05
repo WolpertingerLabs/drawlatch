@@ -31,7 +31,7 @@ drawlatch set-password    # dashboard password (at least 8 characters)
 drawlatch start           # start the daemon in the background
 ```
 
-`init` is idempotent and never overwrites existing files. It writes `"host": "0.0.0.0"`, so the daemon listens on every interface (the dashboard is password-protected; set `"host": "127.0.0.1"` in `~/.drawlatch/remote.config.json` for loopback only). It does not create a caller. Create one next.
+`init` is idempotent and never overwrites existing files. Annotated examples: [`remote.config.example.json`](remote.config.example.json), [`proxy.config.example.json`](proxy.config.example.json), and [`.env.example`](.env.example) (append only the lines you need to `~/.drawlatch/.env`; don't overwrite it, it also holds the dashboard password hash). It writes `"host": "0.0.0.0"`, so the daemon listens on every interface (the dashboard is password-protected; set `"host": "127.0.0.1"` in `~/.drawlatch/remote.config.json` for loopback only). It does not create a caller. Create one next.
 
 **Create a caller.** The local MCP server authenticates as the caller named by `MCP_KEY_ALIAS` (default: `default`), using the keypair in `~/.drawlatch/keys/callers/<alias>/`. Either:
 
@@ -83,7 +83,7 @@ The local MCP server exposes these tools. Every call goes through the encrypted 
 
 | Tool | Purpose |
 | --- | --- |
-| `secure_request` | HTTP request to an allowlisted URL. Connection headers are injected for you. `${VAR}` placeholders in the URL and headers resolve server-side from the matched connection's secrets (in the body only if the connection sets `resolveSecretsInBody`). Supports multipart uploads from local files (25 MB per file, 50 MB per base64-encoded request) and a per-call `timeoutMs`. |
+| `secure_request` | HTTP request to an allowlisted URL. Connection headers are injected for you. `${VAR}` placeholders in the URL and headers resolve server-side from the matched connection's secrets (in the body only if the connection sets `resolveSecretsInBody`). Supports multipart uploads from local files (25 MB per file, 50 MB per base64-encoded request): with `files`, the JSON `body` is sent as a form part named `payload_json` (change it with `bodyFieldName`). Also takes a per-call `timeoutMs`. |
 | `list_routes` | The caller's connections: docs links, allowed endpoint patterns, the *names* of secrets that are set, auto-injected header names, timeouts, listener info. |
 | `test_connection` | Run a connection's built-in credential check. Some cost a little credit; see [CONNECTIONS.md](CONNECTIONS.md#available-connections). |
 | `list_connection_templates` | All built-in templates, with which are enabled for this caller and which secrets are set (booleans). Custom connectors aren't listed. |
@@ -133,6 +133,8 @@ Each key directory holds `signing.{pub,key}.pem` and `exchange.{pub,key}.pem`. P
 | `connectors` | `[]` | Custom connector definitions (see below). |
 | `tunnel` | `false` | Start a Cloudflare quick tunnel at boot. Env override: `DRAWLATCH_TUNNEL=1`, or `--tunnel`. |
 
+`LOG_LEVEL` in `.env` or the environment sets daemon log verbosity: `error`, `warn`, `info` (default), or `debug`.
+
 The daemon re-reads `remote.config.json` for each new session and after dashboard changes. Hand edits that add callers or change listeners need `drawlatch restart`.
 
 ### Callers
@@ -152,6 +154,7 @@ The daemon re-reads `remote.config.json` for each new session and after dashboar
 | `name` | Display name for logs and the dashboard. |
 | `env` | Per-caller secret values (see [Secrets](#secrets)). |
 | `ingestorOverrides`, `listenerInstances` | Listener settings ([INGESTORS.md](INGESTORS.md#per-caller-listener-settings)). |
+| `triggerRules` | Forward matching events to Claude Code remote triggers ([INGESTORS.md](INGESTORS.md#trigger-rules-experimental)). |
 
 Caller public keys are read from `keys/callers/<alias>/`. Aliases must match `^[a-zA-Z0-9][a-zA-Z0-9_-]*$`.
 
@@ -164,9 +167,9 @@ Connections reference secrets as `${NAME}` (for example, `${GITHUB_TOKEN}`). For
 
 A bare `GITHUB_TOKEN` is never used. This keeps one caller from picking up another's credentials. The daemon loads `.env` at startup, so restart after editing it by hand. The dashboard and `set_secrets` write `<ALIAS>_<NAME>` to `.env` and apply the change immediately.
 
-If a secret isn't set, its placeholder is sent literally (for example, `Authorization: Bearer ${GITHUB_TOKEN}`), and the upstream API will usually answer `401`. `drawlatch doctor`, `drawlatch config`, and the dashboard's Secrets page show what's missing. They check only secrets used in a connection's headers, so they don't flag a token that goes in the URL (Telegram, Trello).
+If a secret isn't set, its placeholder is sent literally (for example, `Authorization: Bearer ${GITHUB_TOKEN}`), and the upstream API will usually answer `401`. `drawlatch doctor`, `drawlatch config`, and the dashboard's Secrets page show what's missing. They check only built-in templates, and only secrets used in a template's headers: custom connectors are skipped, and a token that goes in the URL (Telegram, Trello) isn't flagged. `doctor` also prints the unprefixed name ("Set GITHUB_TOKEN in …/.env"); whatever it says, set `<ALIAS>_<NAME>` (`DEFAULT_GITHUB_TOKEN` for the default caller).
 
-> **Known issue:** an `env` value that redirects to another variable, such as `"GITHUB_TOKEN": "${ALICE_TOKEN}"`, is not resolved, and the secret is reported as set when it isn't. Use a literal value or the prefixed variable name instead.
+> **Known issue:** an `env` value that redirects to another variable, such as `"GITHUB_TOKEN": "${ALICE_TOKEN}"`, is ignored; the prefixed variable (`<ALIAS>_GITHUB_TOKEN`) is used if set. Status checks still report the redirected secret as set. Use a literal value or the prefixed variable instead.
 
 ### Custom connectors
 
@@ -251,11 +254,26 @@ The daemon serves a web dashboard and its JSON API from the same port as the MCP
   - `/api/admin`: 300/min, with credential issuance limited to 10/min
 - Without a password, the MCP protocol still works. Login, auth checks, and `/api/admin/*` return `503`.
 
-**API.** The dashboard is a client of `/api/admin/*`. Read endpoints report secrets as booleans only. Write endpoints:
+**API.** The dashboard is a client of `/api/admin/*` (paths below are relative to it). Read endpoints report secrets as booleans only:
 
-- create, issue, and delete callers: `POST /callers`, `POST /callers/:alias/issue`, `DELETE /callers/:alias`
-- enable a connection, set secrets, run tests, and control or configure listeners under `/callers/:alias/connections/:connection/…`
-- toggle the tunnel flag: `PUT /tunnel` (takes effect on restart)
+- `GET /meta`, `/health`, `/connections`, `/callers`, `/ingestors`, `/sessions`, `/secrets`
+- `GET /callers/:alias/connections`, `/callers/:alias/connection-status`, `/callers/:alias/ingestors`, `/callers/:alias/events`, `/callers/:alias/listener-configs`
+
+Write endpoints (`…` = `/callers/:alias/connections/:connection`):
+
+| Method and path | Action |
+| --- | --- |
+| `POST /callers` `{alias, name?, connections?}` | Create a caller with a keypair on drawlatch's disk |
+| `POST /callers/:alias/issue` `{connections?, endpointUrl?, passphrase?, name?}` | Issue or rotate a credential bundle (10/min) |
+| `DELETE /callers/:alias` | Delete a caller, its keys and prefixed secrets (`default` is protected) |
+| `PUT /tunnel` `{enabled}` | Persist the tunnel flag (applies on restart) |
+| `POST …` `{enabled}` | Enable or disable a connection |
+| `PUT …/secrets` `{secrets}` | Set secrets; empty string deletes |
+| `POST …/test`, `POST …/test-ingestor` | Run the connection or listener test |
+| `POST …/listener/control` `{action, instance_id?}` | Start, stop or restart a listener |
+| `GET`/`PUT …/listener/params` | Read or set listener params |
+| `GET`/`POST …/listener/instances`, `DELETE …/listener/instances/:instanceId` | Manage listener instances |
+| `POST …/listener/resolve-options` `{paramKey}` | Fetch dynamic field options |
 
 Connection and listener operations share their implementation with the MCP tools (`src/remote/tool-dispatch.ts`). The unauthenticated `GET /health` returns status, active session count, uptime, and the tunnel URL.
 

@@ -23,7 +23,7 @@ Listeners run per caller. Each caller gets its own instance for every enabled co
 | `x` | Poll, 60 s | `tweet` | `X_BEARER_TOKEN`, `X_SEARCH_QUERY` (inserted into the URL as-is, not URL-encoded) |
 | `bluesky` | Poll, 60 s | `notification` | `BLUESKY_ACCESS_TOKEN` |
 | `mastodon` | Poll, 60 s | `status` | `MASTODON_ACCESS_TOKEN` (polls `mastodon.social` only) |
-| `telegram` | Poll, 30 s | `update` | `TELEGRAM_BOT_TOKEN` (`getUpdates`; doesn't work if the bot has a webhook set) |
+| `telegram` | Poll, 30 s | `update` | `TELEGRAM_BOT_TOKEN` (`getUpdates`; doesn't work if the bot has a webhook set). **Known issue:** no `offset` is sent, so updates are never confirmed. Once 25 are pending, every poll returns the same 25 and the listener stops emitting new ones. |
 | `twitch` | Poll, 60 s | `stream_online` | `TWITCH_ACCESS_TOKEN`, `TWITCH_CLIENT_ID`, `TWITCH_USER_ID`, and a *user* access token |
 
 Secrets resolve per caller like any other secret (`<ALIAS>_<NAME>`; see [README → Secrets](README.md#secrets)). A listener with missing secrets still starts and then fails:
@@ -83,7 +83,7 @@ Listeners start when the daemon starts, for every caller connection that has an 
 | `get_listener_params` / `set_listener_params` | Read or merge `params`. Unknown keys are rejected. With `instance_id` it writes `listenerInstances` (pass `create_instance: true` to add one); without, it writes `ingestorOverrides`. A running listener is restarted to apply the change. A newly created instance is not started; use `control_listener`. |
 | `list_listener_instances` / `delete_listener_instance` | List instances, or stop one, remove it from config, and unregister its webhook. |
 | `resolve_listener_options` | Live choices for fields with dynamic options: Discord `guildIds` and Trello `boardId`. |
-| `test_ingestor` | Webhooks: checks that the signing secret is set. Others: makes a test request to the service. (Slack's test currently always fails with a header conflict.) |
+| `test_ingestor` | GitHub and Stripe: checks that the signing secret is set. The others, Trello included, make a test request to the service. (Slack's test currently always fails with a header conflict.) |
 
 ## Per-caller listener settings
 
@@ -139,6 +139,19 @@ The template requests intents `3276799`, which is every intent including the pri
 - `3243773`: every non-privileged intent.
 - `4609`: `GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES`, the default when `intents` is unset.
 
+| Intent | Bit | Intent | Bit |
+| --- | --- | --- | --- |
+| `GUILDS` | 1 | `GUILD_MESSAGE_REACTIONS` | 1024 |
+| `GUILD_MEMBERS` (privileged) | 2 | `GUILD_MESSAGE_TYPING` | 2048 |
+| `GUILD_MODERATION` | 4 | `DIRECT_MESSAGES` | 4096 |
+| `GUILD_EXPRESSIONS` | 8 | `DIRECT_MESSAGE_REACTIONS` | 8192 |
+| `GUILD_INTEGRATIONS` | 16 | `DIRECT_MESSAGE_TYPING` | 16384 |
+| `GUILD_WEBHOOKS` | 32 | `MESSAGE_CONTENT` (privileged) | 32768 |
+| `GUILD_INVITES` | 64 | `GUILD_SCHEDULED_EVENTS` | 65536 |
+| `GUILD_VOICE_STATES` | 128 | `AUTO_MODERATION_CONFIGURATION` | 1048576 |
+| `GUILD_PRESENCES` (privileged) | 256 | `AUTO_MODERATION_EXECUTION` | 2097152 |
+| `GUILD_MESSAGES` | 512 | | |
+
 The listener heartbeats and resumes sessions after disconnects. It reconnects with exponential backoff (capped at 30 s, up to 10 attempts). Close codes 4004 and 4010–4014 are fatal.
 
 Common `eventFilter` values: `MESSAGE_CREATE`, `MESSAGE_UPDATE`, `MESSAGE_DELETE`, `MESSAGE_REACTION_ADD`, `MESSAGE_REACTION_REMOVE`, `GUILD_MEMBER_ADD` (needs `GUILD_MEMBERS`), `PRESENCE_UPDATE` (needs `GUILD_PRESENCES`), `TYPING_START`, `INTERACTION_CREATE`.
@@ -146,6 +159,8 @@ Common `eventFilter` values: `MESSAGE_CREATE`, `MESSAGE_UPDATE`, `MESSAGE_DELETE
 ## Slack
 
 The listener calls `apps.connections.open` with `SLACK_APP_TOKEN`, connects to the returned socket, and acknowledges each envelope. Subscribe to the events you want under Event Subscriptions in the Slack app. It reconnects on `disconnect` messages with the same backoff as Discord.
+
+To reply to a slash command or interaction, call `chat.postMessage` (or another Web API method) through `secure_request`. The payload's `response_url` is on `hooks.slack.com`, outside the `slack` allowlist, so the proxy rejects it.
 
 ## Webhooks
 
@@ -155,7 +170,7 @@ The daemon accepts `POST /webhooks/<path>` (`github`, `stripe`, `trello`), with 
 - `403` if all rejected it
 - `404` if no listener uses the path
 
-`HEAD` returns `200` or `404` the same way, which Trello uses to check the callback URL.
+`HEAD` returns `200` or `404` the same way, which Trello uses to check the callback URL. Deliveries must use content type `application/json`; select it when you create a webhook by hand (GitHub defaults to form-encoded).
 
 The daemon must be reachable from the service. Use `drawlatch start --tunnel` (needs `cloudflared`) or your own reverse proxy. With the tunnel, the daemon sets an unset callback variable such as `TRELLO_CALLBACK_URL` to `<tunnel>/webhooks/<path>` for every caller, unless a caller's `env` sets it. Quick-tunnel URLs change on every start.
 
@@ -167,7 +182,7 @@ The daemon must be reachable from the service. Use `drawlatch start --tunnel` (n
 
 **Auto-registration.** GitHub and Trello listeners register their webhook with the service when they start, reusing an existing one with the same callback URL, and unregister it when deleted or on daemon shutdown. Stopping or restarting a listener leaves the webhook in place.
 
-- **GitHub** needs `GITHUB_TOKEN` (with permission to manage hooks), `GITHUB_WEBHOOK_URL`, and a `repoFilter` (repo hook) or `orgFilter` (org hook) param. Without a filter, register the webhook yourself and point it at `https://<host>/webhooks/github` with your `GITHUB_WEBHOOK_SECRET`.
+- **GitHub** needs `GITHUB_TOKEN` (with permission to manage hooks), `GITHUB_WEBHOOK_URL`, and a `repoFilter` (repo hook) or `orgFilter` (org hook) param. The registered hook subscribes to `push`, `pull_request`, `issues`, `issue_comment`, `create`, `delete`, `release`, `workflow_run`, and `check_run`. The listener's event filter also offers `star`, `fork`, and `deployment`, but those never arrive through an auto-registered hook. Without a filter, register the webhook yourself: point it at `https://<host>/webhooks/github`, use your `GITHUB_WEBHOOK_SECRET`, and choose content type `application/json`.
 - **Trello** needs a `boardId` param and `TRELLO_CALLBACK_URL` set to `https://<host>/webhooks/trello`. Trello signs with the API secret from the [Power-Up admin page](https://trello.com/power-ups/admin).
 - **Stripe** is manual: add `https://<host>/webhooks/stripe` under Dashboard → Developers → Webhooks.
 
@@ -203,7 +218,7 @@ These fields go in a connection template's `ingestor` block, or in a custom conn
 | | `responsePath` | Dot path to the item array. Omit if the response is an array. |
 | | `deduplicateBy` | Item field (dot path) for dedup. Omit to emit every item each cycle. |
 | | `eventType` | Default `poll`. |
-| | `headers` | Extra headers. These override the connection's headers with the same name. |
+| | `headers` | Extra headers; `${VAR}` placeholders resolve from secrets. These override the connection's headers with the same name. |
 | | `etag` | Send `If-None-Match`; a `304` counts as an empty success. |
 
 Listener fields shown in the dashboard come from the template's `listenerConfig`, and `testIngestor` defines what `test_ingestor` does.
@@ -227,4 +242,4 @@ Listener fields shown in the dashboard come from the template's `listenerConfig`
 }
 ```
 
-A rule matches when `source`, the optional `instanceId`, `eventTypes`, and every `filter` entry (dot path in the event's `data` → allowed values) all match. `throttle.maxPerMinute` defaults to 10. Rules are attached only to listeners started at daemon boot, so a listener restarted later (by `control_listener`, `set_listener_params`, or the dashboard) stops triggering until the next daemon restart.
+A rule matches when `source`, the optional `instanceId`, `eventTypes`, and every `filter` entry (dot path in the event's `data` → allowed values) all match. Set `"enabled": false` to turn a rule off (default `true`). `throttle.maxPerMinute` defaults to 10. `throttle.deduplicateBy` is a dot path in `data`; a rule skips an event whose value at that path it has recently dispatched (up to 1000 remembered values per rule). Rules are attached only to listeners started at daemon boot, so a listener restarted later (by `control_listener`, `set_listener_params`, or the dashboard) stops triggering until the next daemon restart.

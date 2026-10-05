@@ -22,10 +22,10 @@
       "connections": ["github"]
     },
     "alice": {
-      "name": "Alice (per-caller env override example)",
+      "name": "Alice (literal per-caller secret example; or set ALICE_GITHUB_TOKEN in .env)",
       "connections": ["github"],
       "env": {
-        "GITHUB_TOKEN": "${ALICE_GITHUB_TOKEN}"
+        "GITHUB_TOKEN": "ghp_replace_with_alices_token"
       }
     },
     "team-member": {
