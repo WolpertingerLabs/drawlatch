@@ -22,6 +22,7 @@ import { BaseIngestor } from '../base-ingestor.js';
 import type { PollIngestorConfig } from '../types.js';
 import { registerIngestorFactory } from '../registry.js';
 import { createLogger } from '../../../shared/logger.js';
+import { safeFetch, sameOriginAs } from '../../safe-fetch.js';
 
 const log = createLogger('poll');
 
@@ -135,7 +136,7 @@ export class PollIngestor extends BaseIngestor {
       }
 
       // Build request options
-      const fetchOptions: RequestInit = {
+      const fetchOptions: { method: string; headers: Record<string, string>; body?: string } = {
         method: this.method,
         headers,
       };
@@ -154,7 +155,12 @@ export class PollIngestor extends BaseIngestor {
         }
       }
 
-      const response = await fetch(this.url, fetchOptions);
+      // Route headers carry the connection's credentials, so a redirect is
+      // only followed on the poll URL's own origin; any other 3xx is an error.
+      const { response } = await safeFetch(this.url, {
+        ...fetchOptions,
+        isAllowed: sameOriginAs(this.url),
+      });
 
       // Handle ETag 304 Not Modified — no new data, not an error
       if (this.useEtag && response.status === 304) {

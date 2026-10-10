@@ -37,6 +37,7 @@ import {
   signProxyRequest,
 } from './aws-sigv4.js';
 import type { IngestorManager } from './ingestors/index.js';
+import { safeFetch } from './safe-fetch.js';
 import { waitForEvents } from './wait-for-events.js';
 
 // ── Endpoint matching ────────────────────────────────────────────────────────
@@ -332,6 +333,41 @@ export interface ProxyRequestResult {
   statusText: string;
   headers: Record<string, string>;
   body: unknown;
+  /** Final URL, present only when redirects were followed. */
+  url?: string;
+}
+
+/**
+ * Headers that may follow a redirect to another origin. Content negotiation
+ * only; credentials, connection identifiers (Twitch `Client-Id`), and every
+ * other route or caller header stay behind. Listing what may go, rather than
+ * what may not, means a new secret-bearing header name is safe by default.
+ */
+const CROSS_ORIGIN_SAFE_HEADERS = new Set([
+  'accept',
+  'accept-language',
+  'content-language',
+  'content-type',
+  'user-agent',
+]);
+
+/**
+ * The subset of outbound headers sent on a cross-origin redirect hop: names on
+ * CROSS_ORIGIN_SAFE_HEADERS whose value contains none of the route's secret
+ * values (a caller can write `Accept: ${TOKEN}`). Every secret is checked,
+ * however short — dropping a harmless header beats sending a secret.
+ */
+function crossOriginSafeHeaders(
+  headers: Record<string, string>,
+  secrets: Record<string, string>,
+): Record<string, string> {
+  const values = Object.values(secrets).filter((v) => typeof v === 'string' && v.length > 0);
+  return Object.fromEntries(
+    Object.entries(headers).filter(
+      ([k, v]) =>
+        CROSS_ORIGIN_SAFE_HEADERS.has(k.toLowerCase()) && !values.some((s) => v.includes(s)),
+    ),
+  );
 }
 
 /**
@@ -513,7 +549,7 @@ export async function executeProxyRequest(
   // Step 6b: AWS SigV4. Last, so the signature covers the final URL, headers,
   // and body bytes exactly as sent.
   let outboundHeaders = resolvedHeaders;
-  let outboundBody: BodyInit | undefined = fetchBody;
+  let outboundBody: string | FormData | Uint8Array<ArrayBuffer> | undefined = fetchBody;
   if (matched.awsSigV4) {
     const signed = await signProxyRequest({
       method,
@@ -540,15 +576,25 @@ export async function executeProxyRequest(
     // upstream dribbles out its response, the deadline fires on `resp.json()`,
     // and outside the try that surfaces as a bare DOMException — exactly the
     // opaque error the drawlatch deadline exists to replace.
-    const resp = await fetch(resolvedUrl, {
+    // Redirects are followed by safeFetch, not fetch(): only to URLs this
+    // route's allowlist accepts, never https → http, and cross-origin with
+    // nothing but content-negotiation headers that carry no secret. Anything
+    // else comes back to the caller as the 3xx itself.
+    const routeAllowlist = matched.allowedEndpoints;
+    const {
+      response: resp,
+      url: finalUrl,
+      redirects,
+    } = await safeFetch(resolvedUrl, {
       method,
       headers: outboundHeaders,
       body: outboundBody,
-      // A signed request must not be replayed to wherever a 3xx points: the
-      // target isn't allowlist-checked, and fetch() would forward the session
-      // token and caller headers to it. Hand the redirect back instead.
-      ...(matched.awsSigV4 && { redirect: 'manual' as const }),
       signal: AbortSignal.timeout(effectiveTimeout),
+      isAllowed: (target) => isEndpointAllowed(target.href, routeAllowlist),
+      crossOriginHeaders: crossOriginSafeHeaders(outboundHeaders, matched.secrets),
+      // A signed request is never replayed, even same-origin: the signature
+      // covers the original path, so a re-sent copy would need re-signing.
+      ...(matched.awsSigV4 && { maxRedirects: 0 }),
     });
 
     const contentType = resp.headers.get('content-type') ?? '';
@@ -561,6 +607,9 @@ export async function executeProxyRequest(
       statusText: resp.statusText,
       headers: Object.fromEntries(resp.headers.entries()),
       body: responseBody,
+      // A same-origin `Location` can echo the original query back, and that
+      // can carry substituted secrets.
+      ...(redirects > 0 && { url: scrubSecrets(finalUrl, matched.secrets) }),
     };
   } catch (err) {
     // Every message below reports the caller's own URL, never `resolvedUrl` —

@@ -16,6 +16,7 @@
 import type { IngestedEvent } from '../ingestors/types.js';
 import type { TriggerRule, TriggerDispatchResult } from './types.js';
 import { createLogger } from '../../shared/logger.js';
+import { safeFetch, sameOriginAs } from '../safe-fetch.js';
 
 const log = createLogger('trigger-engine');
 
@@ -214,7 +215,8 @@ export class TriggerRuleEngine {
 
       log.info(`${rule.name}: dispatching to trigger ${triggerId} (event: ${event.eventType})`);
 
-      const response = await fetch(url, {
+      const { response } = await safeFetch(url, {
+        isAllowed: sameOriginAs(url),
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,

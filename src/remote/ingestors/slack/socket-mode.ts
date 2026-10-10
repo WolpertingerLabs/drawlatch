@@ -28,6 +28,7 @@ import {
   type SlackConnectionsOpenResponse,
 } from './types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { safeFetch, sameOriginAs } from '../../safe-fetch.js';
 
 const log = createLogger('slack-sm');
 
@@ -111,7 +112,8 @@ export class SlackSocketModeIngestor extends BaseIngestor {
 
     let wsUrl: string;
     try {
-      const response = await fetch(this.connectUrl, {
+      const { response } = await safeFetch(this.connectUrl, {
+        isAllowed: sameOriginAs(this.connectUrl),
         method: 'POST',
         headers: {
           Authorization: `Bearer ${appToken}`,
