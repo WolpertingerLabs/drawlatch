@@ -627,6 +627,27 @@ describe('executeProxyRequest with awsSigV4', () => {
       expect(received[0].headers['x-other']).toBe('fine-value');
     });
 
+    it('should withhold a secret whose value contains a credential', async () => {
+      const r = route({
+        secrets: { ...creds, WRAPPED: `pre-${creds.AWS_SECRET_ACCESS_KEY}-post` },
+      });
+      await expect(
+        executeProxyRequest({ method: 'GET', url: `${base}/${leak('WRAPPED')}` }, [r]),
+      ).rejects.toThrow('${WRAPPED}');
+      expect(received).toHaveLength(0);
+    });
+
+    it('should not withhold everything when a credential is empty', async () => {
+      const r = route({
+        secrets: { ...creds, AWS_SESSION_TOKEN: '', OTHER: 'fine-value' },
+      });
+      await executeProxyRequest(
+        { method: 'GET', url: `${base}/x`, headers: { 'X-Other': leak('OTHER') } },
+        [r],
+      );
+      expect(received[0].headers['x-other']).toBe('fine-value');
+    });
+
     it('should reject a connection header that references a signing credential', async () => {
       const [resolved] = resolveRoutes([
         {

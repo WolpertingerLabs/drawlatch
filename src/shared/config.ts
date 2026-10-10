@@ -103,7 +103,7 @@ export const AWS_SIGV4_CREDENTIAL_SECRETS: readonly string[] = [
  * and bodies.
  *
  * On an `awsSigV4` route the signing credentials are left out, along with any
- * other entry holding the same value, so they can only reach the signer.
+ * other entry whose value contains one, so they can only reach the signer.
  * `*.amazonaws.com` includes hosts anyone can own (EC2 public DNS, load
  * balancers, API Gateway), and a substituted `${AWS_SECRET_ACCESS_KEY}` would
  * be sent to them.
@@ -119,10 +119,13 @@ export function substitutableSecrets(route: {
       (v): v is string => typeof v === 'string' && v !== '',
     ),
   );
+  // Containment, not equality: `WRAPPED = "pre-<secret>"` would leak it too.
+  // Empty values were filtered out above, since "" is contained in everything.
+  const holdsCredential = (value: string) =>
+    typeof value === 'string' && [...credentialValues].some((cred) => value.includes(cred));
   return Object.fromEntries(
     Object.entries(secrets).filter(
-      ([name, value]) =>
-        !AWS_SIGV4_CREDENTIAL_SECRETS.includes(name) && !credentialValues.has(value),
+      ([name, value]) => !AWS_SIGV4_CREDENTIAL_SECRETS.includes(name) && !holdsCredential(value),
     ),
   );
 }
