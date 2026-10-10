@@ -467,6 +467,18 @@ describe('bundled connection templates', () => {
     expect(route.docsUrl).toBeTruthy();
   });
 
+  it('should load vercel connection template', () => {
+    const route = loadConnection('vercel');
+
+    expect(route.name).toBe('Vercel API');
+    expect(route.allowedEndpoints).toEqual(['https://api.vercel.com/**']);
+    expect(route.secrets).toHaveProperty('VERCEL_TOKEN');
+    expect(route.headers?.Authorization).toBe('Bearer ${VERCEL_TOKEN}');
+    expect(route.testConnection?.url).toBe('https://api.vercel.com/v2/user');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.openApiUrl).toBeTruthy();
+  });
+
   it('should list all bundled connections', () => {
     const available = listAvailableConnections();
 
@@ -490,6 +502,7 @@ describe('bundled connection templates', () => {
     expect(available).toContain('slack');
     expect(available).toContain('stripe');
     expect(available).toContain('trello');
+    expect(available).toContain('vercel');
   });
 });
 
@@ -1339,7 +1352,15 @@ describe('listConnectionTemplates — stability field (integration)', () => {
 
   it('should report stability="beta" for github, stripe, and other beta connections', () => {
     const templates = listConnectionTemplates();
-    const betaAliases = ['stripe', 'anthropic', 'openai', 'circleci', 'digitalocean', 'aws'];
+    const betaAliases = [
+      'stripe',
+      'anthropic',
+      'openai',
+      'circleci',
+      'digitalocean',
+      'vercel',
+      'aws',
+    ];
 
     for (const alias of betaAliases) {
       const t = templates.find((t) => t.alias === alias)!;
