@@ -92,6 +92,40 @@ export interface ProxyConfig {
 export const AWS_SIGV4_REQUIRED_SECRETS = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'] as const;
 /** Optional: present only for temporary (STS) credentials. */
 export const AWS_SIGV4_SESSION_TOKEN_SECRET = 'AWS_SESSION_TOKEN';
+/** Every secret the signer reads. None of them is ever substituted for a `${VAR}`. */
+export const AWS_SIGV4_CREDENTIAL_SECRETS: readonly string[] = [
+  ...AWS_SIGV4_REQUIRED_SECRETS,
+  AWS_SIGV4_SESSION_TOKEN_SECRET,
+];
+
+/**
+ * The secrets a route may substitute for `${VAR}` placeholders in URLs, headers,
+ * and bodies.
+ *
+ * On an `awsSigV4` route the signing credentials are left out, along with any
+ * other entry holding the same value, so they can only reach the signer.
+ * `*.amazonaws.com` includes hosts anyone can own (EC2 public DNS, load
+ * balancers, API Gateway), and a substituted `${AWS_SECRET_ACCESS_KEY}` would
+ * be sent to them.
+ */
+export function substitutableSecrets(route: {
+  awsSigV4?: AwsSigV4Config;
+  secrets?: Record<string, string>;
+}): Record<string, string> {
+  const secrets = route.secrets ?? {};
+  if (!route.awsSigV4) return secrets;
+  const credentialValues = new Set(
+    AWS_SIGV4_CREDENTIAL_SECRETS.map((name) => secrets[name]).filter(
+      (v): v is string => typeof v === 'string' && v !== '',
+    ),
+  );
+  return Object.fromEntries(
+    Object.entries(secrets).filter(
+      ([name, value]) =>
+        !AWS_SIGV4_CREDENTIAL_SECRETS.includes(name) && !credentialValues.has(value),
+    ),
+  );
+}
 
 /** Per-request AWS Signature Version 4 signing for a route.
  *
@@ -636,9 +670,12 @@ export function resolveRoutes(
 ): ResolvedRoute[] {
   return routes.map((route) => {
     const resolvedSecrets = resolveSecrets(route.secrets ?? {}, envOverrides, callerAlias);
+    // Signing credentials are never substituted, so a header that references
+    // one keeps its literal placeholder and executeProxyRequest rejects it.
+    const headerSecrets = substitutableSecrets({ ...route, secrets: resolvedSecrets });
     const resolvedHeaders: Record<string, string> = {};
     for (const [key, value] of Object.entries(route.headers ?? {})) {
-      resolvedHeaders[key] = resolvePlaceholders(value, resolvedSecrets);
+      resolvedHeaders[key] = resolvePlaceholders(value, headerSecrets);
     }
     return {
       ...(route.alias !== undefined && { alias: route.alias }),

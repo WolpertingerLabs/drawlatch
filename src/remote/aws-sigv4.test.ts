@@ -158,6 +158,19 @@ describe('inferAwsScope', () => {
     ['s3-us-west-2.amazonaws.com', 's3', 'us-west-2'],
     ['s3-external-1.amazonaws.com', 's3', 'us-east-1'],
     ['STS.Amazonaws.com.', 'sts', 'us-east-1'],
+    ['vpce-0a1b2c3d-x1y2z3.sts.us-east-1.vpce.amazonaws.com', 'sts', 'us-east-1'],
+    ['bucket.vpce-0a1b2c3d-x1y2z3.s3.eu-west-1.vpce.amazonaws.com', 's3', 'eu-west-1'],
+    ['iam.us-gov.amazonaws.com', 'iam', 'us-gov-west-1'],
+    [
+      'ap-123456789012.op-01ac5d28a6a232904.s3-outposts.us-west-2.amazonaws.com',
+      's3-outposts',
+      'us-west-2',
+    ],
+    [
+      'ol-ap-123456789012.s3-object-lambda.us-east-1.amazonaws.com',
+      's3-object-lambda',
+      'us-east-1',
+    ],
   ])('%s → %s / %s', (host, service, region) => {
     expect(inferAwsScope(host)).toEqual({ service, region });
   });
@@ -367,6 +380,12 @@ describe('executeProxyRequest with awsSigV4', () => {
           headers: req.headers,
           body: Buffer.concat(chunks),
         });
+        if (req.url === '/redirect') {
+          res.statusCode = 302;
+          res.setHeader('location', `${base}/target`);
+          res.end();
+          return;
+        }
         res.setHeader('content-type', 'application/json');
         res.end('{"ok":true}');
       });
@@ -524,6 +543,127 @@ describe('executeProxyRequest with awsSigV4', () => {
     expect(received).toHaveLength(0);
   });
 
+  describe('signing credentials are never substituted', () => {
+    const leak = (name: string) => `\${${name}}`;
+
+    it.each(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'])(
+      'should reject %s in the URL',
+      async (name) => {
+        await expect(
+          executeProxyRequest({ method: 'GET', url: `${base}/${leak(name)}` }, [route()]),
+        ).rejects.toThrow(`The request URL references ${leak(name)}, a signing credential`);
+        expect(received).toHaveLength(0);
+      },
+    );
+
+    it('should reject a signing credential in the query string', async () => {
+      await expect(
+        executeProxyRequest({ method: 'GET', url: `${base}/?k=${leak('AWS_SECRET_ACCESS_KEY')}` }, [
+          route(),
+        ]),
+      ).rejects.toThrow('signing credential');
+      expect(received).toHaveLength(0);
+    });
+
+    it.each(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'])(
+      'should reject %s in a caller header',
+      async (name) => {
+        await expect(
+          executeProxyRequest(
+            { method: 'GET', url: `${base}/`, headers: { 'X-Leak': `x ${leak(name)}` } },
+            [route()],
+          ),
+        ).rejects.toThrow(`Header "X-Leak" references ${leak(name)}`);
+        expect(received).toHaveLength(0);
+      },
+    );
+
+    it.each([
+      ['string', `a=${leak('AWS_SECRET_ACCESS_KEY')}`],
+      ['JSON', { note: leak('AWS_SECRET_ACCESS_KEY') }],
+    ])('should reject a signing credential in a resolved %s body', async (_kind, body) => {
+      await expect(
+        executeProxyRequest({ method: 'POST', url: `${base}/`, body }, [
+          route({ resolveSecretsInBody: true }),
+        ]),
+      ).rejects.toThrow('The request body references ${AWS_SECRET_ACCESS_KEY}');
+      expect(received).toHaveLength(0);
+    });
+
+    it('should reject a signing credential in a resolved multipart payload', async () => {
+      await expect(
+        executeProxyRequest(
+          {
+            method: 'POST',
+            url: `${base}/`,
+            body: { k: leak('AWS_ACCESS_KEY_ID') },
+            files: [{ field: 'f', data: '', filename: 'f', contentType: 'text/plain' }],
+          },
+          [route({ resolveSecretsInBody: true })],
+        ),
+      ).rejects.toThrow('signing credential');
+      expect(received).toHaveLength(0);
+    });
+
+    it('should send an unresolved body placeholder literally, as on any route', async () => {
+      await executeProxyRequest(
+        { method: 'POST', url: `${base}/`, body: leak('AWS_SECRET_ACCESS_KEY') },
+        [route()],
+      );
+      expect(received[0].body.toString()).toBe(leak('AWS_SECRET_ACCESS_KEY'));
+    });
+
+    it('should withhold another secret that holds a credential value', async () => {
+      const r = route({
+        secrets: { ...creds, ALIAS: creds.AWS_SECRET_ACCESS_KEY, OTHER: 'fine-value' },
+      });
+      await expect(
+        executeProxyRequest({ method: 'GET', url: `${base}/${leak('ALIAS')}` }, [r]),
+      ).rejects.toThrow('${ALIAS}');
+      await executeProxyRequest(
+        { method: 'GET', url: `${base}/x`, headers: { 'X-Other': leak('OTHER') } },
+        [r],
+      );
+      expect(received[0].headers['x-other']).toBe('fine-value');
+    });
+
+    it('should reject a connection header that references a signing credential', async () => {
+      const [resolved] = resolveRoutes([
+        {
+          alias: 'aws',
+          awsSigV4: { service: 'sts', region: 'us-east-1' },
+          headers: { 'X-Key': `Key ${leak('AWS_SECRET_ACCESS_KEY')}` },
+          secrets: {
+            AWS_ACCESS_KEY_ID: creds.AWS_ACCESS_KEY_ID,
+            AWS_SECRET_ACCESS_KEY: creds.AWS_SECRET_ACCESS_KEY,
+          },
+          allowedEndpoints: [`${base}/**`],
+        },
+      ]);
+      expect(resolved.headers['X-Key']).toBe(`Key ${leak('AWS_SECRET_ACCESS_KEY')}`);
+      received = [];
+      await expect(
+        executeProxyRequest({ method: 'GET', url: `${base}/` }, [resolved]),
+      ).rejects.toThrow('Connection header "X-Key" references ${AWS_SECRET_ACCESS_KEY}');
+      expect(received).toHaveLength(0);
+    });
+  });
+
+  it('should return a redirect to the caller instead of following it', async () => {
+    const result = await executeProxyRequest({ method: 'GET', url: `${base}/redirect` }, [route()]);
+    expect(result.status).toBe(302);
+    expect(result.headers.location).toBe(`${base}/target`);
+    expect(received.map((r) => r.url)).toEqual(['/redirect']);
+  });
+
+  it('should keep following redirects on routes without awsSigV4', async () => {
+    const result = await executeProxyRequest({ method: 'GET', url: `${base}/redirect` }, [
+      route({ awsSigV4: undefined }),
+    ]);
+    expect(result.status).toBe(200);
+    expect(received.map((r) => r.url)).toEqual(['/redirect', '/target']);
+  });
+
   it('should leave routes without awsSigV4 unsigned', async () => {
     await executeProxyRequest({ method: 'GET', url: `${base}/` }, [route({ awsSigV4: undefined })]);
     expect(received[0].headers.authorization).toBeUndefined();
@@ -575,6 +715,26 @@ describe('isEndpointAllowed — wildcard hosts', () => {
     'https://sts.amazonaws.com.evil.example/',
   ])('should reject the lookalike %s', (url) => {
     expect(isEndpointAllowed(url, aws)).toBe(false);
+  });
+
+  it('should allow underscores in a wildcard-matched host', () => {
+    expect(isEndpointAllowed('https://my_bucket.s3.amazonaws.com/k', aws)).toBe(true);
+  });
+
+  it.each([
+    ['https://*.amazonaws.com:443/**', 'https://sts.amazonaws.com:443/'],
+    ['http://*.example.test:80/**', 'http://a.example.test:80/x'],
+  ])('should ignore an explicit default port in %s', (pattern, url) => {
+    expect(isEndpointAllowed(url, [pattern])).toBe(true);
+  });
+
+  it('should still compare a non-default port', () => {
+    expect(
+      isEndpointAllowed('https://a.example.test:8443/', ['https://*.example.test:8443/**']),
+    ).toBe(true);
+    expect(isEndpointAllowed('https://a.example.test/', ['https://*.example.test:8443/**'])).toBe(
+      false,
+    );
   });
 
   it('should leave patterns without a host wildcard unchanged', () => {

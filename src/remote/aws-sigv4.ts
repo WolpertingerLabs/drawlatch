@@ -236,6 +236,10 @@ export function signSigV4(req: SigV4Request, opts: SigV4Options): SigV4Result {
 
 const REGION_LABEL = /^[a-z]{2}(?:-gov|-iso[a-z]?)?-[a-z]+-\d+$/;
 
+/** S3-family endpoint labels that are their own signing name (and use S3 path rules).
+ *  Any other "s3-*" label (s3-accesspoint, s3-control, s3-fips, …) signs as "s3". */
+const S3_SIGNING_NAMES = new Set(['s3', 's3-object-lambda', 's3-outposts']);
+
 /** Endpoint prefixes whose signing name differs. Anything else: use `awsSigV4.service`. */
 const SIGNING_NAME_ALIASES: Record<string, string> = {
   'aps-workspaces': 'aps',
@@ -255,6 +259,9 @@ const SIGNING_NAME_ALIASES: Record<string, string> = {
  *   search-x.us-east-1.es.amazonaws.com       → es, us-east-1
  *   bucket.s3.us-west-2.amazonaws.com         → s3, us-west-2
  *   s3-us-west-2.amazonaws.com, s3.amazonaws.com → s3, us-west-2 / us-east-1
+ *   ap-123.op-456.s3-outposts.us-west-2.amazonaws.com → s3-outposts, us-west-2
+ *   vpce-1a2b.sts.us-east-1.vpce.amazonaws.com → sts, us-east-1
+ *   iam.us-gov.amazonaws.com                  → iam, us-gov-west-1
  *
  * Returns null for a host it can't place.
  */
@@ -264,12 +271,14 @@ export function inferAwsScope(hostname: string): { service: string; region: stri
   if (!host.endsWith(suffix)) return null;
   const labels = host.slice(0, -suffix.length).split('.');
   if (labels.some((l) => l === '')) return null;
+  // Interface VPC endpoints: vpce-….<service>.<region>.vpce.amazonaws.com
+  if (labels.length > 1 && labels[labels.length - 1] === 'vpce') labels.pop();
 
   // S3: the rightmost "s3" / "s3-*" label (bucket names can contain "s3" too).
   for (let i = labels.length - 1; i >= 0; i--) {
     const label = labels[i];
     if (label !== 's3' && !label.startsWith('s3-')) continue;
-    const service = label === 's3-object-lambda' ? 's3-object-lambda' : 's3';
+    const service = S3_SIGNING_NAMES.has(label) ? label : 's3';
     const legacyRegion = label.slice(3);
     const region = REGION_LABEL.test(legacyRegion)
       ? legacyRegion
@@ -287,7 +296,11 @@ export function inferAwsScope(hostname: string): { service: string; region: stri
 
   let prefix: string | undefined;
   let region = 'us-east-1';
-  if (regionIdx === -1) {
+  if (regionIdx === -1 && labels.length > 1 && labels[labels.length - 1] === 'us-gov') {
+    // GovCloud global endpoints (iam.us-gov.amazonaws.com) sign for us-gov-west-1.
+    prefix = labels[labels.length - 2];
+    region = 'us-gov-west-1';
+  } else if (regionIdx === -1) {
     prefix = labels[labels.length - 1];
   } else {
     region = labels[regionIdx];
@@ -386,7 +399,7 @@ export async function signProxyRequest(
       region,
       credentials: { accessKeyId, secretAccessKey, sessionToken },
       date: input.now ?? new Date(),
-      uriEscapePath: service !== 's3' && service !== 's3-object-lambda',
+      uriEscapePath: !S3_SIGNING_NAMES.has(service),
       signPayloadHeader: true,
     },
   );

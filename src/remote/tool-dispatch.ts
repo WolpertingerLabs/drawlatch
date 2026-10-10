@@ -22,6 +22,7 @@ import {
   loadRemoteConfig,
   saveRemoteConfig,
   resolvePlaceholders,
+  substitutableSecrets,
   DEFAULT_OUTBOUND_TIMEOUT_MS,
   MAX_OUTBOUND_TIMEOUT_MS,
   type CallerConfig,
@@ -77,14 +78,19 @@ function wildcardHostMatches(url: string, pattern: string): boolean {
   } catch {
     return false;
   }
-  if (parsed.protocol !== `${m[1].toLowerCase()}:`) return false;
+  const scheme = m[1].toLowerCase();
+  if (parsed.protocol !== `${scheme}:`) return false;
+
+  // `parsed.host` omits a default port, so drop one written into the pattern.
+  const defaultPort = scheme === 'https' ? ':443' : scheme === 'http' ? ':80' : null;
+  let authority = m[2].toLowerCase();
+  if (defaultPort && authority.endsWith(defaultPort)) {
+    authority = authority.slice(0, -defaultPort.length);
+  }
 
   const hostRegex = new RegExp(
     '^' +
-      m[2]
-        .toLowerCase()
-        .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*+/g, '[a-z0-9.:[\\]-]*') +
+      authority.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*+/g, '[a-z0-9_.:[\\]-]*') +
       '$',
   );
   return hostRegex.test(parsed.host);
@@ -270,6 +276,25 @@ function leaksSecret(err: Error, secrets: Record<string, string>): boolean {
   return false;
 }
 
+/**
+ * Reject `text` if it references a secret the route withholds from
+ * substitution (an `awsSigV4` route's signing credentials). Failing loudly
+ * beats sending the literal placeholder: the caller learns why, and nothing
+ * leaves the daemon.
+ */
+function assertNoWithheldSecrets(text: string, withheld: Set<string>, where: string): void {
+  if (withheld.size === 0) return;
+  for (const match of text.matchAll(/\$\{(\w+)\}/g)) {
+    if (withheld.has(match[1])) {
+      throw new Error(
+        `${where} references \${${match[1]}}, a signing credential of this AWS SigV4 route. ` +
+          'Signing credentials are only used to sign requests and are never substituted ' +
+          'into URLs, headers, or bodies.',
+      );
+    }
+  }
+}
+
 /** Header values fetch() rejects — and echoes back in full when it does. */
 const INVALID_HEADER_VALUE = /[\r\n\0]/;
 
@@ -335,12 +360,12 @@ export async function executeProxyRequest(
 
   if (matched) {
     // Resolve URL placeholders using matched route's secrets
-    resolvedUrl = resolvePlaceholders(url, matched.secrets);
+    resolvedUrl = resolvePlaceholders(url, substitutableSecrets(matched));
   } else {
     // Try resolving URL with each route's secrets to find a match
     for (const route of routes) {
       if (route.allowedEndpoints.length === 0) continue;
-      const candidateUrl = resolvePlaceholders(url, route.secrets);
+      const candidateUrl = resolvePlaceholders(url, substitutableSecrets(route));
       if (isEndpointAllowed(candidateUrl, route.allowedEndpoints)) {
         matched = route;
         resolvedUrl = candidateUrl;
@@ -353,10 +378,21 @@ export async function executeProxyRequest(
     throw new Error(`Endpoint not allowed: ${url}`);
   }
 
+  // Secrets this route may substitute, and the ones it withholds (signing
+  // credentials). A reference to a withheld one anywhere it would otherwise
+  // be resolved is rejected outright.
+  const secrets = substitutableSecrets(matched);
+  const withheld = new Set(Object.keys(matched.secrets).filter((name) => !(name in secrets)));
+  assertNoWithheldSecrets(url, withheld, 'The request URL');
+  for (const [k, v] of Object.entries(matched.headers)) {
+    assertNoWithheldSecrets(v, withheld, `Connection header "${k}"`);
+  }
+
   // Step 2: Resolve client headers using matched route's secrets
   const resolvedHeaders: Record<string, string> = {};
   for (const [k, v] of Object.entries(headers)) {
-    resolvedHeaders[k] = resolvePlaceholders(v, matched.secrets);
+    assertNoWithheldSecrets(v, withheld, `Header "${k}"`);
+    resolvedHeaders[k] = resolvePlaceholders(v, secrets);
   }
 
   // Step 3: Check for header conflicts — reject if client provides a header
@@ -427,8 +463,11 @@ export async function executeProxyRequest(
     // Add the JSON body as a named part (default: "payload_json" for Discord-style APIs)
     if (body !== null && body !== undefined) {
       const serialized = typeof body === 'string' ? body : JSON.stringify(body);
+      if (matched.resolveSecretsInBody) {
+        assertNoWithheldSecrets(serialized, withheld, 'The request body');
+      }
       const resolvedPayload = matched.resolveSecretsInBody
-        ? resolvePlaceholders(serialized, matched.secrets)
+        ? resolvePlaceholders(serialized, secrets)
         : serialized;
       form.append(bodyFieldName ?? 'payload_json', resolvedPayload);
     }
@@ -448,11 +487,17 @@ export async function executeProxyRequest(
   } else {
     // ── Standard JSON/string body ──
     if (typeof body === 'string') {
-      fetchBody = matched.resolveSecretsInBody ? resolvePlaceholders(body, matched.secrets) : body;
+      if (matched.resolveSecretsInBody) {
+        assertNoWithheldSecrets(body, withheld, 'The request body');
+      }
+      fetchBody = matched.resolveSecretsInBody ? resolvePlaceholders(body, secrets) : body;
     } else if (body !== null && body !== undefined) {
       const serialized = JSON.stringify(body);
+      if (matched.resolveSecretsInBody) {
+        assertNoWithheldSecrets(serialized, withheld, 'The request body');
+      }
       fetchBody = matched.resolveSecretsInBody
-        ? resolvePlaceholders(serialized, matched.secrets)
+        ? resolvePlaceholders(serialized, secrets)
         : serialized;
       if (!resolvedHeaders['content-type'] && !resolvedHeaders['Content-Type']) {
         resolvedHeaders['Content-Type'] = 'application/json';
@@ -499,6 +544,10 @@ export async function executeProxyRequest(
       method,
       headers: outboundHeaders,
       body: outboundBody,
+      // A signed request must not be replayed to wherever a 3xx points: the
+      // target isn't allowlist-checked, and fetch() would forward the session
+      // token and caller headers to it. Hand the redirect back instead.
+      ...(matched.awsSigV4 && { redirect: 'manual' as const }),
       signal: AbortSignal.timeout(effectiveTimeout),
     });
 
