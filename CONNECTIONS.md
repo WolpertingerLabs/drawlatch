@@ -17,8 +17,10 @@ Then set the secrets for that caller. Caller `default` reads `GITHUB_TOKEN` from
 | `agentmail` | [AgentMail](https://docs.agentmail.to/api-reference) | **`AGENTMAIL_API_KEY`** | Bearer | |
 | `anthropic` | [Anthropic](https://docs.anthropic.com/en/api) | **`ANTHROPIC_API_KEY`** | `x-api-key` | |
 | `bluesky` | [Bluesky (AT Protocol)](https://docs.bsky.app/) | **`BLUESKY_ACCESS_TOKEN`** | Bearer | poll |
+| `circleci` | [CircleCI](https://circleci.com/docs/api/v2/) | **`CIRCLECI_TOKEN`** | `Circle-Token` | |
 | `datadog` | [Datadog](https://docs.datadoghq.com/api/latest/) | **`DATADOG_API_KEY`**, **`DATADOG_APP_KEY`** | `DD-API-KEY`, `DD-APPLICATION-KEY` | |
 | `devin` | [Devin](https://docs.devin.ai/api-reference/overview) | **`DEVIN_API_KEY`** | Bearer | |
+| `digitalocean` | [DigitalOcean](https://docs.digitalocean.com/reference/api/) | **`DIGITALOCEAN_TOKEN`** | Bearer | |
 | `discord-bot` | [Discord (bot)](https://discord.com/developers/docs/intro) | **`DISCORD_BOT_TOKEN`** | `Bot` token | WebSocket |
 | `discord-oauth` | [Discord (OAuth2)](https://discord.com/developers/docs/topics/oauth2) | **`DISCORD_OAUTH_TOKEN`** | Bearer | |
 | `exa` | [Exa](https://exa.ai/docs/reference/getting-started) | **`EXA_API_KEY`** | `x-api-key` | |
@@ -54,6 +56,8 @@ A secret that isn't set is sent as the literal placeholder (for example, `Bearer
 **Anthropic.** `anthropic-version` is pinned to `2023-06-01`. Override with a custom connector to use another version.
 
 **Bluesky.** Get an access token by POSTing `{ "identifier": "your.handle", "password": "<app password>" }` to `https://bsky.social/xrpc/com.atproto.server.createSession`. Use an [App Password](https://bsky.app/settings/app-passwords). Tokens expire after about 2 hours; rotate them yourself with `refreshJwt`. Both `bsky.social` and `public.api.bsky.app` are allowlisted. The listener polls notifications; the firehose is not supported. Rate limit: 3,000 requests per 5 minutes.
+
+**CircleCI.** Use a [personal API token](https://app.circleci.com/settings/user/tokens). The built-in test calls `/api/v2/me`, which identifies a user, so it won't pass with a project token. Both `circleci.com/api/v2` and the legacy `v1.1` API are allowlisted. CircleCI server (self-hosted) needs a custom connector with your host.
 
 **Datadog.** Most management endpoints need both keys; intake endpoints need only `DD-API-KEY`. US1 (`api.datadoghq.com`) plus `us3`, `us5`, `eu`, and `ap1` are allowlisted, so use your site's base URL. The built-in test checks US1 only. For other sites, call `https://<site>/api/v1/validate`.
 

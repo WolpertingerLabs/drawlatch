@@ -180,6 +180,19 @@ describe('bundled connection templates', () => {
     expect(route.docsUrl).toBeTruthy();
   });
 
+  it('should load circleci connection template', () => {
+    const route = loadConnection('circleci');
+
+    expect(route.name).toBe('CircleCI API');
+    expect(route.allowedEndpoints).toEqual([
+      'https://circleci.com/api/v2/**',
+      'https://circleci.com/api/v1.1/**',
+    ]);
+    expect(route.secrets).toHaveProperty('CIRCLECI_TOKEN');
+    expect(route.headers?.['Circle-Token']).toBe('${CIRCLECI_TOKEN}');
+    expect(route.docsUrl).toBeTruthy();
+  });
+
   it('should load datadog connection template', () => {
     const route = loadConnection('datadog');
 
@@ -190,6 +203,16 @@ describe('bundled connection templates', () => {
     expect(route.secrets).toHaveProperty('DATADOG_APP_KEY');
     expect(route.headers).toHaveProperty('DD-API-KEY');
     expect(route.headers).toHaveProperty('DD-APPLICATION-KEY');
+    expect(route.docsUrl).toBeTruthy();
+  });
+
+  it('should load digitalocean connection template', () => {
+    const route = loadConnection('digitalocean');
+
+    expect(route.name).toBe('DigitalOcean API');
+    expect(route.allowedEndpoints).toEqual(['https://api.digitalocean.com/v2/**']);
+    expect(route.secrets).toHaveProperty('DIGITALOCEAN_TOKEN');
+    expect(route.headers?.Authorization).toBe('Bearer ${DIGITALOCEAN_TOKEN}');
     expect(route.docsUrl).toBeTruthy();
   });
 
@@ -429,8 +452,10 @@ describe('bundled connection templates', () => {
 
     expect(available).toContain('agentmail');
     expect(available).toContain('anthropic');
+    expect(available).toContain('circleci');
     expect(available).toContain('datadog');
     expect(available).toContain('devin');
+    expect(available).toContain('digitalocean');
     expect(available).toContain('discord-bot');
     expect(available).toContain('discord-oauth');
     expect(available).toContain('github');
