@@ -83,7 +83,7 @@ The local MCP server exposes these tools. Every call goes through the encrypted 
 
 | Tool | Purpose |
 | --- | --- |
-| `secure_request` | HTTP request to an allowlisted URL. Connection headers are injected for you. `${VAR}` placeholders in the URL and headers resolve server-side from the matched connection's secrets (in the body only if the connection sets `resolveSecretsInBody`). Supports multipart uploads from local files (25 MB per file, 50 MB per base64-encoded request): with `files`, the JSON `body` is sent as a form part named `payload_json` (change it with `bodyFieldName`). Also takes a per-call `timeoutMs`. |
+| `secure_request` | HTTP request to an allowlisted URL. Connection headers are injected for you. `${VAR}` placeholders in the URL and headers resolve server-side from the matched connection's secrets (in the body only if the connection sets `resolveSecretsInBody`). Redirects are followed only within the connection's allowlist ([Redirects](#redirects)). Supports multipart uploads from local files (25 MB per file, 50 MB per base64-encoded request): with `files`, the JSON `body` is sent as a form part named `payload_json` (change it with `bodyFieldName`). Also takes a per-call `timeoutMs`. |
 | `list_routes` | The caller's connections: docs links, allowed endpoint patterns, the *names* of secrets that are set, auto-injected header names, `awsSigV4` settings, timeouts, listener info. |
 | `test_connection` | Run a connection's built-in credential check. Some cost a little credit; see [CONNECTIONS.md](CONNECTIONS.md#available-connections). |
 | `list_connection_templates` | All built-in templates, with which are enabled for this caller and which secrets are set (booleans). Custom connectors aren't listed. |
@@ -211,7 +211,7 @@ AWS APIs need a signature computed per request, so a static header can't authent
 - **Service and region** come from the request hostname: `<service>.<region>.amazonaws.com`, `<id>.<service>.<region>.amazonaws.com` (API Gateway, SageMaker runtime), `<id>.<region>.<service>.amazonaws.com` (OpenSearch), interface VPC endpoints (`vpce-….<service>.<region>.vpce.amazonaws.com`), and S3's virtual-hosted, path-style, dual-stack, and legacy `s3-<region>` hosts, with `s3-outposts` and `s3-object-lambda` as their own signing names. A global endpoint such as `sts.amazonaws.com` or `iam.amazonaws.com` signs for `us-east-1`, and `iam.us-gov.amazonaws.com` for `us-gov-west-1`. A few endpoint prefixes map to a different signing name (`bedrock-runtime` and `bedrock-agent*` → `bedrock`, `email` → `ses`, `aps-workspaces` → `aps`). For anything else, set `service` and `region` explicitly, which overrides the inference for every request on that connector.
 - **Reserved names.** A request may not set `Authorization`, `Host`, `X-Amz-Date`, `X-Amz-Content-Sha256`, or `X-Amz-Security-Token`, or carry presigned-URL query parameters (`X-Amz-Signature`, `X-Amz-Credential`, and so on). Such a request is rejected. Other `x-amz-*` headers, such as `X-Amz-Target` or `x-amz-meta-*`, are sent and signed.
 - **What's signed:** `host`, every header sent except hop-by-hop ones (`connection`, `user-agent`, `content-length`, and similar), and the body. A string body is sent as UTF-8, with fetch's default `text/plain;charset=UTF-8` content type unless you set one. Multipart uploads are serialized before signing. Paths are normalized and encoded per segment as SigV4 requires. S3 paths are encoded once and not normalized. The URL itself is parsed first, which already resolves `.` and `..` segments (including `%2E%2E`), so S3 keys containing those segments can't be reached.
-- **Redirects** aren't followed. A 3xx comes back to the caller with its `Location` header, so a signed request and its session token are never replayed to a host the allowlist didn't check.
+- **Redirects** aren't followed, even to the same host: the signature covers the original URL. A 3xx comes back to the caller with its `Location` header (see [Redirects](#redirects)).
 
 ### Proxy config (`proxy.config.json`)
 
@@ -241,6 +241,20 @@ A proxied call has three nested deadlines. The innermost fires first, because on
 - The 290 s outbound maximum sits below undici's internal 300 s headers timeout, which would otherwise fire first with an opaque error.
 - A timed-out call is cancelled at the socket and reported as `Upstream request timed out after <n>ms`. If the local budget was the binding limit, the error names the setting to raise. A host that never accepts the connection is reported as `Upstream never accepted the connection`.
 - The MCP server accepts `timeoutMs` only as a positive integer up to 290000. The daemon treats invalid values from other clients as unset. A malformed `requestTimeoutMs` on a connection falls back to 25 s; it doesn't remove the ceiling.
+
+### Redirects
+
+The daemon follows redirects itself rather than leaving them to fetch, whose default forwards every header except `Authorization` and `Cookie` to wherever `Location` points. For a proxied request (`secure_request`, `test_connection`, `test_ingestor`, `resolve_listener_options`), each hop is checked first:
+
+- **Allowlist:** the target must match the same connection's `allowedEndpoints`, on the same host or another one.
+- **No downgrade:** an `https` URL never redirects to `http`, even on the same host.
+- **Cross-origin headers:** when the scheme, host, or port changes, only `Accept`, `Accept-Language`, `Content-Language`, `Content-Type`, and `User-Agent` go along, and only when their value contains none of the connection's secrets. Connection headers such as `x-api-key`, `Circle-Token`, `DD-API-KEY`, or Twitch's `Client-Id`, and caller headers with resolved placeholders, are dropped for that hop and every later one. A same-origin hop keeps all headers, and so does a plain upgrade from `http` on port 80 to `https` on port 443 with the same hostname. Any other port change counts as cross-origin.
+- **Method and body:** 301 and 302 turn a `POST` into a `GET`, 303 turns anything but `GET` or `HEAD` into a `GET`, and both drop the body and its content headers. 307 and 308 resend the method and body, multipart uploads included. If `resolveSecretsInBody` substituted a secret into the body, a 307 or 308 to another origin isn't followed, since the body would go there as-is.
+- **Limit:** at most 5 hops.
+
+A hop that fails a check isn't followed and isn't an error. The 3xx comes back as the result, with its `Location` header, and the target is never contacted. Secrets in response header values, such as a refused `Location` that echoes `?key=…` back, are shown as `${NAME}`, both as-is and URL-encoded. When redirects were followed, the result has a `url` field with the final URL, scrubbed the same way.
+
+`awsSigV4` connections never follow redirects. Listener requests (polls, webhook auto-registration, Slack Socket Mode connect) and trigger dispatch follow redirects only on the request URL's own origin; see [INGESTORS.md](INGESTORS.md#polling).
 
 ### Webhooks and the tunnel
 
@@ -324,7 +338,7 @@ set-password             Set the dashboard password (alias: change-password)
 
 ## Security model
 
-- **Endpoint allowlisting:** requests go only to URLs matching the caller's connections.
+- **Endpoint allowlisting:** requests go only to URLs matching the caller's connections. Redirects are followed only to allowlisted URLs, never from `https` to `http`, and without credential headers across origins ([Redirects](#redirects)).
 - **Per-caller isolation:** each caller sees only its connections, and secrets resolve only from its own `env` or `<ALIAS>_`-prefixed variables.
 - **No secrets on the client:** the MCP server never holds API credentials. Secret placeholders resolve server-side, in request bodies only when a connection opts in.
 - **Mutual authentication:** Ed25519-signed handshake against a pinned server key and registered caller keys.

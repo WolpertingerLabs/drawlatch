@@ -8,14 +8,16 @@
  * webhooks on start, clean up stale registrations (e.g., after tunnel URL changes),
  * and unregister on permanent shutdown or instance deletion.
  *
- * All HTTP requests use native `fetch()` directly (not proxy routes) since
- * secrets are already resolved and lifecycle URLs may not match the
- * connection's `allowedEndpoints` patterns.
+ * HTTP requests bypass proxy routes, since secrets are already resolved and
+ * lifecycle URLs may not match the connection's `allowedEndpoints` patterns.
+ * They go through `safeFetch()`, which follows a redirect only on the request
+ * URL's own origin, so resolved credentials never reach another host.
  */
 
 import type { WebhookLifecycleConfig, WebhookRegistrationState } from './lifecycle-types.js';
 import { resolvePlaceholders } from '../../../shared/config.js';
 import { createLogger } from '../../../shared/logger.js';
+import { safeFetch, sameOriginAs } from '../../safe-fetch.js';
 
 const log = createLogger('webhook-lifecycle');
 
@@ -171,9 +173,10 @@ export class WebhookLifecycleManager {
     const headers = this.resolveHeaders(this.config.unregister.headers, mergedSecrets);
 
     try {
-      const resp = await fetch(url, {
+      const { response: resp } = await safeFetch(url, {
         method: this.config.unregister.method,
         headers,
+        isAllowed: sameOriginAs(url),
       });
 
       if (!resp.ok) {
@@ -195,9 +198,10 @@ export class WebhookLifecycleManager {
     const url = resolvePlaceholders(listConfig.url, this.secrets);
     const headers = this.resolveHeaders(listConfig.headers);
 
-    const resp = await fetch(url, {
+    const { response: resp } = await safeFetch(url, {
       method: listConfig.method,
       headers,
+      isAllowed: sameOriginAs(url),
     });
 
     if (!resp.ok) {
@@ -237,7 +241,7 @@ export class WebhookLifecycleManager {
     const url = resolvePlaceholders(registerConfig.url, mergedSecrets);
     const headers = this.resolveHeaders(registerConfig.headers, mergedSecrets);
 
-    const fetchOptions: RequestInit = {
+    const fetchOptions: { method: string; headers: Record<string, string>; body?: string } = {
       method: registerConfig.method,
       headers,
     };
@@ -251,7 +255,10 @@ export class WebhookLifecycleManager {
       }
     }
 
-    const resp = await fetch(url, fetchOptions);
+    const { response: resp } = await safeFetch(url, {
+      ...fetchOptions,
+      isAllowed: sameOriginAs(url),
+    });
 
     if (!resp.ok) {
       const body = await resp.text().catch(() => '');

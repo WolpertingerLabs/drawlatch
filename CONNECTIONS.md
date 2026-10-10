@@ -77,6 +77,8 @@ A secret that isn't set is sent as the literal placeholder (for example, `Bearer
 
 **GitHub.** The webhook listener needs `GITHUB_WEBHOOK_SECRET`. To have drawlatch register the webhook for you, also set `GITHUB_WEBHOOK_URL` and a `repoFilter` or `orgFilter` listener param. See [INGESTORS.md](INGESTORS.md#webhooks). The REST API works without either.
 
+Some GitHub endpoints answer with a 302 to another host: release-asset downloads with `Accept: application/octet-stream` (to a `*.githubusercontent.com` host), `tarball` and `zipball` (to `codeload.github.com`), and Actions log and artifact downloads (to a storage host). Those hosts aren't allowlisted, so drawlatch [doesn't follow](README.md#redirects) the redirect: you get the 302, and its `Location` is a short-lived, pre-signed URL you can download without credentials. Don't add those hosts to `allowedEndpoints` to make the redirect work: every request to an allowlisted URL gets the connection's `Authorization: Bearer ${GITHUB_TOKEN}` header, and those hosts would then receive the token on direct requests.
+
 **Google / Google AI.** `google` covers Workspace and other Google APIs with an OAuth token. Allowlisted hosts: `www`, `sheets`, `docs`, `drive`, `calendar-json`, `gmail`, `slides`, `people`, `tasks`, `admin`, `chat`, `forms`, `youtube`, `youtubeanalytics`, and `cloudresourcemanager` `.googleapis.com`. Add others with a custom connector that uses the same secret. `google-ai` is Gemini (`generativelanguage.googleapis.com`, both `v1` and `v1beta`).
 
 **Lichess.** Allowlists `explorer.lichess.ovh` (opening explorer) and `lichess.org/api`. The token is sent on every request. Lichess rejects an invalid token even on public endpoints, so set a [personal access token](https://lichess.org/account/oauth/token).
@@ -101,7 +103,7 @@ A secret that isn't set is sent as the literal placeholder (for example, `Bearer
 
 **Vercel.** Create a token on the [Tokens page](https://vercel.com/account/tokens), where you also pick its scope. Requests act on your personal account by default. For a team's resources, add `teamId=<team id>` (or `slug=<team slug>`) to the query string, for example `https://api.vercel.com/v9/projects?teamId=team_abc123`. The built-in test calls `/v2/user`.
 
-**X.** Uses an app-only Bearer token from the [developer portal](https://developer.x.com/en/portal/dashboard). `api.x.com` and `api.twitter.com` are allowlisted. The listener searches recent tweets for `X_SEARCH_QUERY`, which is not URL-encoded, so encode it yourself. It fails without one. API access and limits depend on your X tier.
+**X.** Uses an app-only Bearer token from the [developer portal](https://developer.x.com/en/portal/dashboard). `api.x.com` and `api.twitter.com` are allowlisted. Use `api.x.com`: if `api.twitter.com` redirects there, it's a [cross-origin redirect](README.md#redirects), and the `Authorization` header doesn't follow it, so the request fails with 401. The listener searches recent tweets for `X_SEARCH_QUERY`, which is not URL-encoded, so encode it yourself. It fails without one. API access and limits depend on your X tier.
 
 ### Web search and fetch
 

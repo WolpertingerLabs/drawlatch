@@ -73,12 +73,16 @@ vi.stubGlobal('fetch', mockFetch);
 
 function mockConnectionsOpen(url = 'wss://wss.slack.com/link/?ticket=test-123'): void {
   mockFetch.mockResolvedValueOnce({
+    ok: true,
+    status: 200,
     json: () => Promise.resolve({ ok: true, url }),
   });
 }
 
 function mockConnectionsOpenError(error = 'invalid_auth'): void {
   mockFetch.mockResolvedValueOnce({
+    ok: true,
+    status: 200,
     json: () => Promise.resolve({ ok: false, error }),
   });
 }
@@ -214,6 +218,18 @@ describe('SlackSocketModeIngestor', () => {
 
       expect(ingestor.getStatus().state).toBe('error');
       expect(ingestor.getStatus().error).toContain('invalid_auth');
+    });
+
+    it('should report a cross-origin redirect as not followed', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(null, { status: 302, headers: { location: 'https://evil.example/' } }),
+      );
+      const ingestor = createTestIngestor();
+      await ingestor.start();
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(ingestor.getStatus().state).toBe('error');
+      expect(ingestor.getStatus().error).toContain('redirect not followed');
     });
 
     it('should close WebSocket on stop', async () => {

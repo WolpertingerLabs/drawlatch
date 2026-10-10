@@ -567,6 +567,52 @@ describe('PollIngestor', () => {
   // ── Error handling ──────────────────────────────────────────────────
 
   describe('error handling', () => {
+    it('should follow a same-origin redirect with route headers', async () => {
+      fetchMock
+        .mockResolvedValueOnce(
+          new Response(null, { status: 302, headers: { location: '/items/v2' } }),
+        )
+        .mockResolvedValueOnce(mockResponse([{ id: '1' }]));
+      const ingestor = new PollIngestor(
+        'test',
+        defaultSecrets,
+        defaultConfig(),
+        defaultRouteHeaders,
+      );
+      await ingestor.start();
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[0][1]).toMatchObject({ redirect: 'manual' });
+      expect(fetchMock.mock.calls[1][0]).toBe('https://api.example.com/items/v2');
+      expect(fetchMock.mock.calls[1][1]).toMatchObject({ headers: defaultRouteHeaders });
+      expect(ingestor.getStatus().state).toBe('connected');
+      await ingestor.stop();
+    });
+
+    it('should not follow a cross-origin redirect, and treat it as an error', async () => {
+      fetchMock.mockResolvedValue(
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://evil.example/?k=secret-key-123' },
+        }),
+      );
+      const ingestor = new PollIngestor(
+        'test',
+        defaultSecrets,
+        defaultConfig(),
+        defaultRouteHeaders,
+      );
+      await ingestor.start();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(ingestor.getStatus().state).toBe('reconnecting');
+      const error = ingestor.getStatus().error ?? '';
+      expect(error).toContain('redirect not followed');
+      expect(error).toContain('https://evil.example/?k=${API_KEY}');
+      expect(error).not.toContain('secret-key-123');
+      await ingestor.stop();
+    });
+
     it('should set state to reconnecting on transient HTTP error', async () => {
       fetchMock.mockResolvedValue(mockResponse({}, 500));
       const ingestor = new PollIngestor(

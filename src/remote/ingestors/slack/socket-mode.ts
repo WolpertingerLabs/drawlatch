@@ -28,6 +28,7 @@ import {
   type SlackConnectionsOpenResponse,
 } from './types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { safeFetch, sameOriginAs } from '../../safe-fetch.js';
 
 const log = createLogger('slack-sm');
 
@@ -111,13 +112,25 @@ export class SlackSocketModeIngestor extends BaseIngestor {
 
     let wsUrl: string;
     try {
-      const response = await fetch(this.connectUrl, {
+      const { response } = await safeFetch(this.connectUrl, {
+        isAllowed: sameOriginAs(this.connectUrl),
         method: 'POST',
         headers: {
           Authorization: `Bearer ${appToken}`,
           'Content-Type': 'application/x-www-form-urlencoded',
         },
       });
+
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        this.state = 'error';
+        this.errorMessage =
+          response.status >= 300 && response.status < 400
+            ? `apps.connections.open returned HTTP ${response.status}: redirect not followed (only same-origin redirects are)`
+            : `apps.connections.open failed: HTTP ${response.status} ${response.statusText}`;
+        log.error(`${this.errorMessage} (${this.connectionAlias})`);
+        return;
+      }
 
       const body = (await response.json()) as SlackConnectionsOpenResponse;
 

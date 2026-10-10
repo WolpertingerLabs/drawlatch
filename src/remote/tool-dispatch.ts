@@ -22,6 +22,7 @@ import {
   loadRemoteConfig,
   saveRemoteConfig,
   resolvePlaceholders,
+  scrubSecrets,
   substitutableSecrets,
   DEFAULT_OUTBOUND_TIMEOUT_MS,
   MAX_OUTBOUND_TIMEOUT_MS,
@@ -37,6 +38,7 @@ import {
   signProxyRequest,
 } from './aws-sigv4.js';
 import type { IngestorManager } from './ingestors/index.js';
+import { safeFetch } from './safe-fetch.js';
 import { waitForEvents } from './wait-for-events.js';
 
 // ── Endpoint matching ────────────────────────────────────────────────────────
@@ -226,42 +228,6 @@ function classifyTimeout(err: unknown): TimeoutKind | null {
 // ── Secret hygiene in error messages ───────────────────────────────────────
 
 /**
- * Replace every resolved secret value found in `text` with its `${NAME}`
- * placeholder.
- *
- * fetch() echoes hostile input straight back in its own error messages, and
- * what it echoes is the *resolved* form. Two reachable cases:
- *
- *   - `TypeError: Headers.append: "Bearer sk-…" is an invalid header value` —
- *     thrown verbatim when a resolved secret carries an interior CR/LF/NUL
- *     (a PEM-ish secret, or a token pasted with an embedded newline).
- *   - `TypeError: Failed to parse URL from /1/boards?key=…` — the resolved URL
- *     with query-param secrets substituted, reachable when a user-defined
- *     `allowedEndpoints` of bare `**` compiles to `^.*$` and matches a
- *     relative URL.
- *
- * Either would reach the remote's console, the client, and the model.
- *
- * Values shorter than 4 characters are skipped: they are not meaningful
- * secrets, and substring-replacing them would shred the message.
- *
- * Longest value first: when one secret is a prefix of another, replacing the
- * shorter one first leaves the remainder of the longer one exposed (secrets
- * `tok-OUT` and `tok-OUTER-VALUE` would scrub to `${INNER}ER-VALUE`).
- */
-function scrubSecrets(text: string, secrets: Record<string, string>): string {
-  const entries = Object.entries(secrets)
-    .filter(([, value]) => typeof value === 'string' && value.length >= 4)
-    .sort(([, a], [, b]) => b.length - a.length);
-
-  let out = text;
-  for (const [name, value] of entries) {
-    out = out.split(value).join(`\${${name}}`);
-  }
-  return out;
-}
-
-/**
  * Whether any message in an error's `cause` chain carries a resolved secret.
  *
  * Checked separately from scrubbing because a clean top-level message can sit
@@ -332,6 +298,41 @@ export interface ProxyRequestResult {
   statusText: string;
   headers: Record<string, string>;
   body: unknown;
+  /** Final URL, present only when redirects were followed. */
+  url?: string;
+}
+
+/**
+ * Headers that may follow a redirect to another origin. Content negotiation
+ * only; credentials, connection identifiers (Twitch `Client-Id`), and every
+ * other route or caller header stay behind. Listing what may go, rather than
+ * what may not, means a new secret-bearing header name is safe by default.
+ */
+const CROSS_ORIGIN_SAFE_HEADERS = new Set([
+  'accept',
+  'accept-language',
+  'content-language',
+  'content-type',
+  'user-agent',
+]);
+
+/**
+ * The subset of outbound headers sent on a cross-origin redirect hop: names on
+ * CROSS_ORIGIN_SAFE_HEADERS whose value contains none of the route's secret
+ * values (a caller can write `Accept: ${TOKEN}`). Every secret is checked,
+ * however short — dropping a harmless header beats sending a secret.
+ */
+function crossOriginSafeHeaders(
+  headers: Record<string, string>,
+  secrets: Record<string, string>,
+): Record<string, string> {
+  const values = Object.values(secrets).filter((v) => typeof v === 'string' && v.length > 0);
+  return Object.fromEntries(
+    Object.entries(headers).filter(
+      ([k, v]) =>
+        CROSS_ORIGIN_SAFE_HEADERS.has(k.toLowerCase()) && !values.some((s) => v.includes(s)),
+    ),
+  );
 }
 
 /**
@@ -455,6 +456,9 @@ export async function executeProxyRequest(
   // exfiltration of secrets by writing placeholder strings into API resources
   // and reading them back.
   let fetchBody: string | FormData | undefined;
+  // Whether substitution changed the body, i.e. it now carries secrets. Such a
+  // body must not be resent to another origin by a 307/308.
+  let bodyCarriesSecrets = false;
 
   if (files?.length) {
     // ── Multipart mode: build FormData with file attachments ──
@@ -469,6 +473,7 @@ export async function executeProxyRequest(
       const resolvedPayload = matched.resolveSecretsInBody
         ? resolvePlaceholders(serialized, secrets)
         : serialized;
+      bodyCarriesSecrets = resolvedPayload !== serialized;
       form.append(bodyFieldName ?? 'payload_json', resolvedPayload);
     }
 
@@ -491,6 +496,7 @@ export async function executeProxyRequest(
         assertNoWithheldSecrets(body, withheld, 'The request body');
       }
       fetchBody = matched.resolveSecretsInBody ? resolvePlaceholders(body, secrets) : body;
+      bodyCarriesSecrets = fetchBody !== body;
     } else if (body !== null && body !== undefined) {
       const serialized = JSON.stringify(body);
       if (matched.resolveSecretsInBody) {
@@ -499,6 +505,7 @@ export async function executeProxyRequest(
       fetchBody = matched.resolveSecretsInBody
         ? resolvePlaceholders(serialized, secrets)
         : serialized;
+      bodyCarriesSecrets = fetchBody !== serialized;
       if (!resolvedHeaders['content-type'] && !resolvedHeaders['Content-Type']) {
         resolvedHeaders['Content-Type'] = 'application/json';
       }
@@ -513,7 +520,7 @@ export async function executeProxyRequest(
   // Step 6b: AWS SigV4. Last, so the signature covers the final URL, headers,
   // and body bytes exactly as sent.
   let outboundHeaders = resolvedHeaders;
-  let outboundBody: BodyInit | undefined = fetchBody;
+  let outboundBody: string | FormData | Uint8Array<ArrayBuffer> | undefined = fetchBody;
   if (matched.awsSigV4) {
     const signed = await signProxyRequest({
       method,
@@ -540,15 +547,27 @@ export async function executeProxyRequest(
     // upstream dribbles out its response, the deadline fires on `resp.json()`,
     // and outside the try that surfaces as a bare DOMException — exactly the
     // opaque error the drawlatch deadline exists to replace.
-    const resp = await fetch(resolvedUrl, {
+    // Redirects are followed by safeFetch, not fetch(): only to URLs this
+    // route's allowlist accepts, never https → http, and cross-origin with
+    // nothing but content-negotiation headers that carry no secret (and no
+    // 307/308 resend of a body with substituted secrets). Anything else comes
+    // back to the caller as the 3xx itself.
+    const routeAllowlist = matched.allowedEndpoints;
+    const {
+      response: resp,
+      url: finalUrl,
+      redirects,
+    } = await safeFetch(resolvedUrl, {
       method,
       headers: outboundHeaders,
       body: outboundBody,
-      // A signed request must not be replayed to wherever a 3xx points: the
-      // target isn't allowlist-checked, and fetch() would forward the session
-      // token and caller headers to it. Hand the redirect back instead.
-      ...(matched.awsSigV4 && { redirect: 'manual' as const }),
       signal: AbortSignal.timeout(effectiveTimeout),
+      isAllowed: (target) => isEndpointAllowed(target.href, routeAllowlist),
+      crossOriginHeaders: crossOriginSafeHeaders(outboundHeaders, matched.secrets),
+      bodyCarriesSecrets,
+      // A signed request is never replayed, even same-origin: the signature
+      // covers the original path, so a re-sent copy would need re-signing.
+      ...(matched.awsSigV4 && { maxRedirects: 0 }),
     });
 
     const contentType = resp.headers.get('content-type') ?? '';
@@ -559,8 +578,16 @@ export async function executeProxyRequest(
     return {
       status: resp.status,
       statusText: resp.statusText,
-      headers: Object.fromEntries(resp.headers.entries()),
+      // A refused redirect's `Location` can carry a substituted secret back
+      // (`?key=sk-…`), and so can any header an upstream echoes. The body is
+      // left alone; resolveSecretsInBody's opt-in already covers read-back.
+      headers: Object.fromEntries(
+        [...resp.headers.entries()].map(([k, v]) => [k, scrubSecrets(v, matched.secrets)]),
+      ),
       body: responseBody,
+      // A same-origin `Location` can echo the original query back, and that
+      // can carry substituted secrets.
+      ...(redirects > 0 && { url: scrubSecrets(finalUrl, matched.secrets) }),
     };
   } catch (err) {
     // Every message below reports the caller's own URL, never `resolvedUrl` —
