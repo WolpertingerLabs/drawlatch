@@ -121,6 +121,17 @@ export class SlackSocketModeIngestor extends BaseIngestor {
         },
       });
 
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        this.state = 'error';
+        this.errorMessage =
+          response.status >= 300 && response.status < 400
+            ? `apps.connections.open returned HTTP ${response.status}: redirect not followed (only same-origin redirects are)`
+            : `apps.connections.open failed: HTTP ${response.status} ${response.statusText}`;
+        log.error(`${this.errorMessage} (${this.connectionAlias})`);
+        return;
+      }
+
       const body = (await response.json()) as SlackConnectionsOpenResponse;
 
       if (!body.ok || !body.url) {

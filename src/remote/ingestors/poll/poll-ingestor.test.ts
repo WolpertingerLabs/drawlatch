@@ -591,7 +591,10 @@ describe('PollIngestor', () => {
 
     it('should not follow a cross-origin redirect, and treat it as an error', async () => {
       fetchMock.mockResolvedValue(
-        new Response(null, { status: 302, headers: { location: 'https://evil.example/' } }),
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://evil.example/?k=secret-key-123' },
+        }),
       );
       const ingestor = new PollIngestor(
         'test',
@@ -603,6 +606,10 @@ describe('PollIngestor', () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(ingestor.getStatus().state).toBe('reconnecting');
+      const error = ingestor.getStatus().error ?? '';
+      expect(error).toContain('redirect not followed');
+      expect(error).toContain('https://evil.example/?k=${API_KEY}');
+      expect(error).not.toContain('secret-key-123');
       await ingestor.stop();
     });
 

@@ -21,6 +21,7 @@
 import { BaseIngestor } from '../base-ingestor.js';
 import type { PollIngestorConfig } from '../types.js';
 import { registerIngestorFactory } from '../registry.js';
+import { scrubSecrets } from '../../../shared/config.js';
 import { createLogger } from '../../../shared/logger.js';
 import { safeFetch, sameOriginAs } from '../../safe-fetch.js';
 
@@ -171,6 +172,15 @@ export class PollIngestor extends BaseIngestor {
       }
 
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.get('location');
+          throw new Error(
+            `HTTP ${response.status} redirect not followed` +
+              (location ? ` (Location: ${scrubSecrets(location, this.secrets)})` : '') +
+              ": polls only follow redirects on the poll URL's own origin",
+          );
+        }
         throw new Error(`HTTP ${response.status} ${response.statusText}`);
       }
 

@@ -6,9 +6,15 @@
 
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ResolvedRoute } from '../shared/config.js';
-import { MAX_REDIRECTS, redirectTarget, safeFetch, sameOriginAs } from './safe-fetch.js';
+import {
+  MAX_REDIRECTS,
+  keepsHeaders,
+  redirectTarget,
+  safeFetch,
+  sameOriginAs,
+} from './safe-fetch.js';
 import { executeProxyRequest } from './tool-dispatch.js';
 
 interface Received {
@@ -186,15 +192,23 @@ describe('executeProxyRequest redirects', () => {
 
   it.each([301, 302, 303])('should turn a POST into a bodyless GET on %i', async (status) => {
     const result = await executeProxyRequest(
-      { method: 'POST', url: redirect(status, '/api/echo'), body: { hello: 'world' } },
+      {
+        method: 'POST',
+        url: redirect(status, '/api/echo'),
+        headers: { 'Content-Type': 'application/json', 'Content-Language': 'en' },
+        body: { hello: 'world' },
+      },
       [route()],
     );
     expect(result.status).toBe(200);
     expect(received[0].method).toBe('POST');
     expect(received[0].body).toBe('{"hello":"world"}');
+    expect(received[0].headers['content-type']).toBe('application/json');
     expect(received[1].method).toBe('GET');
     expect(received[1].body).toBe('');
     expect(received[1].headers['content-type']).toBeUndefined();
+    expect(received[1].headers['content-language']).toBeUndefined();
+    expect(received[1].headers['content-length']).toBeUndefined();
     expect(received[1].headers['x-api-key']).toBe(ROUTE_SECRET);
   });
 
@@ -279,6 +293,148 @@ describe('executeProxyRequest redirects', () => {
     ]);
     expect(result.status).toBe(302);
     expect(received).toHaveLength(1);
+  });
+});
+
+describe('executeProxyRequest redirects: secrets in bodies and response headers', () => {
+  it('should not follow a 304, even with a Location', async () => {
+    const result = await executeProxyRequest({ method: 'GET', url: redirect(304, '/api/target') }, [
+      route(),
+    ]);
+    expect(result.status).toBe(304);
+    expect(received).toHaveLength(1);
+  });
+
+  it('should drop a caller Accept header whose value carries a secret cross-origin', async () => {
+    await executeProxyRequest(
+      {
+        method: 'GET',
+        url: redirect(302, `${B}/landing`),
+        headers: { Accept: '${API_KEY}', 'User-Agent': 'drawlatch-test' },
+      },
+      [route()],
+    );
+    const atB = received.filter((r) => r.server === 'b');
+    expect(atB).toHaveLength(1);
+    expect(atB[0].headers.accept).not.toBe(CALLER_SECRET);
+    expect(JSON.stringify(atB[0].headers)).not.toContain(CALLER_SECRET);
+    expect(atB[0].headers['user-agent']).toBe('drawlatch-test');
+  });
+
+  it.each([307, 308])(
+    'should return a cross-origin %i instead of resending a body with substituted secrets',
+    async (status) => {
+      const result = await executeProxyRequest(
+        {
+          method: 'POST',
+          url: redirect(status, `${B}/landing`),
+          body: { key: '${API_KEY}' },
+        },
+        [route({ resolveSecretsInBody: true })],
+      );
+      expect(result.status).toBe(status);
+      expect(received[0].body).toContain(CALLER_SECRET);
+      expect(received.filter((r) => r.server === 'b')).toHaveLength(0);
+    },
+  );
+
+  it('should still resend a body with substituted secrets on a same-origin 307', async () => {
+    const result = await executeProxyRequest(
+      { method: 'POST', url: redirect(307, '/api/echo'), body: { key: '${API_KEY}' } },
+      [route({ resolveSecretsInBody: true })],
+    );
+    expect(result.status).toBe(200);
+    expect(received[1].body).toBe(`{"key":"${CALLER_SECRET}"}`);
+  });
+
+  it('should resend a body without substitutions on a cross-origin 307', async () => {
+    const result = await executeProxyRequest(
+      { method: 'POST', url: redirect(307, `${B}/landing`), body: { key: 'plain' } },
+      [route({ resolveSecretsInBody: true })],
+    );
+    expect(result.status).toBe(200);
+    const atB = received.filter((r) => r.server === 'b');
+    expect(atB[0].method).toBe('POST');
+    expect(atB[0].body).toBe('{"key":"plain"}');
+  });
+
+  it('should scrub a substituted secret from a refused Location', async () => {
+    const result = await executeProxyRequest(
+      { method: 'GET', url: `${A}/api/redirect/302?to=http://evil.invalid/steal?key=\${API_KEY}` },
+      [route()],
+    );
+    expect(result.status).toBe(302);
+    expect(result.headers.location).toBe('http://evil.invalid/steal?key=${API_KEY}');
+    expect(JSON.stringify(result)).not.toContain(CALLER_SECRET);
+  });
+
+  it('should scrub the URL-encoded form of a secret from response headers', async () => {
+    const secret = 'tok en/+=1';
+    const to = `http://evil.invalid/?k=${encodeURIComponent(secret)}`;
+    const result = await executeProxyRequest({ method: 'GET', url: redirect(302, to) }, [
+      route({ secrets: { ODD: secret } }),
+    ]);
+    expect(result.status).toBe(302);
+    expect(result.headers.location).toBe('http://evil.invalid/?k=${ODD}');
+  });
+});
+
+describe('keepsHeaders', () => {
+  const u = (s: string) => new URL(s);
+
+  it('should keep headers on the same origin', () => {
+    expect(keepsHeaders(u('https://h.example/a'), u('https://h.example/b'))).toBe(true);
+  });
+
+  it('should keep headers on a same-host http:80 → https:443 upgrade', () => {
+    expect(keepsHeaders(u('http://h.example/a'), u('https://h.example/b'))).toBe(true);
+    expect(keepsHeaders(u('http://h.example:80/a'), u('https://h.example:443/b'))).toBe(true);
+  });
+
+  it('should treat any other scheme, port, or host change as cross-origin', () => {
+    expect(keepsHeaders(u('http://h.example:8080/'), u('https://h.example/'))).toBe(false);
+    expect(keepsHeaders(u('http://h.example/'), u('https://h.example:8443/'))).toBe(false);
+    expect(keepsHeaders(u('http://h.example/'), u('https://www.h.example/'))).toBe(false);
+    expect(keepsHeaders(u('https://h.example/'), u('http://h.example/'))).toBe(false);
+    expect(keepsHeaders(u('https://h.example/'), u('https://h.example:8443/'))).toBe(false);
+  });
+
+  describe('through safeFetch', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('should send every header on an upgrade hop', async () => {
+      const spy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(
+          new Response(null, { status: 301, headers: { location: 'https://h.example/v1' } }),
+        )
+        .mockResolvedValueOnce(new Response('{}', { status: 200 }));
+      const r = await safeFetch('http://h.example/v1', {
+        method: 'GET',
+        headers: { 'X-Api-Key': ROUTE_SECRET },
+        isAllowed: () => true,
+      });
+      expect(r.response.status).toBe(200);
+      expect(r.url).toBe('https://h.example/v1');
+      expect(spy.mock.calls[1][1]?.headers).toEqual({ 'X-Api-Key': ROUTE_SECRET });
+    });
+
+    it('should strip headers when the upgrade also changes port', async () => {
+      const spy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(
+          new Response(null, { status: 301, headers: { location: 'https://h.example:8443/v1' } }),
+        )
+        .mockResolvedValueOnce(new Response('{}', { status: 200 }));
+      await safeFetch('http://h.example/v1', {
+        method: 'GET',
+        headers: { 'X-Api-Key': ROUTE_SECRET },
+        isAllowed: () => true,
+      });
+      expect(spy.mock.calls[1][1]?.headers).toEqual({});
+    });
   });
 });
 

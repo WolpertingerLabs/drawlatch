@@ -193,7 +193,7 @@ Each cycle makes the configured request with the connection's headers, reads the
 - **First poll:** it runs at start and emits every item in the response.
 - **Changes to known items:** after that, only new IDs are emitted. A later edit to an item already seen (a Notion page, a Linear issue) isn't re-emitted until the listener restarts.
 - **Dedup memory:** up to 10,000 IDs are remembered, and the oldest half is pruned when that fills. Items without the dedup field are always emitted.
-- **Redirects:** followed only on the poll URL's own origin (same scheme, host, and port), never from `https` to `http`, and at most 5 hops. A redirect anywhere else isn't followed, so the connection's headers never reach another host, and counts as an error. Webhook auto-registration requests follow the same rule.
+- **Redirects:** followed only on the poll URL's own origin (same scheme, host, and port), never from `https` to `http`, and at most 5 hops. A redirect anywhere else isn't followed, so the connection's headers never reach another host. It counts as an error, reported as `redirect not followed` with its `Location`. Webhook auto-registration requests follow the same rule.
 - **Errors:** an error sets the state to `reconnecting`. After 10 consecutive errors (non-2xx, or no array at `responsePath`) the listener stops in `error`. A success resets the count.
 
 ## Template reference

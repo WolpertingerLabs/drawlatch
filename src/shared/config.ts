@@ -613,6 +613,56 @@ export function resolvePlaceholders(str: string, secretsMap: Record<string, stri
 }
 
 /**
+ * Replace every resolved secret value found in `text` with its `${NAME}`
+ * placeholder.
+ *
+ * fetch() echoes hostile input straight back in its own error messages, and
+ * what it echoes is the *resolved* form. Two reachable cases:
+ *
+ *   - `TypeError: Headers.append: "Bearer sk-…" is an invalid header value` —
+ *     thrown verbatim when a resolved secret carries an interior CR/LF/NUL
+ *     (a PEM-ish secret, or a token pasted with an embedded newline).
+ *   - `TypeError: Failed to parse URL from /1/boards?key=…` — the resolved URL
+ *     with query-param secrets substituted, reachable when a user-defined
+ *     `allowedEndpoints` of bare `**` compiles to `^.*$` and matches a
+ *     relative URL.
+ *
+ * Either would reach the remote's console, the client, and the model. The
+ * same goes for a redirect's `Location` and the final URL reported after
+ * redirects, which can echo a substituted query parameter back.
+ *
+ * Each secret is scrubbed both as-is and in its `encodeURIComponent` form,
+ * which is how it appears once a server (or a URL parser) has re-encoded a
+ * query string.
+ *
+ * Values shorter than 4 characters are skipped: they are not meaningful
+ * secrets, and substring-replacing them would shred the message (a secret
+ * `a` would turn every `a` in the text into a placeholder). The trade-off is
+ * that a real 1–3 character secret is not scrubbed, which is acceptable
+ * because such a value carries no meaningful protection anyway.
+ *
+ * Longest value first: when one secret is a prefix of another, replacing the
+ * shorter one first leaves the remainder of the longer one exposed (secrets
+ * `tok-OUT` and `tok-OUTER-VALUE` would scrub to `${INNER}ER-VALUE`).
+ */
+export function scrubSecrets(text: string, secrets: Record<string, string>): string {
+  const forms: [name: string, form: string][] = [];
+  for (const [name, value] of Object.entries(secrets)) {
+    if (typeof value !== 'string' || value.length < 4) continue;
+    forms.push([name, value]);
+    const encoded = encodeURIComponent(value);
+    if (encoded !== value) forms.push([name, encoded]);
+  }
+  forms.sort(([, a], [, b]) => b.length - a.length);
+
+  let out = text;
+  for (const [name, form] of forms) {
+    out = out.split(form).join(`\${${name}}`);
+  }
+  return out;
+}
+
+/**
  * Load secrets from the config's secrets map, resolving from environment
  * variables. Value can be a literal string or "${VAR_NAME}" to read from env.
  *

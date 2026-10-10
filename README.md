@@ -248,11 +248,11 @@ The daemon follows redirects itself rather than leaving them to fetch, whose def
 
 - **Allowlist:** the target must match the same connection's `allowedEndpoints`, on the same host or another one.
 - **No downgrade:** an `https` URL never redirects to `http`, even on the same host.
-- **Cross-origin headers:** when the scheme, host, or port changes, only `Accept`, `Accept-Language`, `Content-Language`, `Content-Type`, and `User-Agent` go along, and only when their value contains none of the connection's secrets. Connection headers such as `x-api-key`, `Circle-Token`, `DD-API-KEY`, or Twitch's `Client-Id`, and caller headers with resolved placeholders, are dropped for that hop and every later one. A same-origin hop keeps all headers.
-- **Method and body:** 301 and 302 turn a `POST` into a `GET`, 303 turns anything but `GET` or `HEAD` into a `GET`, and both drop the body and its content headers. 307 and 308 resend the method and body, multipart uploads included.
+- **Cross-origin headers:** when the scheme, host, or port changes, only `Accept`, `Accept-Language`, `Content-Language`, `Content-Type`, and `User-Agent` go along, and only when their value contains none of the connection's secrets. Connection headers such as `x-api-key`, `Circle-Token`, `DD-API-KEY`, or Twitch's `Client-Id`, and caller headers with resolved placeholders, are dropped for that hop and every later one. A same-origin hop keeps all headers, and so does a plain upgrade from `http` on port 80 to `https` on port 443 with the same hostname. Any other port change counts as cross-origin.
+- **Method and body:** 301 and 302 turn a `POST` into a `GET`, 303 turns anything but `GET` or `HEAD` into a `GET`, and both drop the body and its content headers. 307 and 308 resend the method and body, multipart uploads included. If `resolveSecretsInBody` substituted a secret into the body, a 307 or 308 to another origin isn't followed, since the body would go there as-is.
 - **Limit:** at most 5 hops.
 
-A hop that fails a check isn't followed and isn't an error. The 3xx comes back as the result, with its `Location` header, and the target is never contacted. When redirects were followed, the result has a `url` field with the final URL (secrets in it are shown as `${NAME}`).
+A hop that fails a check isn't followed and isn't an error. The 3xx comes back as the result, with its `Location` header, and the target is never contacted. Secrets in response header values, such as a refused `Location` that echoes `?key=…` back, are shown as `${NAME}`, both as-is and URL-encoded. When redirects were followed, the result has a `url` field with the final URL, scrubbed the same way.
 
 `awsSigV4` connections never follow redirects. Listener requests (polls, webhook auto-registration, Slack Socket Mode connect) and trigger dispatch follow redirects only on the request URL's own origin; see [INGESTORS.md](INGESTORS.md#polling).
 

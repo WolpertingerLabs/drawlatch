@@ -14,7 +14,11 @@
  *     requests, the matched route's `allowedEndpoints`).
  *   - https → http is never followed, same host or not.
  *   - A cross-origin hop (scheme, host, or port differs from the previous
- *     URL) sends only `crossOriginHeaders`. Everything else is dropped.
+ *     URL) sends only `crossOriginHeaders`. Everything else is dropped. The
+ *     one exception is a plain upgrade: same hostname, http on port 80 to
+ *     https on port 443, which keeps its headers.
+ *   - A cross-origin 307/308 is not followed when `bodyCarriesSecrets` is
+ *     set, since it would resend the body as-is.
  *   - Method and body follow the fetch spec: 301/302 turn a POST into a GET,
  *     303 turns anything but GET/HEAD into a GET, and both drop the body and
  *     its content headers; 307/308 resend the method and body unchanged
@@ -56,6 +60,11 @@ export interface SafeFetchOptions {
   isAllowed: (url: URL) => boolean;
   /** The only headers sent on and after a cross-origin hop. Default: none. */
   crossOriginHeaders?: Record<string, string>;
+  /**
+   * The body has secrets substituted into it. A 307/308 to another origin
+   * would resend it there, so such a redirect is returned instead.
+   */
+  bodyCarriesSecrets?: boolean;
   /** Hop limit. 0 never follows: every 3xx comes straight back. */
   maxRedirects?: number;
 }
@@ -71,6 +80,23 @@ export interface SafeFetchResult {
 /** Whether two URLs share scheme, host, and port. */
 export function isSameOrigin(a: URL, b: URL): boolean {
   return a.origin === b.origin;
+}
+
+/**
+ * Whether a hop from `from` to `to` may keep its headers: same origin, or the
+ * same hostname upgraded from http on port 80 to https on port 443. `URL`
+ * normalizes a default port to '', so explicit `:80` / `:443` count too. Any
+ * other port change is cross-origin.
+ */
+export function keepsHeaders(from: URL, to: URL): boolean {
+  if (isSameOrigin(from, to)) return true;
+  return (
+    from.protocol === 'http:' &&
+    to.protocol === 'https:' &&
+    from.hostname === to.hostname &&
+    from.port === '' &&
+    to.port === ''
+  );
 }
 
 /** An `isAllowed` policy for fixed, non-caller URLs: stay on the first URL's origin. */
@@ -133,7 +159,11 @@ export async function safeFetch(url: string, options: SafeFetchOptions): Promise
     const toGet =
       (response.status === 303 && upper !== 'GET' && upper !== 'HEAD') ||
       ((response.status === 301 || response.status === 302) && upper === 'POST');
-    let nextHeaders = isSameOrigin(current, target) ? headers : (options.crossOriginHeaders ?? {});
+    const sameSite = keepsHeaders(current, target);
+    if (!toGet && !sameSite && options.bodyCarriesSecrets && body !== undefined) {
+      return { response, url: currentHref, redirects };
+    }
+    let nextHeaders = sameSite ? headers : (options.crossOriginHeaders ?? {});
     if (toGet) {
       method = 'GET';
       body = undefined;
