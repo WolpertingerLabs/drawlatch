@@ -6,7 +6,8 @@
   "docsUrl": "https://circleci.com/docs/api/v2/",
   "openApiUrl": "https://circleci.com/api/v2/openapi.json",
   "headers": {
-    "Circle-Token": "${CIRCLECI_TOKEN}"
+    "Circle-Token": "${CIRCLECI_TOKEN}",
+    "Content-Type": "application/json"
   },
   "secrets": {
     "CIRCLECI_TOKEN": "${CIRCLECI_TOKEN}"

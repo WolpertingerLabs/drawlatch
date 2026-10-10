@@ -1268,7 +1268,7 @@ describe('listConnectionTemplates — stability field (integration)', () => {
 
   it('should report stability="beta" for github, stripe, and other beta connections', () => {
     const templates = listConnectionTemplates();
-    const betaAliases = ['stripe', 'anthropic', 'openai'];
+    const betaAliases = ['stripe', 'anthropic', 'openai', 'circleci', 'digitalocean'];
 
     for (const alias of betaAliases) {
       const t = templates.find((t) => t.alias === alias)!;
