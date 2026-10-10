@@ -180,6 +180,26 @@ describe('bundled connection templates', () => {
     expect(route.docsUrl).toBeTruthy();
   });
 
+  it('should load aws connection template', () => {
+    const route = loadConnection('aws');
+
+    expect(route.name).toBe('AWS API');
+    expect(route.allowedEndpoints).toEqual(['https://*.amazonaws.com/**']);
+    expect(route.awsSigV4).toEqual({});
+    expect(route.headers).toBeUndefined();
+    expect(Object.keys(route.secrets ?? {})).toEqual([
+      'AWS_ACCESS_KEY_ID',
+      'AWS_SECRET_ACCESS_KEY',
+      'AWS_SESSION_TOKEN',
+    ]);
+    expect(route.testConnection).toMatchObject({
+      method: 'POST',
+      url: 'https://sts.amazonaws.com/',
+      body: 'Action=GetCallerIdentity&Version=2011-06-15',
+    });
+    expect(route.docsUrl).toBeTruthy();
+  });
+
   it('should load circleci connection template', () => {
     const route = loadConnection('circleci');
 
@@ -452,6 +472,7 @@ describe('bundled connection templates', () => {
 
     expect(available).toContain('agentmail');
     expect(available).toContain('anthropic');
+    expect(available).toContain('aws');
     expect(available).toContain('circleci');
     expect(available).toContain('datadog');
     expect(available).toContain('devin');
@@ -675,6 +696,15 @@ describe('listConnectionTemplates (integration)', () => {
     expect(anthropic.optionalSecrets).toEqual([]);
     expect(anthropic.hasIngestor).toBe(false);
     expect(anthropic.ingestorType).toBeUndefined();
+  });
+
+  it('should correctly introspect aws template (SigV4 signing keys required)', () => {
+    const aws = listConnectionTemplates().find((t) => t.alias === 'aws')!;
+
+    expect(aws.requiredSecrets).toEqual(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY']);
+    expect(aws.optionalSecrets).toEqual(['AWS_SESSION_TOKEN']);
+    expect(aws.category).toBe('developer-tools');
+    expect(aws.hasTestConnection).toBe(true);
   });
 
   it('should correctly introspect slack template (websocket ingestor)', () => {
@@ -1309,7 +1339,7 @@ describe('listConnectionTemplates — stability field (integration)', () => {
 
   it('should report stability="beta" for github, stripe, and other beta connections', () => {
     const templates = listConnectionTemplates();
-    const betaAliases = ['stripe', 'anthropic', 'openai', 'circleci', 'digitalocean'];
+    const betaAliases = ['stripe', 'anthropic', 'openai', 'circleci', 'digitalocean', 'aws'];
 
     for (const alias of betaAliases) {
       const t = templates.find((t) => t.alias === alias)!;

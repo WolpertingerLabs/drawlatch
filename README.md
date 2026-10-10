@@ -4,7 +4,7 @@
 
 Drawlatch gives AI agents authenticated access to external APIs without giving them the credentials. A daemon holds your secrets and makes the API calls. Agents reach it through a local MCP server over an end-to-end encrypted, mutually authenticated channel, and can only call the URL patterns each connection allows.
 
-- **30 pre-built connections** (GitHub, Slack, Discord, Stripe, Notion, Linear, OpenAI, …) plus your own custom connectors. See [CONNECTIONS.md](CONNECTIONS.md).
+- **31 pre-built connections** (GitHub, Slack, Discord, Stripe, Notion, Linear, OpenAI, …) plus your own custom connectors. See [CONNECTIONS.md](CONNECTIONS.md).
 - **Per-caller access control.** Each agent identity (caller) sees only its own connections and secrets.
 - **Real-time events.** WebSocket, webhook, and polling listeners buffer events for agents to read. See [INGESTORS.md](INGESTORS.md).
 - **Admin dashboard** for callers, connections, secrets, and listeners, served by the daemon itself.
@@ -205,7 +205,7 @@ With this connector, caller `default` reads `ADMIN_KEY` from `DEFAULT_ADMIN_KEY`
 
 #### AWS SigV4 signing
 
-AWS APIs need a signature computed per request, so a static header can't authenticate them. A connector with `awsSigV4` gets one from the daemon instead. After the URL, headers, and body are final, the daemon signs the exact bytes it sends and adds `Authorization`, `X-Amz-Date`, `X-Amz-Content-Sha256` (the SHA-256 of the body), and `X-Amz-Security-Token` when a session token is set.
+AWS APIs need a signature computed per request, so a static header can't authenticate them. A connector with `awsSigV4` gets one from the daemon instead. After the URL, headers, and body are final, the daemon signs the exact bytes it sends and adds `Authorization`, `X-Amz-Date`, `X-Amz-Content-Sha256` (the SHA-256 of the body), and `X-Amz-Security-Token` when a session token is set. The built-in [`aws`](CONNECTIONS.md#notes-by-connection) template uses it.
 
 - **Credentials** are the connector's `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` secrets, plus `AWS_SESSION_TOKEN` for temporary credentials. They resolve per caller like any other secret, so `"AWS_ACCESS_KEY_ID": "${PROD_AWS_ACCESS_KEY_ID}"` in `secrets` points a connector at different variables. The first two count as required. If either is missing, the request fails without being sent.
 - **Service and region** come from the request hostname: `<service>.<region>.amazonaws.com`, `<id>.<service>.<region>.amazonaws.com` (API Gateway, SageMaker runtime), `<id>.<region>.<service>.amazonaws.com` (OpenSearch), and S3's virtual-hosted, path-style, dual-stack, and legacy `s3-<region>` hosts. A global endpoint such as `sts.amazonaws.com` or `iam.amazonaws.com` signs for `us-east-1`. A few endpoint prefixes map to a different signing name (`bedrock-runtime` and `bedrock-agent*` → `bedrock`, `email` → `ses`, `aps-workspaces` → `aps`). For anything else, set `service` and `region` explicitly, which overrides the inference for every request on that connector.

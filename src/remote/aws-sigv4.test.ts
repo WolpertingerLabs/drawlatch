@@ -15,9 +15,11 @@ import { fileURLToPath } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import type { ResolvedRoute } from '../shared/config.js';
+import { resolveRoutes, type ResolvedRoute } from '../shared/config.js';
+import { loadConnection } from '../shared/connections.js';
 import { inferAwsScope, signProxyRequest, signSigV4, uriEncode } from './aws-sigv4.js';
-import { executeProxyRequest, isEndpointAllowed } from './tool-dispatch.js';
+import { executeProxyRequest, isEndpointAllowed, toolHandlers } from './tool-dispatch.js';
+import type { ToolContext } from './tool-dispatch.js';
 
 // ── AWS test suite ─────────────────────────────────────────────────────────
 
@@ -526,6 +528,26 @@ describe('executeProxyRequest with awsSigV4', () => {
     await executeProxyRequest({ method: 'GET', url: `${base}/` }, [route({ awsSigV4: undefined })]);
     expect(received[0].headers.authorization).toBeUndefined();
     expect(received[0].headers['x-amz-date']).toBeUndefined();
+  });
+});
+
+// ── Route resolution ───────────────────────────────────────────────────────
+
+describe('aws template resolution', () => {
+  it('should carry awsSigV4 through resolveRoutes and report it in list_routes', async () => {
+    const [resolved] = resolveRoutes([{ ...loadConnection('aws'), alias: 'aws' }], {
+      AWS_ACCESS_KEY_ID: 'AKID',
+      AWS_SECRET_ACCESS_KEY: 'sk-unique-value',
+    });
+    expect(resolved.awsSigV4).toEqual({});
+    expect(resolved.secrets).toMatchObject({ AWS_ACCESS_KEY_ID: 'AKID' });
+
+    const routes = (await toolHandlers.list_routes({}, [resolved], {} as ToolContext)) as Record<
+      string,
+      unknown
+    >[];
+    expect(routes[0].awsSigV4).toEqual({});
+    expect(JSON.stringify(routes)).not.toContain('sk-unique-value');
   });
 });
 
