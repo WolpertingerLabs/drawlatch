@@ -568,6 +568,47 @@ describe('listConnectionTemplates (unit)', () => {
     expect(t.optionalSecrets).toEqual(['WEBHOOK_KEY', 'POLL_URL_VAR']);
   });
 
+  it("should treat an awsSigV4 route's signing keys as required and its session token as optional", () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['signed.json']);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'Signed',
+        category: 'developer-tools',
+        awsSigV4: { service: 'execute-api', region: 'us-east-1' },
+        headers: { 'x-api-key': '${API_KEY}' },
+        secrets: {
+          AWS_SESSION_TOKEN: '${AWS_SESSION_TOKEN}',
+          AWS_SECRET_ACCESS_KEY: '${AWS_SECRET_ACCESS_KEY}',
+          API_KEY: '${API_KEY}',
+          AWS_ACCESS_KEY_ID: '${AWS_ACCESS_KEY_ID}',
+        },
+        allowedEndpoints: ['https://abc.execute-api.us-east-1.amazonaws.com/**'],
+      }),
+    );
+
+    const t = listConnectionTemplates()[0];
+    expect(t.requiredSecrets).toEqual(['AWS_SECRET_ACCESS_KEY', 'API_KEY', 'AWS_ACCESS_KEY_ID']);
+    expect(t.optionalSecrets).toEqual(['AWS_SESSION_TOKEN']);
+  });
+
+  it('should not require AWS secrets on a route without awsSigV4', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['plain.json']);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'Plain',
+        category: 'developer-tools',
+        secrets: { AWS_ACCESS_KEY_ID: '${AWS_ACCESS_KEY_ID}' },
+        allowedEndpoints: ['https://api.plain.example/**'],
+      }),
+    );
+
+    const t = listConnectionTemplates()[0];
+    expect(t.requiredSecrets).toEqual([]);
+    expect(t.optionalSecrets).toEqual(['AWS_ACCESS_KEY_ID']);
+  });
+
   it('should return empty array when no connections exist', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
 

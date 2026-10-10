@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Route, ConnectionCategory } from './config.js';
+import { AWS_SIGV4_REQUIRED_SECRETS, type Route, type ConnectionCategory } from './config.js';
 
 /** Metadata about a built-in connection template — used by UIs to render
  *  connection cards, form fields, and badges without parsing raw JSON. */
@@ -31,11 +31,12 @@ export interface ConnectionTemplateInfo {
   stability: 'stable' | 'beta' | 'dev';
   /** Category grouping (e.g., "ai", "messaging", "social-media"). */
   category: ConnectionCategory;
-  /** Secret names referenced in route headers — these are auto-injected
-   *  into every request, so they must always be configured. */
+  /** Secret names every request authenticates with — placeholders in route
+   *  headers, plus AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY on an `awsSigV4`
+   *  route — so they must always be configured. */
   requiredSecrets: string[];
-  /** Secret names defined in the template but NOT referenced in headers.
-   *  Used by ingestors, URL placeholders, body templates, etc. */
+  /** Secret names defined in the template but not required for auth.
+   *  Used by ingestors, URL placeholders, body templates, AWS_SESSION_TOKEN, etc. */
   optionalSecrets: string[];
   /** Whether this connection has an ingestor for real-time events. */
   hasIngestor: boolean;
@@ -156,10 +157,11 @@ function extractPlaceholderNames(str: string): Set<string> {
  * allowed endpoints.
  *
  * Secret categorization:
- *   - **required** — referenced in route `headers` values (auto-injected
- *     into every outgoing request, so they must always be configured).
- *   - **optional** — defined in the template's `secrets` map but not
- *     referenced in headers (used by ingestors, URL placeholders, etc.).
+ *   - **required** — referenced in route `headers` values, or the signing
+ *     keys of an `awsSigV4` route (used on every outgoing request, so they
+ *     must always be configured).
+ *   - **optional** — every other entry in the template's `secrets` map (used
+ *     by ingestors, URL placeholders, an AWS session token, etc.).
  *
  * Used by:
  *   - the remote server's tool dispatch and boot-time health table
@@ -170,18 +172,22 @@ export function listConnectionTemplates(): ConnectionTemplateInfo[] {
   return listAvailableConnections().map((alias) => {
     const route = loadConnection(alias);
 
-    // Collect secret names referenced in header values
-    const headerSecretNames = new Set<string>();
+    // Collect secret names every request authenticates with: placeholders in
+    // header values, plus the signing keys of an awsSigV4 route
+    const authSecretNames = new Set<string>();
     for (const value of Object.values(route.headers ?? {})) {
       for (const name of extractPlaceholderNames(value)) {
-        headerSecretNames.add(name);
+        authSecretNames.add(name);
       }
     }
+    if (route.awsSigV4) {
+      for (const name of AWS_SIGV4_REQUIRED_SECRETS) authSecretNames.add(name);
+    }
 
-    // Partition secrets into required (in headers) vs optional (elsewhere)
+    // Partition secrets into required (used for auth) vs optional (elsewhere)
     const allSecretNames = Object.keys(route.secrets ?? {});
-    const requiredSecrets = allSecretNames.filter((s) => headerSecretNames.has(s));
-    const optionalSecrets = allSecretNames.filter((s) => !headerSecretNames.has(s));
+    const requiredSecrets = allSecretNames.filter((s) => authSecretNames.has(s));
+    const optionalSecrets = allSecretNames.filter((s) => !authSecretNames.has(s));
 
     return {
       alias,

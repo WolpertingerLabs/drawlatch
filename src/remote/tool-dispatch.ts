@@ -30,6 +30,11 @@ import {
 } from '../shared/config.js';
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller, setCallerSecrets } from '../shared/env-utils.js';
+import {
+  SIGV4_RESERVED_HEADERS,
+  SIGV4_RESERVED_QUERY_PARAMS,
+  signProxyRequest,
+} from './aws-sigv4.js';
 import type { IngestorManager } from './ingestors/index.js';
 import { waitForEvents } from './wait-for-events.js';
 
@@ -48,8 +53,41 @@ export function isEndpointAllowed(url: string, patterns: string[]): boolean {
           .replace(/\.__DOUBLE_STAR__\./g, '.*') +
         '$',
     );
-    return regex.test(url);
+    return regex.test(url) && wildcardHostMatches(url, pattern);
   });
+}
+
+/**
+ * Re-check a pattern whose host contains a wildcard against the host the URL
+ * actually parses to.
+ *
+ * In the string match, a `*` in the host also matches `?`, `#`, and `@`, so
+ * `https://*.amazonaws.com/**` alone would accept
+ * `https://evil.example?.amazonaws.com/`, which fetch() sends to evil.example.
+ * Here a host wildcard only matches characters a parsed host can contain.
+ * Patterns without a scheme or without a host wildcard pass through unchanged.
+ */
+function wildcardHostMatches(url: string, pattern: string): boolean {
+  const m = /^([a-z][a-z0-9+.-]*):\/\/([^/]*)/i.exec(pattern);
+  if (!m?.[2].includes('*')) return true;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== `${m[1].toLowerCase()}:`) return false;
+
+  const hostRegex = new RegExp(
+    '^' +
+      m[2]
+        .toLowerCase()
+        .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*+/g, '[a-z0-9.:[\\]-]*') +
+      '$',
+  );
+  return hostRegex.test(parsed.host);
 }
 
 /**
@@ -332,6 +370,31 @@ export async function executeProxyRequest(
     }
   }
 
+  // Step 3b: On a SigV4 route the signer owns the auth headers. Letting a
+  // caller set them would let it choose what gets signed.
+  if (matched.awsSigV4) {
+    for (const clientKey of Object.keys(resolvedHeaders)) {
+      if (SIGV4_RESERVED_HEADERS.has(clientKey.toLowerCase())) {
+        throw new Error(
+          `Header conflict: "${clientKey}" is set by drawlatch's AWS SigV4 signer on this route. Remove it from the request.`,
+        );
+      }
+    }
+    let params: URLSearchParams | undefined;
+    try {
+      params = new URL(resolvedUrl).searchParams;
+    } catch {
+      // Unparseable URLs fail at fetch() / signing with their own error.
+    }
+    for (const key of params?.keys() ?? []) {
+      if (SIGV4_RESERVED_QUERY_PARAMS.has(key.toLowerCase())) {
+        throw new Error(
+          `Query parameter "${key}" is not allowed on an AWS SigV4 route: drawlatch signs the request itself.`,
+        );
+      }
+    }
+  }
+
   // Step 4: Merge route-level headers (they take effect after conflict check)
   for (const [k, v] of Object.entries(matched.headers)) {
     resolvedHeaders[k] = v;
@@ -402,6 +465,23 @@ export async function executeProxyRequest(
     throw new Error(`Endpoint not allowed after resolution: ${url}`);
   }
 
+  // Step 6b: AWS SigV4. Last, so the signature covers the final URL, headers,
+  // and body bytes exactly as sent.
+  let outboundHeaders = resolvedHeaders;
+  let outboundBody: BodyInit | undefined = fetchBody;
+  if (matched.awsSigV4) {
+    const signed = await signProxyRequest({
+      method,
+      url: resolvedUrl,
+      headers: resolvedHeaders,
+      body: fetchBody,
+      config: matched.awsSigV4,
+      secrets: matched.secrets,
+    });
+    outboundHeaders = signed.headers;
+    outboundBody = signed.body;
+  }
+
   // Step 7: Make the actual HTTP request.
   // Always pass a signal — a bare fetch() would inherit undici's 300s headers
   // timeout, which is larger than every outer ceiling in the chain and so
@@ -417,8 +497,8 @@ export async function executeProxyRequest(
     // opaque error the drawlatch deadline exists to replace.
     const resp = await fetch(resolvedUrl, {
       method,
-      headers: resolvedHeaders,
-      body: fetchBody,
+      headers: outboundHeaders,
+      body: outboundBody,
       signal: AbortSignal.timeout(effectiveTimeout),
     });
 
@@ -541,6 +621,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
       info.allowedEndpoints = route.allowedEndpoints;
       info.secretNames = Object.keys(route.secrets);
       info.autoHeaders = Object.keys(route.headers);
+      if (route.awsSigV4) info.awsSigV4 = route.awsSigV4;
 
       // Timeouts. The budget clamp is otherwise silent, so report what a call
       // would actually get *right now* rather than only the connection's
