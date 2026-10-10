@@ -4,7 +4,7 @@
 
 Drawlatch gives AI agents authenticated access to external APIs without giving them the credentials. A daemon holds your secrets and makes the API calls. Agents reach it through a local MCP server over an end-to-end encrypted, mutually authenticated channel, and can only call the URL patterns each connection allows.
 
-- **30 pre-built connections** (GitHub, Slack, Discord, Stripe, Notion, Linear, OpenAI, …) plus your own custom connectors. See [CONNECTIONS.md](CONNECTIONS.md).
+- **32 pre-built connections** (GitHub, Slack, Discord, Stripe, Notion, Linear, OpenAI, …) plus your own custom connectors. See [CONNECTIONS.md](CONNECTIONS.md).
 - **Per-caller access control.** Each agent identity (caller) sees only its own connections and secrets.
 - **Real-time events.** WebSocket, webhook, and polling listeners buffer events for agents to read. See [INGESTORS.md](INGESTORS.md).
 - **Admin dashboard** for callers, connections, secrets, and listeners, served by the daemon itself.
@@ -84,7 +84,7 @@ The local MCP server exposes these tools. Every call goes through the encrypted 
 | Tool | Purpose |
 | --- | --- |
 | `secure_request` | HTTP request to an allowlisted URL. Connection headers are injected for you. `${VAR}` placeholders in the URL and headers resolve server-side from the matched connection's secrets (in the body only if the connection sets `resolveSecretsInBody`). Supports multipart uploads from local files (25 MB per file, 50 MB per base64-encoded request): with `files`, the JSON `body` is sent as a form part named `payload_json` (change it with `bodyFieldName`). Also takes a per-call `timeoutMs`. |
-| `list_routes` | The caller's connections: docs links, allowed endpoint patterns, the *names* of secrets that are set, auto-injected header names, timeouts, listener info. |
+| `list_routes` | The caller's connections: docs links, allowed endpoint patterns, the *names* of secrets that are set, auto-injected header names, `awsSigV4` settings, timeouts, listener info. |
 | `test_connection` | Run a connection's built-in credential check. Some cost a little credit; see [CONNECTIONS.md](CONNECTIONS.md#available-connections). |
 | `list_connection_templates` | All built-in templates, with which are enabled for this caller and which secrets are set (booleans). Custom connectors aren't listed. |
 | `set_connection_enabled` | Enable or disable a connection for this caller. |
@@ -167,7 +167,7 @@ Connections reference secrets as `${NAME}` (for example, `${GITHUB_TOKEN}`). For
 
 A bare `GITHUB_TOKEN` is never used. This keeps one caller from picking up another's credentials. The daemon loads `.env` at startup, so restart after editing it by hand. The dashboard and `set_secrets` write `<ALIAS>_<NAME>` to `.env` and apply the change immediately.
 
-If a secret isn't set, its placeholder is sent literally (for example, `Authorization: Bearer ${GITHUB_TOKEN}`), and the upstream API will usually answer `401`. `drawlatch doctor`, `drawlatch config`, and the dashboard's Secrets page show what's missing. They check only built-in templates, and only secrets used in a template's headers: custom connectors are skipped, and a token that goes in the URL (Telegram, Trello) isn't flagged. `doctor` also prints the unprefixed name ("Set GITHUB_TOKEN in …/.env"); whatever it says, set `<ALIAS>_<NAME>` (`DEFAULT_GITHUB_TOKEN` for the default caller).
+If a secret isn't set, its placeholder is sent literally (for example, `Authorization: Bearer ${GITHUB_TOKEN}`), and the upstream API will usually answer `401`. An [`awsSigV4`](#aws-sigv4-signing) connection without its signing keys fails the request instead of sending it. `drawlatch doctor`, `drawlatch config`, and the dashboard's Secrets page show what's missing. They check only built-in templates, and only secrets used in a template's headers or, for an `awsSigV4` template, its signing keys: custom connectors are skipped, and a token that goes in the URL (Telegram, Trello) isn't flagged. `doctor` also prints the unprefixed name ("Set GITHUB_TOKEN in …/.env"); whatever it says, set `<ALIAS>_<NAME>` (`DEFAULT_GITHUB_TOKEN` for the default caller).
 
 > **Known issue:** an `env` value that redirects to another variable, such as `"GITHUB_TOKEN": "${ALICE_TOKEN}"`, is ignored; the prefixed variable (`<ALIAS>_GITHUB_TOKEN`) is used if set. Status checks still report the redirected secret as set. Use a literal value or the prefixed variable instead.
 
@@ -196,11 +196,22 @@ With this connector, caller `default` reads `ADMIN_KEY` from `DEFAULT_ADMIN_KEY`
 | `alias` | Required. Name referenced from a caller's `connections`. |
 | `allowedEndpoints` | Required. URL globs: `*` matches within a path segment, `**` across segments. An empty list matches nothing. |
 | `headers` | Headers injected into every request. `${VAR}` resolves against `secrets`. A request that sets the same header itself is rejected. |
+| `awsSigV4` | Sign every request with AWS Signature Version 4: `{}`, or `{ "service": "…", "region": "…" }` to override what's inferred from the hostname. See [AWS SigV4 signing](#aws-sigv4-signing). |
 | `secrets` | `NAME → value`. The value is a literal, or `${VAR}` resolved per caller as in [Secrets](#secrets). |
 | `resolveSecretsInBody` | Resolve `${VAR}` in request bodies. Default `false`, which stops an agent from writing a placeholder into a resource and reading the secret back. |
 | `requestTimeoutMs` | Default outbound timeout for this API, and the most a caller may request (see [Request timeouts](#request-timeouts)). |
 | `name`, `description`, `docsUrl`, `openApiUrl` | Shown to agents by `list_routes`. |
 | `testConnection`, `ingestor`, `listenerConfig`, `testIngestor` | Credential test and event listener definitions. Built-in templates in `src/connections/` are the reference. |
+
+#### AWS SigV4 signing
+
+AWS APIs need a signature computed per request, so a static header can't authenticate them. A connector with `awsSigV4` gets one from the daemon instead. After the URL, headers, and body are final, the daemon signs the exact bytes it sends and adds `Authorization`, `X-Amz-Date`, `X-Amz-Content-Sha256` (the SHA-256 of the body), and `X-Amz-Security-Token` when a session token is set. The built-in [`aws`](CONNECTIONS.md#notes-by-connection) template uses it.
+
+- **Credentials** are the connector's `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` secrets, plus `AWS_SESSION_TOKEN` for temporary credentials. They resolve per caller like any other secret, so `"AWS_ACCESS_KEY_ID": "${PROD_AWS_ACCESS_KEY_ID}"` in `secrets` points a connector at different variables. The first two count as required. If either is missing, the request fails without being sent. Only the signer reads these three. They, and any other secret whose value contains one of them, are never substituted for `${VAR}` in a URL, a header, a connector's own `headers`, a body with `resolveSecretsInBody`, or a listener's requests; a request that references one is rejected.
+- **Service and region** come from the request hostname: `<service>.<region>.amazonaws.com`, `<id>.<service>.<region>.amazonaws.com` (API Gateway, SageMaker runtime), `<id>.<region>.<service>.amazonaws.com` (OpenSearch), interface VPC endpoints (`vpce-….<service>.<region>.vpce.amazonaws.com`), and S3's virtual-hosted, path-style, dual-stack, and legacy `s3-<region>` hosts, with `s3-outposts` and `s3-object-lambda` as their own signing names. A global endpoint such as `sts.amazonaws.com` or `iam.amazonaws.com` signs for `us-east-1`, and `iam.us-gov.amazonaws.com` for `us-gov-west-1`. A few endpoint prefixes map to a different signing name (`bedrock-runtime` and `bedrock-agent*` → `bedrock`, `email` → `ses`, `aps-workspaces` → `aps`). For anything else, set `service` and `region` explicitly, which overrides the inference for every request on that connector.
+- **Reserved names.** A request may not set `Authorization`, `Host`, `X-Amz-Date`, `X-Amz-Content-Sha256`, or `X-Amz-Security-Token`, or carry presigned-URL query parameters (`X-Amz-Signature`, `X-Amz-Credential`, and so on). Such a request is rejected. Other `x-amz-*` headers, such as `X-Amz-Target` or `x-amz-meta-*`, are sent and signed.
+- **What's signed:** `host`, every header sent except hop-by-hop ones (`connection`, `user-agent`, `content-length`, and similar), and the body. A string body is sent as UTF-8, with fetch's default `text/plain;charset=UTF-8` content type unless you set one. Multipart uploads are serialized before signing. Paths are normalized and encoded per segment as SigV4 requires. S3 paths are encoded once and not normalized. The URL itself is parsed first, which already resolves `.` and `..` segments (including `%2E%2E`), so S3 keys containing those segments can't be reached.
+- **Redirects** aren't followed. A 3xx comes back to the caller with its `Location` header, so a signed request and its session token are never replayed to a host the allowlist didn't check.
 
 ### Proxy config (`proxy.config.json`)
 

@@ -18,6 +18,7 @@ import {
   resolveCallerRoutes,
   resolveRoutes,
   resolveSecrets,
+  substitutableSecrets,
   type CallerConfig,
   type IngestorOverrides,
   type RemoteServerConfig,
@@ -208,7 +209,8 @@ export class IngestorManager {
     const effectiveConfig = IngestorManager.mergeIngestorConfig(rawRoute.ingestor!, overrides);
 
     // Apply instance params to config and secrets
-    const instanceSecrets = { ...resolvedRoute.secrets };
+    // Listeners substitute ${VAR}s too, so withhold SigV4 signing credentials.
+    const instanceSecrets = { ...substitutableSecrets(resolvedRoute) };
     if (overrides?.params && rawRoute.listenerConfig) {
       IngestorManager.applyInstanceParams(
         effectiveConfig,
@@ -569,7 +571,8 @@ export class IngestorManager {
     const effectiveConfig = IngestorManager.mergeIngestorConfig(rawRoute.ingestor!, overrides);
 
     // Apply instance params
-    const instanceSecrets = { ...resolvedRoute.secrets };
+    // Listeners substitute ${VAR}s too, so withhold SigV4 signing credentials.
+    const instanceSecrets = { ...substitutableSecrets(resolvedRoute) };
     if (overrides?.params && rawRoute.listenerConfig) {
       IngestorManager.applyInstanceParams(
         effectiveConfig,

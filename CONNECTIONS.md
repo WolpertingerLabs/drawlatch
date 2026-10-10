@@ -10,12 +10,13 @@ Then set the secrets for that caller. Caller `default` reads `GITHUB_TOKEN` from
 
 ## Available connections
 
-**Bold** secrets are needed for API calls. The others are used only by the event listener, if at all. `doctor`, `config`, and the dashboard flag missing secrets only for built-in templates, and only those used in headers, so they won't catch a missing Telegram or Trello token. Set `<ALIAS>_<NAME>` even where `doctor` prints the bare name. Listener types are described in [INGESTORS.md](INGESTORS.md).
+**Bold** secrets are needed for API calls. The others are used only by the event listener, if at all. `doctor`, `config`, and the dashboard flag missing secrets only for built-in templates, and only those used in headers, so they won't catch a missing Telegram or Trello token. (`aws` is the exception: its signing keys count as required.) Set `<ALIAS>_<NAME>` even where `doctor` prints the bare name. Listener types are described in [INGESTORS.md](INGESTORS.md).
 
 | Connection | API | Secrets | Auth | Listener |
 | --- | --- | --- | --- | --- |
 | `agentmail` | [AgentMail](https://docs.agentmail.to/api-reference) | **`AGENTMAIL_API_KEY`** | Bearer | |
 | `anthropic` | [Anthropic](https://docs.anthropic.com/en/api) | **`ANTHROPIC_API_KEY`** | `x-api-key` | |
+| `aws` | [AWS](https://docs.aws.amazon.com/general/latest/gr/aws-service-information.html) | **`AWS_ACCESS_KEY_ID`**, **`AWS_SECRET_ACCESS_KEY`**, `AWS_SESSION_TOKEN` | SigV4 signature | |
 | `bluesky` | [Bluesky (AT Protocol)](https://docs.bsky.app/) | **`BLUESKY_ACCESS_TOKEN`** | Bearer | poll |
 | `circleci` | [CircleCI](https://circleci.com/docs/api/v2/) | **`CIRCLECI_TOKEN`** | `Circle-Token` | |
 | `datadog` | [Datadog](https://docs.datadoghq.com/api/latest/) | **`DATADOG_API_KEY`**, **`DATADOG_APP_KEY`** | `DD-API-KEY`, `DD-APPLICATION-KEY` | |
@@ -43,17 +44,28 @@ Then set the secrets for that caller. Caller `default` reads `GITHUB_TOKEN` from
 | `telegram` | [Telegram Bot API](https://core.telegram.org/bots/api) | **`TELEGRAM_BOT_TOKEN`** | token in URL path | poll |
 | `trello` | [Trello](https://developer.atlassian.com/cloud/trello/rest/) | **`TRELLO_API_KEY`**, **`TRELLO_TOKEN`**, `TRELLO_API_SECRET`, `TRELLO_CALLBACK_URL` | query parameters | webhook |
 | `twitch` | [Twitch Helix](https://dev.twitch.tv/docs/api/reference/) | **`TWITCH_ACCESS_TOKEN`**, **`TWITCH_CLIENT_ID`**, `TWITCH_USER_ID` | Bearer + `Client-Id` | poll |
+| `vercel` | [Vercel](https://vercel.com/docs/rest-api) | **`VERCEL_TOKEN`** | Bearer | |
 | `x` | [X API v2](https://developer.x.com/en/docs/x-api) | **`X_BEARER_TOKEN`**, `X_SEARCH_QUERY` | Bearer | poll |
 
 Every template has a built-in `test_connection` request. Three of them cost a little credit: the Anthropic test sends a 1-token message, Exa runs a one-result search, and Parallel runs a small `turbo` search.
 
-A secret that isn't set is sent as the literal placeholder (for example, `Bearer ${LICHESS_API_TOKEN}`). Set every bold secret even for APIs with public endpoints.
+A secret that isn't set is sent as the literal placeholder (for example, `Bearer ${LICHESS_API_TOKEN}`). The `aws` connection refuses to send a request without its keys instead. Set every bold secret even for APIs with public endpoints.
 
 ## Notes by connection
 
 **AgentMail.** Email for agents: inboxes, messages, threads, drafts. Endpoints are under `/v0` on `api.agentmail.to`. Create a key in the [AgentMail Console](https://console.agentmail.to). Inbound-email webhooks aren't wired up as a listener.
 
 **Anthropic.** `anthropic-version` is pinned to `2023-06-01`. Override with a custom connector to use another version.
+
+**AWS.** The daemon signs every request with [Signature Version 4](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html), so the agent never handles the keys. How signing works, and which headers a request may not set, is in [README → AWS SigV4 signing](README.md#aws-sigv4-signing). Notes for using the template:
+
+- **Region and service** come from the hostname. Call the regional endpoint for the region you want, such as `https://dynamodb.eu-west-1.amazonaws.com/` or `https://sts.ap-southeast-2.amazonaws.com/`. Global endpoints (`sts.amazonaws.com`, `iam.amazonaws.com`, `route53.amazonaws.com`) sign for `us-east-1`. The [service endpoints list](https://docs.aws.amazon.com/general/latest/gr/aws-service-information.html) has each service's hostnames. Where the endpoint prefix isn't the signing name and drawlatch doesn't know the mapping (for example, IoT data plane endpoints sign as `iotdata`), add a custom connector with an explicit `awsSigV4.service`/`region` and narrower `allowedEndpoints`.
+- **Request formats.** Query-protocol APIs (STS, IAM, EC2) take `Action=…&Version=…` as a GET query or as a form-encoded POST body with `Content-Type: application/x-www-form-urlencoded; charset=utf-8`. JSON-protocol APIs (DynamoDB, CloudWatch Logs, and others) need `Content-Type: application/x-amz-json-1.0` or `1.1` and an `X-Amz-Target` header. Pass these yourself. A JSON object body otherwise gets `application/json`. Encode spaces in query strings as `%20`, not `+`.
+- **S3** works for API calls and text objects, with virtual-hosted (`https://bucket.s3.us-west-2.amazonaws.com/key`) or path-style (`https://s3.us-west-2.amazonaws.com/bucket/key`) URLs. Use path-style for bucket names that contain dots, which don't match S3's TLS certificate. The payload is always hashed in full: unsigned and streaming (chunked) payloads aren't supported. Bodies travel as JSON or UTF-8 text and non-JSON responses come back as text, so binary objects can't be uploaded or downloaded intact. Presigned URLs aren't generated.
+- **Not allowlisted:** China regions (`amazonaws.com.cn`), dual-stack `*.api.aws` endpoints, and `*.on.aws` (Lambda function URLs). Use a custom connector for those.
+- **Customer-owned hosts.** `*.amazonaws.com` isn't only AWS's own APIs: EC2 public DNS names, load balancers, API Gateway, and S3 website endpoints are hosts anyone can stand up. Drawlatch never puts the secret key into a request, but any host the agent calls still sees the access key ID, the session token if you use one, and a signature scoped to that day, region, and service. Prefer short-lived credentials, and narrow `allowedEndpoints` (below) to AWS's service endpoints if you don't need the rest.
+- **Credentials and least privilege.** Use an access key for a dedicated IAM user, or temporary credentials with `AWS_SESSION_TOKEN`, which expire and must be rotated by you. Never use root keys. The agent can call any AWS API the keys allow, in any region, so grant only the actions and resources it needs. To limit regions, add an `aws:RequestedRegion` condition. To narrow the reachable hosts as well, override the template with a custom connector `aws` whose `allowedEndpoints` lists only the endpoints you use.
+- **Built-in test.** It calls STS `GetCallerIdentity`. That call needs no IAM permissions, so a pass shows the keys are valid, not that they're authorized for anything.
 
 **Bluesky.** Get an access token by POSTing `{ "identifier": "your.handle", "password": "<app password>" }` to `https://bsky.social/xrpc/com.atproto.server.createSession`. Use an [App Password](https://bsky.app/settings/app-passwords). Tokens expire after about 2 hours; rotate them yourself with `refreshJwt`. Both `bsky.social` and `public.api.bsky.app` are allowlisted. The listener polls notifications; the firehose is not supported. Rate limit: 3,000 requests per 5 minutes.
 
@@ -86,6 +98,8 @@ A secret that isn't set is sent as the literal placeholder (for example, `Bearer
 **Trello.** Auth goes in the query string: `?key=${TRELLO_API_KEY}&token=${TRELLO_TOKEN}`. The placeholders resolve server-side. The webhook listener also needs `TRELLO_API_SECRET`, `TRELLO_CALLBACK_URL`, and a `boardId` param. See [INGESTORS.md](INGESTORS.md#webhooks).
 
 **Twitch.** Every request carries `Authorization: Bearer` and `Client-Id`. Register an app in the [developer console](https://dev.twitch.tv/console/apps). The listener polls followed streams, which needs a *user* access token and `TWITCH_USER_ID` (from `GET /helix/users`). Rate limit: 800 requests per minute.
+
+**Vercel.** Create a token on the [Tokens page](https://vercel.com/account/tokens), where you also pick its scope. Requests act on your personal account by default. For a team's resources, add `teamId=<team id>` (or `slug=<team slug>`) to the query string, for example `https://api.vercel.com/v9/projects?teamId=team_abc123`. The built-in test calls `/v2/user`.
 
 **X.** Uses an app-only Bearer token from the [developer portal](https://developer.x.com/en/portal/dashboard). `api.x.com` and `api.twitter.com` are allowlisted. The listener searches recent tweets for `X_SEARCH_QUERY`, which is not URL-encoded, so encode it yourself. It fails without one. API access and limits depend on your X tier.
 

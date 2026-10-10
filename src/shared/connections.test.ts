@@ -180,6 +180,26 @@ describe('bundled connection templates', () => {
     expect(route.docsUrl).toBeTruthy();
   });
 
+  it('should load aws connection template', () => {
+    const route = loadConnection('aws');
+
+    expect(route.name).toBe('AWS API');
+    expect(route.allowedEndpoints).toEqual(['https://*.amazonaws.com/**']);
+    expect(route.awsSigV4).toEqual({});
+    expect(route.headers).toBeUndefined();
+    expect(Object.keys(route.secrets ?? {})).toEqual([
+      'AWS_ACCESS_KEY_ID',
+      'AWS_SECRET_ACCESS_KEY',
+      'AWS_SESSION_TOKEN',
+    ]);
+    expect(route.testConnection).toMatchObject({
+      method: 'POST',
+      url: 'https://sts.amazonaws.com/',
+      body: 'Action=GetCallerIdentity&Version=2011-06-15',
+    });
+    expect(route.docsUrl).toBeTruthy();
+  });
+
   it('should load circleci connection template', () => {
     const route = loadConnection('circleci');
 
@@ -447,11 +467,24 @@ describe('bundled connection templates', () => {
     expect(route.docsUrl).toBeTruthy();
   });
 
+  it('should load vercel connection template', () => {
+    const route = loadConnection('vercel');
+
+    expect(route.name).toBe('Vercel API');
+    expect(route.allowedEndpoints).toEqual(['https://api.vercel.com/**']);
+    expect(route.secrets).toHaveProperty('VERCEL_TOKEN');
+    expect(route.headers?.Authorization).toBe('Bearer ${VERCEL_TOKEN}');
+    expect(route.testConnection?.url).toBe('https://api.vercel.com/v2/user');
+    expect(route.docsUrl).toBeTruthy();
+    expect(route.openApiUrl).toBeTruthy();
+  });
+
   it('should list all bundled connections', () => {
     const available = listAvailableConnections();
 
     expect(available).toContain('agentmail');
     expect(available).toContain('anthropic');
+    expect(available).toContain('aws');
     expect(available).toContain('circleci');
     expect(available).toContain('datadog');
     expect(available).toContain('devin');
@@ -469,6 +502,7 @@ describe('bundled connection templates', () => {
     expect(available).toContain('slack');
     expect(available).toContain('stripe');
     expect(available).toContain('trello');
+    expect(available).toContain('vercel');
   });
 });
 
@@ -568,6 +602,47 @@ describe('listConnectionTemplates (unit)', () => {
     expect(t.optionalSecrets).toEqual(['WEBHOOK_KEY', 'POLL_URL_VAR']);
   });
 
+  it("should treat an awsSigV4 route's signing keys as required and its session token as optional", () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['signed.json']);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'Signed',
+        category: 'developer-tools',
+        awsSigV4: { service: 'execute-api', region: 'us-east-1' },
+        headers: { 'x-api-key': '${API_KEY}' },
+        secrets: {
+          AWS_SESSION_TOKEN: '${AWS_SESSION_TOKEN}',
+          AWS_SECRET_ACCESS_KEY: '${AWS_SECRET_ACCESS_KEY}',
+          API_KEY: '${API_KEY}',
+          AWS_ACCESS_KEY_ID: '${AWS_ACCESS_KEY_ID}',
+        },
+        allowedEndpoints: ['https://abc.execute-api.us-east-1.amazonaws.com/**'],
+      }),
+    );
+
+    const t = listConnectionTemplates()[0];
+    expect(t.requiredSecrets).toEqual(['AWS_SECRET_ACCESS_KEY', 'API_KEY', 'AWS_ACCESS_KEY_ID']);
+    expect(t.optionalSecrets).toEqual(['AWS_SESSION_TOKEN']);
+  });
+
+  it('should not require AWS secrets on a route without awsSigV4', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    mockFlatDir(['plain.json']);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        name: 'Plain',
+        category: 'developer-tools',
+        secrets: { AWS_ACCESS_KEY_ID: '${AWS_ACCESS_KEY_ID}' },
+        allowedEndpoints: ['https://api.plain.example/**'],
+      }),
+    );
+
+    const t = listConnectionTemplates()[0];
+    expect(t.requiredSecrets).toEqual([]);
+    expect(t.optionalSecrets).toEqual(['AWS_ACCESS_KEY_ID']);
+  });
+
   it('should return empty array when no connections exist', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
 
@@ -634,6 +709,15 @@ describe('listConnectionTemplates (integration)', () => {
     expect(anthropic.optionalSecrets).toEqual([]);
     expect(anthropic.hasIngestor).toBe(false);
     expect(anthropic.ingestorType).toBeUndefined();
+  });
+
+  it('should correctly introspect aws template (SigV4 signing keys required)', () => {
+    const aws = listConnectionTemplates().find((t) => t.alias === 'aws')!;
+
+    expect(aws.requiredSecrets).toEqual(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY']);
+    expect(aws.optionalSecrets).toEqual(['AWS_SESSION_TOKEN']);
+    expect(aws.category).toBe('developer-tools');
+    expect(aws.hasTestConnection).toBe(true);
   });
 
   it('should correctly introspect slack template (websocket ingestor)', () => {
@@ -1268,7 +1352,15 @@ describe('listConnectionTemplates — stability field (integration)', () => {
 
   it('should report stability="beta" for github, stripe, and other beta connections', () => {
     const templates = listConnectionTemplates();
-    const betaAliases = ['stripe', 'anthropic', 'openai', 'circleci', 'digitalocean'];
+    const betaAliases = [
+      'stripe',
+      'anthropic',
+      'openai',
+      'circleci',
+      'digitalocean',
+      'vercel',
+      'aws',
+    ];
 
     for (const alias of betaAliases) {
       const t = templates.find((t) => t.alias === alias)!;

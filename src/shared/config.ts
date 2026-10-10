@@ -86,6 +86,65 @@ export interface ProxyConfig {
   requestTimeout: number;
 }
 
+/** Secrets an `awsSigV4` route signs with. Looked up by these exact keys in the
+ *  route's `secrets` map, so a custom connector can point them at any env var
+ *  (e.g. `"AWS_ACCESS_KEY_ID": "${PROD_AWS_ACCESS_KEY_ID}"`). */
+export const AWS_SIGV4_REQUIRED_SECRETS = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'] as const;
+/** Optional: present only for temporary (STS) credentials. */
+export const AWS_SIGV4_SESSION_TOKEN_SECRET = 'AWS_SESSION_TOKEN';
+/** Every secret the signer reads. None of them is ever substituted for a `${VAR}`. */
+export const AWS_SIGV4_CREDENTIAL_SECRETS: readonly string[] = [
+  ...AWS_SIGV4_REQUIRED_SECRETS,
+  AWS_SIGV4_SESSION_TOKEN_SECRET,
+];
+
+/**
+ * The secrets a route may substitute for `${VAR}` placeholders in URLs, headers,
+ * and bodies.
+ *
+ * On an `awsSigV4` route the signing credentials are left out, along with any
+ * other entry whose value contains one, so they can only reach the signer.
+ * `*.amazonaws.com` includes hosts anyone can own (EC2 public DNS, load
+ * balancers, API Gateway), and a substituted `${AWS_SECRET_ACCESS_KEY}` would
+ * be sent to them.
+ */
+export function substitutableSecrets(route: {
+  awsSigV4?: AwsSigV4Config;
+  secrets?: Record<string, string>;
+}): Record<string, string> {
+  const secrets = route.secrets ?? {};
+  if (!route.awsSigV4) return secrets;
+  const credentialValues = new Set(
+    AWS_SIGV4_CREDENTIAL_SECRETS.map((name) => secrets[name]).filter(
+      (v): v is string => typeof v === 'string' && v !== '',
+    ),
+  );
+  // Containment, not equality: `WRAPPED = "pre-<secret>"` would leak it too.
+  // Empty values were filtered out above, since "" is contained in everything.
+  const holdsCredential = (value: string) =>
+    typeof value === 'string' && [...credentialValues].some((cred) => value.includes(cred));
+  return Object.fromEntries(
+    Object.entries(secrets).filter(
+      ([name, value]) => !AWS_SIGV4_CREDENTIAL_SECRETS.includes(name) && !holdsCredential(value),
+    ),
+  );
+}
+
+/** Per-request AWS Signature Version 4 signing for a route.
+ *
+ *  When present, the remote signs every request it sends on this route with the
+ *  route's AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (+ AWS_SESSION_TOKEN when
+ *  set), after headers and body are final. The signing service and region are
+ *  inferred from the request hostname (`<service>.<region>.amazonaws.com`,
+ *  global `<service>.amazonaws.com` = us-east-1); set them here to override the
+ *  inference, e.g. for a single-service custom connector. */
+export interface AwsSigV4Config {
+  /** Signing name (credential scope service), e.g. "sts", "s3", "execute-api". */
+  service?: string;
+  /** Signing region, e.g. "us-east-1". */
+  region?: string;
+}
+
 /** A single route / connector definition — scopes secrets and headers to a set of endpoints */
 export interface Route {
   /** Alias for referencing this connector from caller connection lists.
@@ -115,6 +174,10 @@ export interface Route {
    *  These MUST NOT conflict with client-provided headers (request is rejected on conflict).
    *  Values may contain ${VAR} placeholders resolved against this route's secrets. */
   headers?: Record<string, string>;
+  /** Sign each request with AWS SigV4 instead of (or as well as) static headers.
+   *  Callers may not send Authorization, Host, X-Amz-Date, X-Amz-Content-Sha256,
+   *  or X-Amz-Security-Token on such a route. See AwsSigV4Config. */
+  awsSigV4?: AwsSigV4Config;
   /** Secrets available for ${VAR} placeholder resolution in this route only.
    *  Values can be literals or "${ENV_VAR}" references resolved at startup. */
   secrets?: Record<string, string>;
@@ -174,6 +237,8 @@ export interface ResolvedRoute {
   /** Category grouping (carried from config) */
   category?: ConnectionCategory;
   headers: Record<string, string>;
+  /** AWS SigV4 signing settings (carried from config). Credentials stay in `secrets`. */
+  awsSigV4?: AwsSigV4Config;
   secrets: Record<string, string>;
   allowedEndpoints: string[];
   /** Whether to resolve ${VAR} placeholders in request bodies (default: false) */
@@ -608,9 +673,12 @@ export function resolveRoutes(
 ): ResolvedRoute[] {
   return routes.map((route) => {
     const resolvedSecrets = resolveSecrets(route.secrets ?? {}, envOverrides, callerAlias);
+    // Signing credentials are never substituted, so a header that references
+    // one keeps its literal placeholder and executeProxyRequest rejects it.
+    const headerSecrets = substitutableSecrets({ ...route, secrets: resolvedSecrets });
     const resolvedHeaders: Record<string, string> = {};
     for (const [key, value] of Object.entries(route.headers ?? {})) {
-      resolvedHeaders[key] = resolvePlaceholders(value, resolvedSecrets);
+      resolvedHeaders[key] = resolvePlaceholders(value, headerSecrets);
     }
     return {
       ...(route.alias !== undefined && { alias: route.alias }),
@@ -621,6 +689,7 @@ export function resolveRoutes(
       ...(route.stability !== undefined && { stability: route.stability }),
       ...(route.category !== undefined && { category: route.category }),
       headers: resolvedHeaders,
+      ...(route.awsSigV4 !== undefined && { awsSigV4: route.awsSigV4 }),
       secrets: resolvedSecrets,
       allowedEndpoints: route.allowedEndpoints,
       resolveSecretsInBody: route.resolveSecretsInBody ?? false,

@@ -1019,3 +1019,50 @@ describe('IngestorManager.applyInstanceParams — instanceKey secrets injection'
     expect(secrets.priority).toBeUndefined();
   });
 });
+
+describe('IngestorManager — awsSigV4 routes', () => {
+  it('should not hand SigV4 signing credentials to a listener', async () => {
+    const config: RemoteServerConfig = {
+      host: '127.0.0.1',
+      port: 9999,
+
+      connectors: [
+        {
+          alias: 'signed-hook',
+          awsSigV4: { service: 'execute-api', region: 'us-east-1' },
+          secrets: {
+            AWS_ACCESS_KEY_ID: 'AKIDLISTENER',
+            AWS_SECRET_ACCESS_KEY: 'listener-secret-key',
+            AWS_SESSION_TOKEN: 'listener-session-token',
+            WRAPPED: 'pre-listener-secret-key',
+            HOOK_SECRET: 'hook-secret',
+          },
+          allowedEndpoints: ['https://abc.execute-api.us-east-1.amazonaws.com/**'],
+          ingestor: {
+            type: 'webhook',
+            webhook: {
+              path: 'signed-hook',
+              signatureHeader: 'X-Signature',
+              signatureSecret: 'HOOK_SECRET',
+            },
+          },
+        },
+      ],
+      callers: {
+        'test-caller': { connections: ['signed-hook'] },
+      },
+      rateLimitPerMinute: 60,
+    };
+    const manager = new IngestorManager(config);
+    const result = await manager.startOne('test-caller', 'signed-hook');
+    expect(result.success).toBe(true);
+
+    // Reading private state: the secrets the listener was built with.
+    const ingestors = (manager as unknown as { ingestors: Map<string, { secrets: unknown }> })
+      .ingestors;
+    const [ingestor] = [...ingestors.values()];
+    expect(ingestor.secrets).toEqual({ HOOK_SECRET: 'hook-secret' });
+
+    await manager.stopOne('test-caller', 'signed-hook');
+  });
+});

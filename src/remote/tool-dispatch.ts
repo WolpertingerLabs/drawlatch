@@ -22,6 +22,7 @@ import {
   loadRemoteConfig,
   saveRemoteConfig,
   resolvePlaceholders,
+  substitutableSecrets,
   DEFAULT_OUTBOUND_TIMEOUT_MS,
   MAX_OUTBOUND_TIMEOUT_MS,
   type CallerConfig,
@@ -30,6 +31,11 @@ import {
 } from '../shared/config.js';
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller, setCallerSecrets } from '../shared/env-utils.js';
+import {
+  SIGV4_RESERVED_HEADERS,
+  SIGV4_RESERVED_QUERY_PARAMS,
+  signProxyRequest,
+} from './aws-sigv4.js';
 import type { IngestorManager } from './ingestors/index.js';
 import { waitForEvents } from './wait-for-events.js';
 
@@ -48,8 +54,46 @@ export function isEndpointAllowed(url: string, patterns: string[]): boolean {
           .replace(/\.__DOUBLE_STAR__\./g, '.*') +
         '$',
     );
-    return regex.test(url);
+    return regex.test(url) && wildcardHostMatches(url, pattern);
   });
+}
+
+/**
+ * Re-check a pattern whose host contains a wildcard against the host the URL
+ * actually parses to.
+ *
+ * In the string match, a `*` in the host also matches `?`, `#`, and `@`, so
+ * `https://*.amazonaws.com/**` alone would accept
+ * `https://evil.example?.amazonaws.com/`, which fetch() sends to evil.example.
+ * Here a host wildcard only matches characters a parsed host can contain.
+ * Patterns without a scheme or without a host wildcard pass through unchanged.
+ */
+function wildcardHostMatches(url: string, pattern: string): boolean {
+  const m = /^([a-z][a-z0-9+.-]*):\/\/([^/]*)/i.exec(pattern);
+  if (!m?.[2].includes('*')) return true;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const scheme = m[1].toLowerCase();
+  if (parsed.protocol !== `${scheme}:`) return false;
+
+  // `parsed.host` omits a default port, so drop one written into the pattern.
+  const defaultPort = scheme === 'https' ? ':443' : scheme === 'http' ? ':80' : null;
+  let authority = m[2].toLowerCase();
+  if (defaultPort && authority.endsWith(defaultPort)) {
+    authority = authority.slice(0, -defaultPort.length);
+  }
+
+  const hostRegex = new RegExp(
+    '^' +
+      authority.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*+/g, '[a-z0-9_.:[\\]-]*') +
+      '$',
+  );
+  return hostRegex.test(parsed.host);
 }
 
 /**
@@ -232,6 +276,25 @@ function leaksSecret(err: Error, secrets: Record<string, string>): boolean {
   return false;
 }
 
+/**
+ * Reject `text` if it references a secret the route withholds from
+ * substitution (an `awsSigV4` route's signing credentials). Failing loudly
+ * beats sending the literal placeholder: the caller learns why, and nothing
+ * leaves the daemon.
+ */
+function assertNoWithheldSecrets(text: string, withheld: Set<string>, where: string): void {
+  if (withheld.size === 0) return;
+  for (const match of text.matchAll(/\$\{(\w+)\}/g)) {
+    if (withheld.has(match[1])) {
+      throw new Error(
+        `${where} references \${${match[1]}}, a signing credential of this AWS SigV4 route. ` +
+          'Signing credentials are only used to sign requests and are never substituted ' +
+          'into URLs, headers, or bodies.',
+      );
+    }
+  }
+}
+
 /** Header values fetch() rejects — and echoes back in full when it does. */
 const INVALID_HEADER_VALUE = /[\r\n\0]/;
 
@@ -297,12 +360,12 @@ export async function executeProxyRequest(
 
   if (matched) {
     // Resolve URL placeholders using matched route's secrets
-    resolvedUrl = resolvePlaceholders(url, matched.secrets);
+    resolvedUrl = resolvePlaceholders(url, substitutableSecrets(matched));
   } else {
     // Try resolving URL with each route's secrets to find a match
     for (const route of routes) {
       if (route.allowedEndpoints.length === 0) continue;
-      const candidateUrl = resolvePlaceholders(url, route.secrets);
+      const candidateUrl = resolvePlaceholders(url, substitutableSecrets(route));
       if (isEndpointAllowed(candidateUrl, route.allowedEndpoints)) {
         matched = route;
         resolvedUrl = candidateUrl;
@@ -315,10 +378,21 @@ export async function executeProxyRequest(
     throw new Error(`Endpoint not allowed: ${url}`);
   }
 
+  // Secrets this route may substitute, and the ones it withholds (signing
+  // credentials). A reference to a withheld one anywhere it would otherwise
+  // be resolved is rejected outright.
+  const secrets = substitutableSecrets(matched);
+  const withheld = new Set(Object.keys(matched.secrets).filter((name) => !(name in secrets)));
+  assertNoWithheldSecrets(url, withheld, 'The request URL');
+  for (const [k, v] of Object.entries(matched.headers)) {
+    assertNoWithheldSecrets(v, withheld, `Connection header "${k}"`);
+  }
+
   // Step 2: Resolve client headers using matched route's secrets
   const resolvedHeaders: Record<string, string> = {};
   for (const [k, v] of Object.entries(headers)) {
-    resolvedHeaders[k] = resolvePlaceholders(v, matched.secrets);
+    assertNoWithheldSecrets(v, withheld, `Header "${k}"`);
+    resolvedHeaders[k] = resolvePlaceholders(v, secrets);
   }
 
   // Step 3: Check for header conflicts — reject if client provides a header
@@ -329,6 +403,31 @@ export async function executeProxyRequest(
       throw new Error(
         `Header conflict: client-provided header "${clientKey}" conflicts with a route-level header. Remove it from the request.`,
       );
+    }
+  }
+
+  // Step 3b: On a SigV4 route the signer owns the auth headers. Letting a
+  // caller set them would let it choose what gets signed.
+  if (matched.awsSigV4) {
+    for (const clientKey of Object.keys(resolvedHeaders)) {
+      if (SIGV4_RESERVED_HEADERS.has(clientKey.toLowerCase())) {
+        throw new Error(
+          `Header conflict: "${clientKey}" is set by drawlatch's AWS SigV4 signer on this route. Remove it from the request.`,
+        );
+      }
+    }
+    let params: URLSearchParams | undefined;
+    try {
+      params = new URL(resolvedUrl).searchParams;
+    } catch {
+      // Unparseable URLs fail at fetch() / signing with their own error.
+    }
+    for (const key of params?.keys() ?? []) {
+      if (SIGV4_RESERVED_QUERY_PARAMS.has(key.toLowerCase())) {
+        throw new Error(
+          `Query parameter "${key}" is not allowed on an AWS SigV4 route: drawlatch signs the request itself.`,
+        );
+      }
     }
   }
 
@@ -364,8 +463,11 @@ export async function executeProxyRequest(
     // Add the JSON body as a named part (default: "payload_json" for Discord-style APIs)
     if (body !== null && body !== undefined) {
       const serialized = typeof body === 'string' ? body : JSON.stringify(body);
+      if (matched.resolveSecretsInBody) {
+        assertNoWithheldSecrets(serialized, withheld, 'The request body');
+      }
       const resolvedPayload = matched.resolveSecretsInBody
-        ? resolvePlaceholders(serialized, matched.secrets)
+        ? resolvePlaceholders(serialized, secrets)
         : serialized;
       form.append(bodyFieldName ?? 'payload_json', resolvedPayload);
     }
@@ -385,11 +487,17 @@ export async function executeProxyRequest(
   } else {
     // ── Standard JSON/string body ──
     if (typeof body === 'string') {
-      fetchBody = matched.resolveSecretsInBody ? resolvePlaceholders(body, matched.secrets) : body;
+      if (matched.resolveSecretsInBody) {
+        assertNoWithheldSecrets(body, withheld, 'The request body');
+      }
+      fetchBody = matched.resolveSecretsInBody ? resolvePlaceholders(body, secrets) : body;
     } else if (body !== null && body !== undefined) {
       const serialized = JSON.stringify(body);
+      if (matched.resolveSecretsInBody) {
+        assertNoWithheldSecrets(serialized, withheld, 'The request body');
+      }
       fetchBody = matched.resolveSecretsInBody
-        ? resolvePlaceholders(serialized, matched.secrets)
+        ? resolvePlaceholders(serialized, secrets)
         : serialized;
       if (!resolvedHeaders['content-type'] && !resolvedHeaders['Content-Type']) {
         resolvedHeaders['Content-Type'] = 'application/json';
@@ -400,6 +508,23 @@ export async function executeProxyRequest(
   // Step 6: Final endpoint check on fully resolved URL
   if (!isEndpointAllowed(resolvedUrl, matched.allowedEndpoints)) {
     throw new Error(`Endpoint not allowed after resolution: ${url}`);
+  }
+
+  // Step 6b: AWS SigV4. Last, so the signature covers the final URL, headers,
+  // and body bytes exactly as sent.
+  let outboundHeaders = resolvedHeaders;
+  let outboundBody: BodyInit | undefined = fetchBody;
+  if (matched.awsSigV4) {
+    const signed = await signProxyRequest({
+      method,
+      url: resolvedUrl,
+      headers: resolvedHeaders,
+      body: fetchBody,
+      config: matched.awsSigV4,
+      secrets: matched.secrets,
+    });
+    outboundHeaders = signed.headers;
+    outboundBody = signed.body;
   }
 
   // Step 7: Make the actual HTTP request.
@@ -417,8 +542,12 @@ export async function executeProxyRequest(
     // opaque error the drawlatch deadline exists to replace.
     const resp = await fetch(resolvedUrl, {
       method,
-      headers: resolvedHeaders,
-      body: fetchBody,
+      headers: outboundHeaders,
+      body: outboundBody,
+      // A signed request must not be replayed to wherever a 3xx points: the
+      // target isn't allowlist-checked, and fetch() would forward the session
+      // token and caller headers to it. Hand the redirect back instead.
+      ...(matched.awsSigV4 && { redirect: 'manual' as const }),
       signal: AbortSignal.timeout(effectiveTimeout),
     });
 
@@ -541,6 +670,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
       info.allowedEndpoints = route.allowedEndpoints;
       info.secretNames = Object.keys(route.secrets);
       info.autoHeaders = Object.keys(route.headers);
+      if (route.awsSigV4) info.awsSigV4 = route.awsSigV4;
 
       // Timeouts. The budget clamp is otherwise silent, so report what a call
       // would actually get *right now* rather than only the connection's
