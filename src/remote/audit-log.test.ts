@@ -280,7 +280,7 @@ describe('ingest_logs lenient validation', () => {
     const lines = readLines();
     expect(lines.map((l) => l['drawlatch.sequence'])).toEqual([1, 2, 3]);
     expect(lines[1]).not.toHaveProperty(field);
-    expect(lines[1].invalid?.[where]).toMatchObject({ reason: expect.any(String) });
+    expect(typeof lines[1].invalid?.[where]?.reason).toBe('string');
     expect(lines[1].invalid?.[where]).toHaveProperty('raw');
     expect(lines[0].invalid).toBeUndefined();
   });
