@@ -103,6 +103,8 @@ Note that `set_secrets` and `set_connection_enabled` let an agent change its own
 
 The daemon also accepts `wait_for_events`, a long-poll over all of a caller's event streams. The local MCP server doesn't expose it; long-running clients such as Callboard call it over the encrypted channel. See [INGESTORS.md](INGESTORS.md#reading-events).
 
+It likewise accepts `ingest_logs`, which appends records to the caller's audit log. The local MCP server doesn't expose it either. See [Audit log](#audit-log).
+
 ## Configuration
 
 ### Config directory
@@ -117,6 +119,7 @@ keys/server/           the daemon's Ed25519 + X25519 keypair
 keys/callers/<alias>/  one keypair per caller (public half only, when issued as a bundle)
 logs/drawlatch.log     daemon log (drawlatch logs)
 data/sessions.json     dashboard login sessions
+audit/<caller>/        append-only audit logs shipped by callers (see Audit log)
 drawlatch.pid          PID of the background daemon
 ```
 
@@ -256,6 +259,28 @@ A hop that fails a check isn't followed and isn't an error. The 3xx comes back a
 
 `awsSigV4` connections never follow redirects. Listener requests (polls, webhook auto-registration, Slack Socket Mode connect) and trigger dispatch follow redirects only on the request URL's own origin; see [INGESTORS.md](INGESTORS.md#polling).
 
+### Audit log
+
+Callers can ship durable log records to the daemon with the `ingest_logs` tool (Callboard uses it for permission-review decisions). It is write-only: no tool reads, lists, changes, or deletes what is stored. Read the files on the daemon's machine.
+
+The input mirrors OTLP's `ExportLogsServiceRequest` in its JSON encoding (`resourceLogs[].scopeLogs[].logRecords[]`, hex `traceId`/`spanId`, uint64 times as decimal strings). A record may also carry a `parentSpanId`, which OTLP lacks. Unknown fields reject the record. The reply mirrors `ExportLogsServiceResponse`: `{}` when everything was stored, else `{ "partialSuccess": { "rejectedLogRecords": <n>, "errorMessage": "…" } }`. A malformed record is rejected on its own and the rest are stored; a non-object input or a non-array `resourceLogs` fails the whole call.
+
+Records go to `audit/<caller>/<YYYY-MM-DD>.jsonl` (UTC day of receipt), one JSON object per line. Files are `0600` and directories `0700`. Each append is fsync'd before the reply. A line looks like this (wrapped here):
+
+```json
+{"drawlatch.caller":"callboard","drawlatch.received_at":"2026-10-11T12:00:00.000Z","drawlatch.sequence":42,
+ "time_unix_nano":"1760184000000000000","severity_number":9,"severity_text":"INFO",
+ "event_name":"permission.review.result","trace_id":"…","span_id":"…","parent_span_id":"…",
+ "body":{"verdict":"approve"},"attributes":{"tool.name":"Bash"},"resource":{"service.name":"callboard"},
+ "scope":{"name":"callboard.permission-review","version":"1"}}
+```
+
+The `drawlatch.*` fields are set by the daemon: the caller is the authenticated session's, and `sequence` counts up within each file. Everything else is what the client sent, flattened (attribute lists become objects, `AnyValue`s become plain JSON; an `intValue` too big for a JSON number stays a string). Optional fields are left out when absent. Use `jq`, for example `jq -c 'select(.trace_id == "…")' ~/.drawlatch/audit/*/*.jsonl`.
+
+Limits: 1000 records and 4 MiB stored per call, 256 KiB per line, and 256 MiB per caller per UTC day. Records past a limit are rejected in `partialSuccess`. Strings over 16 KiB are cut and end in `…[truncated]`; past 128 attributes, 256 array items, or 8 levels of nesting, the extra is dropped. Any of these adds `"truncated": true` to the line. A call counts as one request against `rateLimitPerMinute`.
+
+Every authenticated caller can write to its own log; there is no per-caller switch. Records carry the client's own timestamps, but only the `drawlatch.*` stamps are the daemon's. Anyone holding a caller's private key can add records as that caller, but not change or remove existing ones.
+
 ### Webhooks and the tunnel
 
 Webhook listeners (GitHub, Stripe, Trello) receive `POST /webhooks/<path>` on the daemon's port, so the daemon must be reachable from the internet. `drawlatch start --tunnel` (or `"tunnel": true`) runs a Cloudflare quick tunnel; [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) must be installed. The tunnel URL appears in `drawlatch status`, and the daemon sets any unset callback-URL variable a webhook template references (for example, `TRELLO_CALLBACK_URL`) before starting listeners. Details: [INGESTORS.md](INGESTORS.md#webhooks).
@@ -345,7 +370,8 @@ set-password             Set the dashboard password (alias: change-password)
 - **Encryption:** AES-256-GCM with per-session X25519 ECDH keys, and monotonic counters against replay.
 - **Sessions** expire after 30 minutes idle.
 - **Rate limits** apply per session (`rateLimitPerMinute`) and per IP on unauthenticated endpoints.
-- **Audit log:** every request and response is logged with caller and session (`drawlatch logs --requests`).
+- **Request log:** every request and response is logged with caller and session (`drawlatch logs --requests`).
+- **Caller audit log:** `ingest_logs` is append-only and write-only over the protocol, stamped with the authenticated caller ([Audit log](#audit-log)).
 
 ## Package exports
 
