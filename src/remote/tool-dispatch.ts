@@ -2,7 +2,8 @@
  * Canonical MCP tool implementations — the single source of truth.
  *
  * These handlers implement every proxy/management tool drawlatch exposes:
- *   http_request, list_routes, poll_events, wait_for_events, ingestor_status,
+ *   http_request, list_routes, poll_events, wait_for_events, ingest_logs,
+ *   ingestor_status,
  *   test_connection, test_ingestor, control_listener,
  *   list_listener_configs, resolve_listener_options,
  *   get/set_listener_params, list/delete_listener_instance,
@@ -37,6 +38,7 @@ import {
   SIGV4_RESERVED_QUERY_PARAMS,
   signProxyRequest,
 } from './aws-sigv4.js';
+import { ingestLogs } from './audit-log.js';
 import type { IngestorManager } from './ingestors/index.js';
 import { safeFetch } from './safe-fetch.js';
 import { waitForEvents } from './wait-for-events.js';
@@ -759,6 +761,16 @@ export const toolHandlers: Record<string, ToolHandler> = {
    */
   wait_for_events(input, _routes, context) {
     return waitForEvents(input, context);
+  },
+
+  /**
+   * Append OTLP-shaped log records to this caller's audit log. Write-only:
+   * there is no tool that reads, lists, or changes what is stored. The caller
+   * stamped on each line is the authenticated one, never the payload's. See
+   * audit-log.ts for the wire contract and limits.
+   */
+  ingest_logs(input, _routes, context) {
+    return ingestLogs(input, context.callerAlias);
   },
 
   /**
