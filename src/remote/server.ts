@@ -1002,6 +1002,23 @@ export async function gracefulShutdown(
 }
 
 /**
+ * Force exit if connections don't drain within SHUTDOWN_FORCE_EXIT_MS, after
+ * a last bounded flush of quota_exceeded markers. `drawlatch stop` waits
+ * STOP_KILL_AFTER_MS, which is derived from the same constants and longer
+ * than this whole path, before it sends SIGKILL.
+ */
+export function armForcedExit(
+  exit: (code: number) => void = (code) => process.exit(code),
+): NodeJS.Timeout {
+  const timer = setTimeout(() => {
+    console.error('[remote] Forced shutdown after timeout.');
+    void exitAfterFlushingMarkers(exit);
+  }, SHUTDOWN_FORCE_EXIT_MS);
+  timer.unref();
+  return timer;
+}
+
+/**
  * The forced-exit path: one last bounded flush of pending quota markers,
  * then exit(1). Finishes within SHUTDOWN_FLUSH_MS of being called, so with
  * SHUTDOWN_FORCE_EXIT_MS it stays inside the CLI's STOP_KILL_AFTER_MS.
@@ -1172,13 +1189,7 @@ export function main(): void {
       process.exit(0);
     });
 
-    // Force exit if connections don't drain, after a last bounded flush of
-    // quota_exceeded markers. `drawlatch stop` waits STOP_KILL_AFTER_MS,
-    // longer than this whole path, before it sends SIGKILL.
-    setTimeout(() => {
-      console.error('[remote] Forced shutdown after timeout.');
-      void exitAfterFlushingMarkers();
-    }, SHUTDOWN_FORCE_EXIT_MS).unref();
+    armForcedExit();
   };
 
   server.on('error', (err: NodeJS.ErrnoException) => {

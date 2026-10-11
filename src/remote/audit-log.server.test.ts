@@ -475,10 +475,15 @@ describe('quota markers at shutdown', () => {
     await flood(1000);
     expect(markers('erin')).toHaveLength(1);
 
-    const exit = vi.fn();
+    // A real exit never returns, so what counts is what is on disk at the
+    // moment exit is called, not after.
+    let atExit = -1;
+    const exit = vi.fn(() => {
+      atExit = markers('erin').length;
+    });
     await exitAfterFlushingMarkers(exit);
-    expect(markers('erin')).toHaveLength(2);
     expect(exit).toHaveBeenCalledWith(1);
+    expect(atExit).toBe(2);
     resetAuditLogState();
   });
 
