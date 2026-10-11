@@ -265,7 +265,7 @@ Callers can ship durable log records to the daemon with the `ingest_logs` tool (
 
 The input mirrors OTLP's `ExportLogsServiceRequest` in its JSON encoding (`resourceLogs[].scopeLogs[].logRecords[]`, hex `traceId`/`spanId`, uint64 times as decimal strings, proto3 JSON spellings such as `"NaN"` doubles and `SEVERITY_NUMBER_*` names). A record may also carry a `parentSpanId`, which OTLP lacks. The reply mirrors `ExportLogsServiceResponse`: `{}` when everything was stored as sent, else `{ "partialSuccess": { "rejectedLogRecords": <n>, "errorMessage": "…" } }`. Only a non-object input or a non-array `resourceLogs` fails the whole call.
 
-Validation keeps data rather than dropping it, as OTLP requires of receivers. An unknown field is stored under `extra` and a known field with an invalid value under `invalid` (`{"reason", "raw"}`), both keyed by path such as `logRecord.spanID` or `resource.entityRefs`. Those records are stored and reported in `errorMessage` as `kept: …` warnings with `rejectedLogRecords: 0`. A record is rejected (`rejected: …`) only when it isn't an object, sits under a container that isn't one, or is over a size limit.
+Validation keeps data rather than dropping it, as OTLP requires of receivers. An unknown field is stored under `extra` and a known field with an invalid value under `invalid` (`{"reason", "raw"}`), both keyed by path such as `logRecord["spanID"]`, `resource["entityRefs"]` or `logRecord.attributes["latency"]` (client-chosen keys are JSON-quoted, so a key containing `.` can't collide with nested data). At most 128 unknown fields per object and 256 entries per map are kept; past that the line is marked `truncated`. Those records are stored and reported in `errorMessage` as `kept: …` warnings with `rejectedLogRecords: 0`. A record is rejected (`rejected: …`) only when it isn't an object, sits under a container that isn't one, or is over a size limit.
 
 Records go to `audit/<caller>/<YYYY-MM-DD>.jsonl` (UTC day of receipt), one JSON object per line. Files are `0600` and directories `0700`. Each append is fsync'd before the reply, and so is the directory when a file is created. A line looks like this (wrapped here):
 
@@ -281,7 +281,7 @@ The `drawlatch.*` fields are set by the daemon: the caller is the authenticated 
 
 Limits: 1000 records and 4 MiB stored per call, and 256 KiB per line (the shared resource and scope count toward every line under them). Records past a limit are rejected. Strings over 16 KiB are cut and end in `…[truncated]`; past 128 attributes or keys, 256 array items, or 8 levels of nesting, the extra is dropped. Any of these adds `"truncated": true` to the line. A call counts as one request against `rateLimitPerMinute`.
 
-Each caller also has a stored-bytes budget: a 16 MiB burst refilling at 192 KiB a minute (about 270 MiB a day). Records past it are rejected with `audit byte budget exhausted`, and the daemon records the gap itself with a line clients can't write or prevent:
+Each caller also has a stored-bytes budget: a 16 MiB burst refilling at 192 KiB a minute (about 270 MiB a day). Records past it are rejected with `audit byte budget exhausted`, and the daemon records the gap itself with a line clients can't write:
 
 ```json
 {"drawlatch.caller":"callboard","drawlatch.received_at":"…","drawlatch.sequence":43,"drawlatch.source":"daemon",
@@ -289,7 +289,7 @@ Each caller also has a stored-bytes budget: a 16 MiB burst refilling at 192 KiB 
  "window_start":"…","window_end":"…","budget":{"capacity_bytes":16777216,"refill_bytes_per_minute":196608}}
 ```
 
-There is at most one such line per caller per minute, covering every refusal since the last one, and it is written even if the caller stops sending (and on a clean shutdown). These lines come from a separate 1 MiB-a-day allowance, not the caller's budget. `jq 'select(."drawlatch.source" == "daemon")'` finds them.
+There is at most one such line per caller per minute, covering every refusal since the last one. The first refusal after a quiet minute is recorded in the same append that answers the call. Later ones wait for a timer, which writes them even if the caller stops sending, and retries with backoff (1 s doubling to 5 min) if the write fails. On SIGTERM or SIGINT, pending counts are written before the daemon closes its port, again after it closes, and once more before a forced exit; each attempt waits at most 2 s, so an open connection can't hold them back. A SIGKILL, crash, or power loss still loses the counts waiting in the current window: up to a minute of refusals, for each caller over budget. These lines come from a separate 1 MiB-a-day allowance, not the caller's budget. `jq 'select(."drawlatch.source" == "daemon")'` finds them.
 
 Every authenticated caller can write to its own log; there is no per-caller switch. Records carry the client's own timestamps, but only the `drawlatch.*` stamps are the daemon's. Anyone holding a caller's private key can add records as that caller, but not change or remove existing ones. Within the budget they can also crowd out real records; the `quota_exceeded` lines make that visible on the hub.
 
