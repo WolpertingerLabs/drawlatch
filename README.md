@@ -263,23 +263,35 @@ A hop that fails a check isn't followed and isn't an error. The 3xx comes back a
 
 Callers can ship durable log records to the daemon with the `ingest_logs` tool (Callboard uses it for permission-review decisions). It is write-only: no tool reads, lists, changes, or deletes what is stored. Read the files on the daemon's machine.
 
-The input mirrors OTLP's `ExportLogsServiceRequest` in its JSON encoding (`resourceLogs[].scopeLogs[].logRecords[]`, hex `traceId`/`spanId`, uint64 times as decimal strings). A record may also carry a `parentSpanId`, which OTLP lacks. Unknown fields reject the record. The reply mirrors `ExportLogsServiceResponse`: `{}` when everything was stored, else `{ "partialSuccess": { "rejectedLogRecords": <n>, "errorMessage": "…" } }`. A malformed record is rejected on its own and the rest are stored; a non-object input or a non-array `resourceLogs` fails the whole call.
+The input mirrors OTLP's `ExportLogsServiceRequest` in its JSON encoding (`resourceLogs[].scopeLogs[].logRecords[]`, hex `traceId`/`spanId`, uint64 times as decimal strings, proto3 JSON spellings such as `"NaN"` doubles and `SEVERITY_NUMBER_*` names). A record may also carry a `parentSpanId`, which OTLP lacks. The reply mirrors `ExportLogsServiceResponse`: `{}` when everything was stored as sent, else `{ "partialSuccess": { "rejectedLogRecords": <n>, "errorMessage": "…" } }`. Only a non-object input or a non-array `resourceLogs` fails the whole call.
 
-Records go to `audit/<caller>/<YYYY-MM-DD>.jsonl` (UTC day of receipt), one JSON object per line. Files are `0600` and directories `0700`. Each append is fsync'd before the reply. A line looks like this (wrapped here):
+Validation keeps data rather than dropping it, as OTLP requires of receivers. An unknown field is stored under `extra` and a known field with an invalid value under `invalid` (`{"reason", "raw"}`), both keyed by path such as `logRecord.spanID` or `resource.entityRefs`. Those records are stored and reported in `errorMessage` as `kept: …` warnings with `rejectedLogRecords: 0`. A record is rejected (`rejected: …`) only when it isn't an object, sits under a container that isn't one, or is over a size limit.
+
+Records go to `audit/<caller>/<YYYY-MM-DD>.jsonl` (UTC day of receipt), one JSON object per line. Files are `0600` and directories `0700`. Each append is fsync'd before the reply, and so is the directory when a file is created. A line looks like this (wrapped here):
 
 ```json
 {"drawlatch.caller":"callboard","drawlatch.received_at":"2026-10-11T12:00:00.000Z","drawlatch.sequence":42,
- "time_unix_nano":"1760184000000000000","severity_number":9,"severity_text":"INFO",
+ "drawlatch.source":"client","time_unix_nano":"1760184000000000000","severity_number":9,"severity_text":"INFO",
  "event_name":"permission.review.result","trace_id":"…","span_id":"…","parent_span_id":"…",
  "body":{"verdict":"approve"},"attributes":{"tool.name":"Bash"},"resource":{"service.name":"callboard"},
  "scope":{"name":"callboard.permission-review","version":"1"}}
 ```
 
-The `drawlatch.*` fields are set by the daemon: the caller is the authenticated session's, and `sequence` counts up within each file. Everything else is what the client sent, flattened (attribute lists become objects, `AnyValue`s become plain JSON; an `intValue` too big for a JSON number stays a string). Optional fields are left out when absent. Use `jq`, for example `jq -c 'select(.trace_id == "…")' ~/.drawlatch/audit/*/*.jsonl`.
+The `drawlatch.*` fields are set by the daemon: the caller is the authenticated session's, `sequence` counts up within each file, and `source` is `client` for caller records. Everything else is what the client sent, flattened (attribute lists become objects, `AnyValue`s become plain JSON; an `intValue` too big for a JSON number stays a string). Optional fields are left out when absent. Use `jq`, for example `jq -c 'select(.trace_id == "…")' ~/.drawlatch/audit/*/*.jsonl`.
 
-Limits: 1000 records and 4 MiB stored per call, 256 KiB per line, and 256 MiB per caller per UTC day. Records past a limit are rejected in `partialSuccess`. Strings over 16 KiB are cut and end in `…[truncated]`; past 128 attributes, 256 array items, or 8 levels of nesting, the extra is dropped. Any of these adds `"truncated": true` to the line. A call counts as one request against `rateLimitPerMinute`.
+Limits: 1000 records and 4 MiB stored per call, and 256 KiB per line (the shared resource and scope count toward every line under them). Records past a limit are rejected. Strings over 16 KiB are cut and end in `…[truncated]`; past 128 attributes or keys, 256 array items, or 8 levels of nesting, the extra is dropped. Any of these adds `"truncated": true` to the line. A call counts as one request against `rateLimitPerMinute`.
 
-Every authenticated caller can write to its own log; there is no per-caller switch. Records carry the client's own timestamps, but only the `drawlatch.*` stamps are the daemon's. Anyone holding a caller's private key can add records as that caller, but not change or remove existing ones.
+Each caller also has a stored-bytes budget: a 16 MiB burst refilling at 192 KiB a minute (about 270 MiB a day). Records past it are rejected with `audit byte budget exhausted`, and the daemon records the gap itself with a line clients can't write or prevent:
+
+```json
+{"drawlatch.caller":"callboard","drawlatch.received_at":"…","drawlatch.sequence":43,"drawlatch.source":"daemon",
+ "drawlatch.event":"quota_exceeded","rejected_records":120,"rejected_bytes":4194304,
+ "window_start":"…","window_end":"…","budget":{"capacity_bytes":16777216,"refill_bytes_per_minute":196608}}
+```
+
+There is at most one such line per caller per minute, covering every refusal since the last one, and it is written even if the caller stops sending (and on a clean shutdown). These lines come from a separate 1 MiB-a-day allowance, not the caller's budget. `jq 'select(."drawlatch.source" == "daemon")'` finds them.
+
+Every authenticated caller can write to its own log; there is no per-caller switch. Records carry the client's own timestamps, but only the `drawlatch.*` stamps are the daemon's. Anyone holding a caller's private key can add records as that caller, but not change or remove existing ones. Within the budget they can also crowd out real records; the `quota_exceeded` lines make that visible on the hub.
 
 ### Webhooks and the tunnel
 
