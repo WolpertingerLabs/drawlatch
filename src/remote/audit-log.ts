@@ -336,7 +336,9 @@ function parseRecord(rec: unknown, ctx: Context): ParsedRecord {
   if (!isObject(rec)) throw new RecordError('logRecord must be an object');
   checkKeys(rec, LOG_RECORD_KEYS, 'logRecord');
   const clip: Clip = { truncated: ctx.truncated };
-  const out: ParsedRecord = { attributes: {}, resource: ctx.resource, scope: ctx.scope };
+  // Record fields first, then attributes and the shared context, so a line
+  // reads top-down. Key order is cosmetic; nothing depends on it.
+  const out: Partial<ParsedRecord> = {};
 
   if (rec.timeUnixNano !== undefined) out.time_unix_nano = uint64(rec.timeUnixNano, 'timeUnixNano');
   if (rec.observedTimeUnixNano !== undefined) {
@@ -362,15 +364,17 @@ function parseRecord(rec: unknown, ctx: Context): ParsedRecord {
   if (parentSpanId !== undefined) out.parent_span_id = parentSpanId;
   if (rec.flags !== undefined) out.flags = uint32(rec.flags, 'flags');
   if (rec.body !== undefined) out.body = anyValue(rec.body, 0, clip, 'body');
-  if (rec.attributes !== undefined)
-    out.attributes = keyValues(rec.attributes, 0, clip, 'attributes');
+  out.attributes =
+    rec.attributes === undefined ? {} : keyValues(rec.attributes, 0, clip, 'attributes');
   const dropped = optionalCount(rec, 'logRecord');
   if (dropped !== undefined) out.dropped_attributes_count = dropped;
+  out.resource = ctx.resource;
   if (ctx.resourceSchemaUrl !== undefined) out.resource_schema_url = ctx.resourceSchemaUrl;
+  out.scope = ctx.scope;
   if (ctx.scopeSchemaUrl !== undefined) out.scope_schema_url = ctx.scopeSchemaUrl;
 
   if (clip.truncated) out.truncated = true;
-  return out;
+  return out as ParsedRecord;
 }
 
 /** Outcome of validating a whole request, before anything is written. */

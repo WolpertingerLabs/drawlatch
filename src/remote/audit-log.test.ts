@@ -116,6 +116,17 @@ describe('ingest_logs storage format', () => {
     });
   });
 
+  it('writes stamps, then record fields, then context', async () => {
+    await ingest(request([record()]));
+    const keys = Object.keys(readLines()[0]);
+    expect(keys.slice(0, 3)).toEqual([
+      'drawlatch.caller',
+      'drawlatch.received_at',
+      'drawlatch.sequence',
+    ]);
+    expect(keys.slice(-3)).toEqual(['attributes', 'resource', 'scope']);
+  });
+
   it('flattens every AnyValue kind', async () => {
     await ingest(
       request([
