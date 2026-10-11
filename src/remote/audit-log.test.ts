@@ -6,9 +6,14 @@ import path from 'node:path';
 import {
   auditCallerDir,
   flushQuotaMarkers,
+  flushQuotaMarkersWithin,
   ingestLogs,
   parseIngestRequest,
+  renderParts,
   resetAuditLogState,
+  ERROR_LOG_WINDOW_MS,
+  MARKER_RETRY_MAX_MS,
+  MAX_NOTE_ENTRIES,
   MAX_ARRAY_ITEMS,
   MAX_ATTRIBUTES,
   MAX_BYTES_PER_CALL,
@@ -272,6 +277,8 @@ describe('ingest_logs lenient validation', () => {
     ['int64 overflow', { body: { intValue: '9223372036854775808' } }, 'logRecord.body', 'body'],
     ['unsafe int number', { body: { intValue: 2 ** 60 } }, 'logRecord.body', 'body'],
     ['bad base64', { body: { bytesValue: '!!' } }, 'logRecord.body', 'body'],
+    ['fractional severity', { severityNumber: 1.5 }, 'logRecord.severityNumber', 'severity_number'],
+    ['time not a number', { timeUnixNano: '12abc' }, 'logRecord.timeUnixNano', 'time_unix_nano'],
   ])('keeps a record with %s, moving the value to invalid', async (_name, bad, where, field) => {
     const res = await ingest(request([record(), record(bad), record()]));
     expect(res.partialSuccess?.rejectedLogRecords).toBe(0);
@@ -304,7 +311,7 @@ describe('ingest_logs lenient validation', () => {
     const [line] = readLines();
     expect(line.attributes).toEqual({ a: '1', ok: 'yes' });
     expect(Object.keys(line.invalid ?? {}).sort()).toEqual([
-      'logRecord.attributes.latency_ms',
+      'logRecord.attributes["latency_ms"]',
       'logRecord.attributes[2]',
       'logRecord.attributes[3]',
       'logRecord.attributes[4]',
@@ -341,14 +348,14 @@ describe('ingest_logs lenient validation', () => {
     expect(res.partialSuccess?.rejectedLogRecords).toBe(0);
     const [line] = readLines();
     expect(line.extra).toEqual({
-      'request.futureTop': 1,
-      'resourceLogs.rlNew': true,
-      'resource.entityRefs': [{ type: 'service' }],
-      'scopeLogs.slNew': 2,
-      'scope.scopeNew': 'x',
-      'logRecord.spanID': 'typo',
-      'logRecord.attributes[0].kvNew': 3,
-      'logRecord.attributes.a.futureKind': 1,
+      'request["futureTop"]': 1,
+      'resourceLogs["rlNew"]': true,
+      'resource["entityRefs"]': [{ type: 'service' }],
+      'scopeLogs["slNew"]': 2,
+      'scope["scopeNew"]': 'x',
+      'logRecord["spanID"]': 'typo',
+      'logRecord.attributes[0]["kvNew"]': 3,
+      'logRecord.attributes["a"]["futureKind"]': 1,
     });
     expect(line.attributes).toEqual({ a: 'v' });
     expect(line.resource_schema_url).toBe('https://opentelemetry.io/schemas/1.0.0');
@@ -402,10 +409,59 @@ describe('ingest_logs lenient validation', () => {
     expect(two.partialSuccess?.errorMessage).toMatch(/resource exceeds/);
   });
 
+  it('gives keys that look like paths their own entries', async () => {
+    const bad = { doubleValue: null };
+    await ingest(
+      request([
+        record({
+          attributes: [
+            { key: 'a.b', value: bad },
+            { key: 'a', value: { kvlistValue: { values: [{ key: 'b', value: bad }] } } },
+            { key: 'c[0]', value: bad },
+            { key: 'c', value: { arrayValue: { values: [bad] } } },
+          ],
+          'attributes[0]': 'unknown field named like a path',
+        }),
+      ]),
+    );
+    const [line] = readLines();
+    expect(Object.keys(line.invalid ?? {}).sort()).toEqual([
+      'logRecord.attributes["a"]["b"]',
+      'logRecord.attributes["a.b"]',
+      'logRecord.attributes["c"][0]',
+      'logRecord.attributes["c[0]"]',
+    ]);
+    expect(Object.keys(line.extra ?? {})).toEqual(['logRecord["attributes[0]"]']);
+  });
+
+  it('caps unknown fields per object instead of rejecting the record', async () => {
+    const many = Object.fromEntries(Array.from({ length: 20_000 }, (_, i) => [`u${i}`, i]));
+    const res = await ingest(request([record(many)]));
+    expect(res.partialSuccess?.rejectedLogRecords).toBe(0);
+    const [line] = readLines();
+    expect(Object.keys(line.extra ?? {})).toHaveLength(MAX_ATTRIBUTES);
+    expect(line.truncated).toBe(true);
+  });
+
+  it(`caps ${MAX_NOTE_ENTRIES} invalid entries per record`, async () => {
+    const bad = { doubleValue: null };
+    const attrs = Array.from({ length: MAX_ATTRIBUTES }, (_, i) => ({ key: `k${i}`, value: bad }));
+    const items = Array.from({ length: MAX_ARRAY_ITEMS }, () => bad);
+    const res = await ingest(
+      request([record({ attributes: attrs, body: { arrayValue: { values: items } } })]),
+    );
+    expect(res.partialSuccess?.rejectedLogRecords).toBe(0);
+    const [line] = readLines();
+    expect(Object.keys(line.invalid ?? {})).toHaveLength(MAX_NOTE_ENTRIES);
+    expect(line.truncated).toBe(true);
+  });
+
   it('bounds and marks what it keeps in extra', async () => {
     await ingest(request([record({ huge: 'z'.repeat(MAX_STRING_CHARS + 5) })]));
     const [line] = readLines();
-    expect(line.extra?.['logRecord.huge']).toBe('z'.repeat(MAX_STRING_CHARS) + TRUNCATION_MARKER);
+    expect(line.extra?.['logRecord["huge"]']).toBe(
+      'z'.repeat(MAX_STRING_CHARS) + TRUNCATION_MARKER,
+    );
     expect(line.truncated).toBe(true);
   });
 
@@ -512,12 +568,40 @@ describe('ingest_logs size bounds', () => {
 });
 
 describe('ingest_logs cost stays linear in request size', () => {
-  // Before the fix, shared resource/scope data was re-serialized per record:
-  // a 10 MB request blocked the event loop for ~28 s. The bound is loose on
-  // purpose; the linear path takes well under a second here.
-  const BOUND_MS = 5000;
+  /**
+   * Count the characters the daemon serializes or measures while handling a
+   * request. Linear handling touches each input byte a small constant number
+   * of times; re-serializing a shared resource per record (the round-1
+   * freeze) touches it once per record, ~1000x here. Machine-independent,
+   * unlike a wall-clock bound.
+   */
+  async function charsProcessed(input: unknown): Promise<number> {
+    let chars = 0;
+    const stringify = JSON.stringify.bind(JSON);
+    const byteLength = Buffer.byteLength.bind(Buffer);
+    vi.spyOn(JSON, 'stringify').mockImplementation(((
+      ...args: Parameters<typeof JSON.stringify>
+    ) => {
+      const out = stringify(...args);
+      chars += out.length;
+      return out;
+    }) as typeof JSON.stringify);
+    vi.spyOn(Buffer, 'byteLength').mockImplementation(((
+      v: string | Buffer,
+      enc?: BufferEncoding,
+    ) => {
+      if (typeof v === 'string') chars += v.length;
+      return byteLength(v, enc);
+    }) as typeof Buffer.byteLength);
+    try {
+      await ingest(input);
+    } finally {
+      vi.restoreAllMocks();
+    }
+    return chars;
+  }
 
-  it('handles ~10 MB of oversize shared resource quickly', async () => {
+  it('serializes an oversize shared resource once, not per record', async () => {
     const chunk = 'x'.repeat(MAX_STRING_CHARS);
     const attrs = Array.from({ length: MAX_ATTRIBUTES }, (_, i) => ({
       key: `k${i}`,
@@ -527,16 +611,12 @@ describe('ingest_logs cost stays linear in request size', () => {
       Array.from({ length: MAX_RECORDS_PER_CALL }, () => ({ eventName: 'tiny' })),
       { resource: { attributes: attrs } },
     );
-    expect(JSON.stringify(input).length).toBeGreaterThan(10_000_000);
-
-    const start = performance.now();
-    const res = await ingest(input);
-    expect(performance.now() - start).toBeLessThan(BOUND_MS);
-    expect(res.partialSuccess?.rejectedLogRecords).toBe(MAX_RECORDS_PER_CALL);
+    const size = JSON.stringify(input).length;
+    expect(size).toBeGreaterThan(10_000_000);
+    expect(await charsProcessed(input)).toBeLessThan(3 * size);
   });
 
-  it('handles ~10 MB of near-limit shared resources quickly', async () => {
-    // Each resource is just under the line limit, shared by 25 tiny records.
+  it('serializes each near-limit shared resource once, not per record', async () => {
     const attrs = Array.from({ length: 15 }, (_, i) => ({
       key: `k${i}`,
       value: str('x'.repeat(MAX_STRING_CHARS)),
@@ -547,15 +627,11 @@ describe('ingest_logs cost stays linear in request size', () => {
         scopeLogs: [{ logRecords: Array.from({ length: 25 }, () => ({ eventName: 'tiny' })) }],
       })),
     };
-    expect(JSON.stringify(input).length).toBeGreaterThan(9_500_000);
-
-    const start = performance.now();
-    const res = await ingest(input);
-    expect(performance.now() - start).toBeLessThan(BOUND_MS);
-    // The per-call byte cap stores ~17 of them and rejects the rest.
-    const stored = readLines().length;
-    expect(stored).toBeGreaterThan(10);
-    expect(res.partialSuccess?.rejectedLogRecords).toBe(1000 - stored);
+    const size = JSON.stringify(input).length;
+    expect(size).toBeGreaterThan(9_500_000);
+    expect(await charsProcessed(input)).toBeLessThan(3 * size);
+    // The per-call byte cap still stores ~17 and rejects the rest.
+    expect(readLines().length).toBeGreaterThan(10);
   });
 });
 
@@ -660,6 +736,132 @@ describe('ingest_logs byte budget and quota markers', () => {
     expect(await ingest(request([record()]), 'beta', NOW, tiny)).toEqual({});
   });
 
+  /** An fs error the way a full disk reports it. */
+  function enospc(): Error {
+    return Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  }
+
+  /** Make every append to a `.jsonl` file throw, until restored. */
+  function failAppends(): void {
+    const realOpen = fs.promises.open.bind(fs.promises);
+    vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const fh = await realOpen(...args);
+      if (String(args[0]).endsWith('.jsonl')) {
+        fh.appendFile = () => Promise.reject(enospc());
+      }
+      return fh;
+    });
+  }
+
+  it('backs off a failing marker write and recovers once writes succeed', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.setSystemTime(NOW);
+    const batch = request(Array.from({ length: 6 }, () => record()));
+    await ingest(batch, 'callboard', new Date(), tiny);
+    vi.setSystemTime(NOW.getTime() + 5_000);
+    await ingest(batch, 'callboard', new Date(), tiny);
+    expect(markers()).toHaveLength(1);
+
+    // Fail without touching the disk, so fake time fully drives each attempt.
+    const mkdir = vi.spyOn(fs.promises, 'mkdir').mockRejectedValue(enospc());
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    for (let t = 0; t < 15 * 60; t++) await vi.advanceTimersByTimeAsync(1000);
+
+    // Without backoff this is one attempt per tick or a zero-delay spin;
+    // with it: 60s, then +1, +2, +4 … capped at 5 min, ~11 attempts.
+    const attempts = mkdir.mock.calls.length;
+    expect(attempts).toBeGreaterThanOrEqual(5);
+    expect(attempts).toBeLessThanOrEqual(15);
+    expect(errors.mock.calls.length).toBeLessThanOrEqual(
+      Math.ceil((15 * 60_000) / ERROR_LOG_WINDOW_MS) + 1,
+    );
+
+    mkdir.mockRestore();
+    await vi.advanceTimersByTimeAsync(MARKER_RETRY_MAX_MS);
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(markers()).toHaveLength(2));
+    expect(markers()[1].rejected_records).toBe(6);
+  });
+
+  it('rate-limits error logging for repeated failed writes', async () => {
+    failAppends();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    for (let i = 0; i < 20; i++) {
+      await expect(ingest(request([record()]))).rejects.toThrow('audit write failed (ENOSPC)');
+    }
+    expect(errors).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a marker’s counts when the append carrying it fails', async () => {
+    const batch = request(Array.from({ length: 6 }, () => record()));
+    const at = (ms: number) => new Date(NOW.getTime() + ms);
+    await ingest(request(Array.from({ length: 10 }, () => record())), 'callboard', NOW, tiny);
+    expect(markers()).toHaveLength(1);
+    await ingest(batch, 'callboard', at(10_000), tiny); // 6 pending
+
+    failAppends();
+    // Due now: this append carries the marker for 12 refusals, and fails.
+    await expect(ingest(batch, 'callboard', at(61_000), tiny)).rejects.toThrow(/ENOSPC/);
+    vi.restoreAllMocks();
+
+    await ingest(batch, 'callboard', at(62_000), tiny);
+    const all = markers();
+    expect(all).toHaveLength(2);
+    expect(all[1]).toMatchObject({
+      rejected_records: 6 + 6 + 6,
+      window_start: at(10_000).toISOString(),
+      window_end: at(62_000).toISOString(),
+    });
+  });
+
+  it('refunds the budget for records whose append failed', async () => {
+    const five = request(Array.from({ length: 5 }, () => record()));
+    await ingest(five, 'probe');
+    const budget = {
+      capacityBytes: fs.statSync(fileFor('probe')).size + 50,
+      refillBytesPerMinute: 1,
+    };
+
+    failAppends();
+    await expect(ingest(five, 'callboard', NOW, budget)).rejects.toThrow(/ENOSPC/);
+    vi.restoreAllMocks();
+
+    expect(await ingest(five, 'callboard', NOW, budget)).toEqual({});
+  });
+
+  it('never writes markers past the daily allowance', async () => {
+    const budget = { ...tiny, markerHeadroomBytesPerDay: 700 };
+    const batch = request(Array.from({ length: 6 }, () => record()));
+    await ingest(batch, 'callboard', NOW, budget);
+    expect(markers()).toHaveLength(1);
+
+    // Due, but a second ~430-byte marker doesn't fit in 700 bytes.
+    await ingest(batch, 'callboard', new Date(NOW.getTime() + 61_000), budget);
+    await flushQuotaMarkers();
+    expect(markers()).toHaveLength(1);
+  });
+
+  it('never holds the process open with a marker timer', async () => {
+    const timeouts = vi.spyOn(globalThis, 'setTimeout');
+    const batch = request(Array.from({ length: 6 }, () => record()));
+    await ingest(batch, 'callboard', NOW, tiny);
+    await ingest(batch, 'callboard', new Date(NOW.getTime() + 5_000), tiny);
+
+    const timers = timeouts.mock.results.map((r) => r.value as NodeJS.Timeout);
+    expect(timers.length).toBeGreaterThan(0);
+    expect(timers.map((t) => t.hasRef())).toEqual(timers.map(() => false));
+  });
+
+  it('bounds the shutdown flush when the disk hangs', async () => {
+    const batch = request(Array.from({ length: 6 }, () => record()));
+    await ingest(batch, 'callboard', NOW, tiny);
+    await ingest(batch, 'callboard', new Date(NOW.getTime() + 5_000), tiny);
+    vi.spyOn(fs.promises, 'mkdir').mockReturnValue(new Promise(() => undefined));
+
+    // Without the bound this never resolves and the test times out.
+    await flushQuotaMarkersWithin(50);
+  }, 5_000);
+
   it('a client cannot forge a daemon line', async () => {
     await ingest(
       request([
@@ -674,8 +876,8 @@ describe('ingest_logs byte budget and quota markers', () => {
     expect(line['drawlatch.source']).toBe('client');
     expect(line).not.toHaveProperty('drawlatch.event');
     expect(line.extra).toEqual({
-      'logRecord.drawlatch.source': 'daemon',
-      'logRecord.drawlatch.event': 'quota_exceeded',
+      'logRecord["drawlatch.source"]': 'daemon',
+      'logRecord["drawlatch.event"]': 'quota_exceeded',
     });
   });
 });
@@ -705,8 +907,26 @@ describe('ingest_logs caller stamping', () => {
     // The claims survive only as nested, client-supplied data.
     expect(line.attributes['drawlatch.caller']).toBe('admin');
     expect(line.resource['drawlatch.caller']).toBe('admin');
-    expect(line.extra?.['logRecord.drawlatch.caller']).toBe('admin');
+    expect(line.extra?.['logRecord["drawlatch.caller"]']).toBe('admin');
     expect(fs.existsSync(path.join(root, 'admin'))).toBe(false);
+  });
+
+  it('stamps win over any record field with the same key', () => {
+    const [rec] = parseIngestRequest(request([record()])).records;
+    // parseRecord only emits fixed keys today; the renderer must not rely on it.
+    Object.assign(rec.fields, {
+      'drawlatch.caller': 'evil',
+      'drawlatch.sequence': 999,
+      'drawlatch.source': 'daemon',
+    });
+    const stamps = {
+      'drawlatch.caller': 'callboard',
+      'drawlatch.received_at': NOW.toISOString(),
+      'drawlatch.sequence': 7,
+    };
+    const line = JSON.parse(renderParts(rec, stamps).parts.join('')) as Record<string, unknown>;
+    expect(line).toMatchObject({ ...stamps, 'drawlatch.source': 'client' });
+    expect(Object.keys(line).slice(0, 4)).toEqual([...Object.keys(stamps), 'drawlatch.source']);
   });
 
   it('keeps callers in separate directories and sequences', async () => {

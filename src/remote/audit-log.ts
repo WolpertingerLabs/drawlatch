@@ -58,6 +58,8 @@ export const MAX_KEY_CHARS = 256;
 export const MAX_SHORT_STRING_CHARS = 256;
 export const MAX_CALLER_ALIAS_CHARS = 128;
 export const TRUNCATION_MARKER = '…[truncated]';
+/** Entries per `extra` or `invalid` map on one line level; past it they are dropped. */
+export const MAX_NOTE_ENTRIES = 256;
 /** errorMessage keeps this many distinct reasons per kind, each cut to MAX_REASON_CHARS. */
 export const MAX_ERROR_REASONS = 10;
 export const MAX_REASON_CHARS = 200;
@@ -83,9 +85,35 @@ export const QUOTA_MARKER_INTERVAL_MS = 60_000;
  */
 export const QUOTA_HEADROOM_BYTES_PER_DAY = 1024 * 1024;
 
+/**
+ * After a timer attempt leaves a marker unwritten (write error, or the day's
+ * headroom is spent), retry with exponential backoff from the failure, not
+ * from the last marker, so a persistent ENOSPC/EIO can't spin.
+ */
+export const MARKER_RETRY_MIN_MS = 1000;
+export const MARKER_RETRY_MAX_MS = 5 * 60_000;
+/** The same write error is logged at most once per window, with a count of the rest. */
+export const ERROR_LOG_WINDOW_MS = 60_000;
+
 export interface BudgetOptions {
   capacityBytes: number;
   refillBytesPerMinute: number;
+  /** Override QUOTA_HEADROOM_BYTES_PER_DAY (tests). */
+  markerHeadroomBytesPerDay?: number;
+}
+
+/** Log `message` at most once per ERROR_LOG_WINDOW_MS per key, counting the rest. */
+const errorLogState = new Map<string, { loggedAt: number; suppressed: number }>();
+function logLimited(key: string, message: string, err: unknown): void {
+  const now = Date.now();
+  const st = errorLogState.get(key);
+  if (st && now - st.loggedAt < ERROR_LOG_WINDOW_MS) {
+    st.suppressed++;
+    return;
+  }
+  const more = st?.suppressed ? ` (${st.suppressed} more since last report)` : '';
+  errorLogState.set(key, { loggedAt: now, suppressed: 0 });
+  log.error(`${message}${more}:`, err);
 }
 
 // ── Wire types ─────────────────────────────────────────────────────────────
@@ -172,15 +200,46 @@ class Notes {
   constructor(private readonly reasons: Reasons) {}
 
   keepExtra(where: string, value: unknown): void {
-    this.extra.set(where, boundJson(value, 0, this));
-    noteReason(this.reasons.kept, `unknown field ${where} kept in extra`);
+    if (this.put(this.extra, where, () => boundJson(value, 0, this))) {
+      noteReason(this.reasons.kept, `unknown field ${where} kept in extra`);
+    }
   }
 
   markInvalid(where: string, reason: string, raw: unknown): typeof INVALID {
-    this.invalid.set(where, { reason, raw: boundJson(raw, 0, this) });
-    noteReason(this.reasons.kept, `invalid ${where} kept in invalid: ${reason}`);
+    if (this.put(this.invalid, where, () => ({ reason, raw: boundJson(raw, 0, this) }))) {
+      noteReason(this.reasons.kept, `invalid ${where} kept in invalid: ${reason}`);
+    }
     return INVALID;
   }
+
+  /**
+   * Store under `where`, bounded. Paths are built to be unique (see
+   * keySegment); a `#n` suffix is a backstop so a collision can never
+   * overwrite an earlier entry. Past MAX_NOTE_ENTRIES the entry is dropped
+   * and the line marked truncated.
+   */
+  private put<T>(map: Map<string, T>, where: string, value: () => T): boolean {
+    if (map.size >= MAX_NOTE_ENTRIES) {
+      this.truncated = true;
+      return false;
+    }
+    let key = where;
+    for (let n = 2; map.has(key); n++) key = `${where}#${n}`;
+    map.set(key, value());
+    return true;
+  }
+}
+
+/**
+ * A client-chosen key as a path segment: `["key"]`, JSON-quoted so a key
+ * containing `.`, `[` or `"` can't produce the same path as nested data.
+ * Fixed field names use `.name` and array positions `[n]`, so the three
+ * segment forms never overlap. Overlong keys are cut and marked.
+ */
+function keySegment(key: string, notes: Notes): string {
+  if (key.length <= MAX_KEY_CHARS) return `[${JSON.stringify(key)}]`;
+  notes.truncated = true;
+  return `[${JSON.stringify(key.slice(0, MAX_KEY_CHARS) + TRUNCATION_MARKER)}]`;
 }
 
 function isObject(v: unknown): v is Plain {
@@ -189,8 +248,15 @@ function isObject(v: unknown): v is Plain {
 
 /** Move keys outside `known` into `notes.extra` under `where.<key>`. */
 function keepUnknown(obj: Plain, known: readonly string[], where: string, notes: Notes): void {
+  let kept = 0;
   for (const key of Object.keys(obj)) {
-    if (!known.includes(key)) notes.keepExtra(`${where}.${key}`, obj[key]);
+    if (known.includes(key)) continue;
+    // Bounded like any other object: past the cap, drop and mark the line.
+    if (kept++ >= MAX_ATTRIBUTES) {
+      notes.truncated = true;
+      break;
+    }
+    notes.keepExtra(`${where}${keySegment(key, notes)}`, obj[key]);
   }
 }
 
@@ -404,7 +470,9 @@ function keyValues(list: unknown, depth: number, notes: Notes, where: string): P
     seen.add(key);
     // A missing value is an empty AnyValue.
     const value =
-      kv.value === undefined ? null : anyValue(kv.value, depth, notes, `${where}.${key}`);
+      kv.value === undefined
+        ? null
+        : anyValue(kv.value, depth, notes, `${where}${keySegment(key, notes)}`);
     if (value !== INVALID) entries.push([key, value]);
   }
   return Object.fromEntries(entries);
@@ -696,7 +764,7 @@ export function parseIngestRequest(input: unknown): ParsedBatch {
 
 // ── Line rendering ─────────────────────────────────────────────────────────
 
-interface Stamps {
+export interface Stamps {
   'drawlatch.caller': string;
   'drawlatch.received_at': string;
   'drawlatch.sequence': number;
@@ -704,9 +772,9 @@ interface Stamps {
 
 /**
  * Render one client line as fragments plus its total size, without joining
- * the shared container pieces until the line is accepted.
+ * the shared container pieces until the line is accepted. Exported for tests.
  */
-function renderParts(rec: ParsedRecord, stamps: Stamps): { parts: string[]; bytes: number } {
+export function renderParts(rec: ParsedRecord, stamps: Stamps): { parts: string[]; bytes: number } {
   const own = { ...stamps, 'drawlatch.source': 'client' };
   // Stamps first, then the record's fields, then the stamps again:
   // re-assigning keeps them at the front and their values win any collision.
@@ -925,6 +993,9 @@ interface CallerQuota {
   lastMarkerAt?: number;
   headroom: { day: string; used: number };
   timer?: NodeJS.Timeout;
+  /** Backoff after a timer attempt that left the marker unwritten. */
+  retryDelayMs: number;
+  retryAt?: number;
   /** What a marker written from the timer or at shutdown needs. */
   auditRoot: string;
   callerAlias: string;
@@ -948,6 +1019,7 @@ function quotaFor(
       tokens: budget.capacityBytes,
       refilledAt: now,
       headroom: { day: utcDay(now), used: 0 },
+      retryDelayMs: 0,
       auditRoot,
       callerAlias,
       budget,
@@ -1010,7 +1082,8 @@ function takeMarker(
   };
   const text = JSON.stringify(line) + '\n';
   const bytes = Buffer.byteLength(text);
-  if (q.headroom.used + bytes > QUOTA_HEADROOM_BYTES_PER_DAY) return undefined;
+  const headroom = q.budget.markerHeadroomBytesPerDay ?? QUOTA_HEADROOM_BYTES_PER_DAY;
+  if (q.headroom.used + bytes > headroom) return undefined;
 
   const prevMarkerAt = q.lastMarkerAt;
   q.pending = undefined;
@@ -1041,19 +1114,31 @@ async function writePendingMarker(callerDir: string, force: boolean): Promise<vo
 
 /**
  * Make sure counts that couldn't be reported yet (interval not passed) are
- * written once it has. The timer is unref'd so it never holds the process.
+ * written once it has. If an attempt leaves them pending (write error, or
+ * the day's headroom is spent), back off exponentially from that attempt.
+ * The timer is unref'd so it never holds the process open.
  */
 function scheduleMarker(callerDir: string, q: CallerQuota, now: number): void {
   if (!q.pending || q.timer) return;
-  const due = (q.lastMarkerAt ?? now) + QUOTA_MARKER_INTERVAL_MS;
+  const due = Math.max((q.lastMarkerAt ?? now) + QUOTA_MARKER_INTERVAL_MS, q.retryAt ?? 0);
   q.timer = setTimeout(
     () => {
       q.timer = undefined;
       writePendingMarker(callerDir, false)
         .catch((err: unknown) => {
-          log.error('quota marker write failed:', err);
+          logLimited(`marker:${callerDir}`, 'quota marker write failed', err);
         })
         .finally(() => {
+          if (q.pending) {
+            q.retryDelayMs = Math.min(
+              MARKER_RETRY_MAX_MS,
+              q.retryDelayMs ? q.retryDelayMs * 2 : MARKER_RETRY_MIN_MS,
+            );
+            q.retryAt = Date.now() + q.retryDelayMs;
+          } else {
+            q.retryDelayMs = 0;
+            q.retryAt = undefined;
+          }
           if (quotas.get(callerDir) === q) scheduleMarker(callerDir, q, Date.now());
         });
     },
@@ -1064,16 +1149,33 @@ function scheduleMarker(callerDir: string, q: CallerQuota, now: number): void {
 
 /**
  * Write every pending `quota_exceeded` marker now, ignoring the interval.
- * Called on graceful shutdown so a flood that ends with the daemon still
- * leaves its marker.
+ * Called on shutdown so a flood that ends with the daemon still leaves its
+ * marker.
  */
 export async function flushQuotaMarkers(): Promise<void> {
   for (const [callerDir, q] of quotas) {
     if (q.timer) clearTimeout(q.timer);
     q.timer = undefined;
     await writePendingMarker(callerDir, true).catch((err: unknown) => {
-      log.error('quota marker write failed:', err);
+      logLimited(`marker:${callerDir}`, 'quota marker write failed', err);
     });
+  }
+}
+
+/**
+ * flushQuotaMarkers, but never waiting longer than `ms`: shutdown must not
+ * hang on a stuck disk. Resolves whether or not the flush finished.
+ */
+export async function flushQuotaMarkersWithin(ms: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+    timer.unref();
+  });
+  try {
+    await Promise.race([flushQuotaMarkers(), deadline]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -1090,7 +1192,7 @@ export interface IngestOptions {
 
 /** Filesystem errors carry absolute paths; the caller gets only the code. */
 function safeWriteError(err: unknown): Error {
-  log.error('audit write failed:', err);
+  logLimited('write', 'audit write failed', err);
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
   return new Error(
     `ingest_logs: audit write failed${typeof code === 'string' ? ` (${code})` : ''}`,
@@ -1197,9 +1299,10 @@ export async function ingestLogs(
   return { partialSuccess: { rejectedLogRecords: rejected, errorMessage: message } };
 }
 
-/** Forget all in-memory state: sequences, budgets, pending markers (tests). */
+/** Forget all in-memory state: sequences, budgets, pending markers, log limits (tests). */
 export function resetAuditLogState(): void {
   sequences.clear();
+  errorLogState.clear();
   for (const q of quotas.values()) {
     if (q.timer) clearTimeout(q.timer);
   }
