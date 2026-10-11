@@ -7,16 +7,17 @@
  * Also pins the write-only property: nothing reachable over the protocol
  * reads, lists, or changes the audit files.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
+import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 
-import { createApp, getSessionsSnapshot } from './server.js';
+import { createApp, getSessionsSnapshot, gracefulShutdown } from './server.js';
 import type { RemoteServerConfig } from '../shared/config.js';
 import {
   generateKeyBundle,
@@ -33,7 +34,13 @@ import {
 } from '../shared/protocol/index.js';
 import { IngestorManager } from './ingestors/manager.js';
 import { toolHandlers } from './tool-dispatch.js';
-import { resetAuditLogState, type AuditLine } from './audit-log.js';
+import {
+  ingestLogs,
+  resetAuditLogState,
+  type AuditLine,
+  type QuotaExceededLine,
+} from './audit-log.js';
+import { resumeWaits } from './wait-for-events.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -44,6 +51,8 @@ let aliceKeys: KeyBundle;
 let bobKeys: KeyBundle;
 let mgr: IngestorManager;
 let configDir: string;
+let config: RemoteServerConfig;
+let serverKeys: KeyBundle;
 let prevConfigDir: string | undefined;
 
 beforeAll(async () => {
@@ -54,10 +63,10 @@ beforeAll(async () => {
 
   aliceKeys = generateKeyBundle();
   bobKeys = generateKeyBundle();
-  const serverKeys = generateKeyBundle();
+  serverKeys = generateKeyBundle();
   serverPub = extractPublicKeys(serverKeys);
 
-  const config: RemoteServerConfig = {
+  config = {
     host: '127.0.0.1',
     port: 0,
     connectors: [],
@@ -320,5 +329,64 @@ describe('ingest_logs is write-only over the protocol', () => {
     expect(fs.readFileSync(path.join(here, '..', 'mcp', 'server.ts'), 'utf8')).not.toContain(
       'ingest_logs',
     );
+  });
+});
+
+describe('quota markers at shutdown', () => {
+  it('writes pending markers even while a slow socket holds close() open', async () => {
+    // A server of its own: gracefulShutdown closes the one it is given.
+    const app = createApp({
+      config,
+      ownKeys: serverKeys,
+      authorizedPeers: [],
+      ingestorManager: mgr,
+      disableRateLimiting: true,
+    });
+    const srv = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    // A flood for "carol": the first refusal writes a marker inline, the
+    // second is pending inside the coalescing window.
+    const auditRoot = path.join(configDir, 'audit');
+    const budget = { capacityBytes: 1, refillBytesPerMinute: 1 };
+    const t0 = Date.now();
+    const flood = (ms: number) =>
+      ingestLogs(batch('flood'), 'carol', { auditRoot, budget, now: new Date(t0 + ms) });
+    await flood(0);
+    await flood(1000);
+    const markers = (): QuotaExceededLine[] =>
+      auditFiles('carol')
+        .flatMap((f) => fs.readFileSync(f, 'utf8').trim().split('\n'))
+        .map((l) => JSON.parse(l) as AuditLine | QuotaExceededLine)
+        .filter((l): l is QuotaExceededLine => l['drawlatch.source'] === 'daemon');
+    expect(markers()).toHaveLength(1);
+
+    // An unauthenticated client trickling a large body: close() can't finish.
+    const sock = net.connect((srv.address() as AddressInfo).port, '127.0.0.1');
+    await once(sock, 'connect');
+    sock.write(
+      'POST /request HTTP/1.1\r\nHost: x\r\nContent-Type: application/octet-stream\r\n' +
+        'X-Session-Id: bogus\r\nContent-Length: 1000000\r\n\r\nx',
+    );
+
+    let closed = false;
+    const done = gracefulShutdown(srv, mgr).then(() => {
+      closed = true;
+    });
+    // Flushed before close() even though close() is still held open.
+    await vi.waitFor(() => expect(markers()).toHaveLength(2), { timeout: 3000 });
+    expect(markers()[1].rejected_records).toBe(1);
+    expect(closed).toBe(false);
+
+    // A refusal while close() waits is caught by the flush after close.
+    await flood(2000);
+    expect(markers()).toHaveLength(2);
+    sock.destroy();
+    await done;
+    expect(markers()).toHaveLength(3);
+
+    resumeWaits();
+    resetAuditLogState();
   });
 });

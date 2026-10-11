@@ -49,7 +49,7 @@ import { getCallerKeysDir, getServerKeysDir } from '../shared/config.js';
 import { IngestorManager } from './ingestors/index.js';
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller } from '../shared/env-utils.js';
-import { flushQuotaMarkers } from './audit-log.js';
+import { flushQuotaMarkers, flushQuotaMarkersWithin } from './audit-log.js';
 import { toolHandlers, type ToolContext } from './tool-dispatch.js';
 import { releaseAllWaits, resumeWaits } from './wait-for-events.js';
 import { setTunnelUrl, getTunnelUrl } from './tunnel-state.js';
@@ -947,9 +947,13 @@ export function createApp(options: CreateAppOptions = {}) {
 
 // ── Shutdown ───────────────────────────────────────────────────────────────
 
+/** Longest a shutdown waits on writing pending audit quota markers, per attempt. */
+export const SHUTDOWN_FLUSH_MS = 2000;
+
 /**
- * Graceful shutdown: answer held waits, stop the tunnel, stop ingestors, then
- * close the HTTP server. Resolves once the server has closed.
+ * Graceful shutdown: answer held waits, write pending audit quota markers,
+ * stop the tunnel, stop ingestors, then close the HTTP server and write any
+ * markers added meanwhile. Resolves once the server has closed.
  *
  * Held `wait_for_events` requests are released first. Otherwise each one keeps
  * its request open for up to 55s, `server.close()` cannot finish, and the
@@ -965,6 +969,11 @@ export async function gracefulShutdown(
 ): Promise<void> {
   const released = releaseAllWaits();
   if (released > 0) console.log(`[remote] Released ${released} held wait(s)`);
+
+  // Before anything that can stall (server.close() waits on every open
+  // socket, and a slow one can outlast the forced exit), write pending
+  // quota_exceeded markers, bounded so a stuck disk can't stall shutdown.
+  await flushQuotaMarkersWithin(SHUTDOWN_FLUSH_MS);
 
   // Stop tunnel first (fast — just kills a child process)
   setTunnelUrl(null);
@@ -982,8 +991,7 @@ export async function gracefulShutdown(
     server.close(() => resolve());
   });
 
-  // After close, so no request can add to them: write any quota_exceeded
-  // markers still waiting out their interval.
+  // Again after close, for refusals from requests that were still in flight.
   await flushQuotaMarkers();
 }
 
@@ -1146,10 +1154,11 @@ export function main(): void {
       process.exit(0);
     });
 
-    // Force exit after 10 seconds if connections don't drain
+    // Force exit after 10 seconds if connections don't drain, writing any
+    // quota_exceeded markers that refusals added since the first flush.
     setTimeout(() => {
       console.error('[remote] Forced shutdown after timeout.');
-      process.exit(1);
+      void flushQuotaMarkersWithin(SHUTDOWN_FLUSH_MS).finally(() => process.exit(1));
     }, 10_000).unref();
   };
 
