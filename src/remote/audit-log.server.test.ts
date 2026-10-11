@@ -452,6 +452,23 @@ describe('quota markers at shutdown', () => {
     resetAuditLogState();
   });
 
+  it('finishes shutdown when the disk hangs, each flush bounded', async () => {
+    const srv = await startServer();
+    const flood = flooder('fred');
+    await flood(0);
+    await flood(1000);
+    // Every write from here on hangs forever.
+    vi.spyOn(fs.promises, 'mkdir').mockReturnValue(new Promise(() => undefined));
+
+    const start = Date.now();
+    await gracefulShutdown(srv, mgr);
+    // Two bounded flushes (before and after close), nothing unbounded.
+    expect(Date.now() - start).toBeLessThan(3 * SHUTDOWN_FLUSH_MS);
+    vi.restoreAllMocks();
+    resumeWaits();
+    resetAuditLogState();
+  }, 15_000);
+
   it('the forced-exit path flushes pending markers before exiting', async () => {
     const flood = flooder('erin');
     await flood(0);
