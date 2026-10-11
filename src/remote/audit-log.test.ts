@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   auditCallerDir,
   flushQuotaMarkers,
+  beginAuditShutdown,
   flushQuotaMarkersWithin,
   ingestLogs,
   parseIngestRequest,
@@ -16,6 +17,7 @@ import {
   MAX_NOTE_ENTRIES,
   MAX_ARRAY_ITEMS,
   MAX_ATTRIBUTES,
+  MAX_KEY_CHARS,
   MAX_BYTES_PER_CALL,
   MAX_RECORDS_PER_CALL,
   MAX_RECORD_BYTES,
@@ -292,6 +294,18 @@ describe('ingest_logs lenient validation', () => {
     expect(lines[0].invalid).toBeUndefined();
   });
 
+  it.each([
+    ['empty', ''],
+    ['numeric', 7],
+    ['overlong', 'K'.repeat(257)],
+  ])('keeps the value of an attribute with a bad (%s) key', async (_name, key) => {
+    await ingest(request([record({ attributes: [{ key, value: str('the value') }] })]));
+    const [line] = readLines();
+    expect(line.invalid?.['logRecord.attributes[0]']).toMatchObject({
+      raw: { value: { stringValue: 'the value' } },
+    });
+  });
+
   it('keeps the good attributes when one is bad', async () => {
     await ingest(
       request([
@@ -432,6 +446,15 @@ describe('ingest_logs lenient validation', () => {
       'logRecord.attributes["c[0]"]',
     ]);
     expect(Object.keys(line.extra ?? {})).toEqual(['logRecord["attributes[0]"]']);
+  });
+
+  it('keeps both of two long unknown names that truncate alike', async () => {
+    const prefix = 'u'.repeat(MAX_KEY_CHARS);
+    await ingest(request([record({ [`${prefix}-one`]: 1, [`${prefix}-two`]: 2 })]));
+    const [line] = readLines();
+    const cut = `logRecord[${JSON.stringify(prefix + TRUNCATION_MARKER)}]`;
+    expect(line.extra).toEqual({ [cut]: 1, [`${cut}#2`]: 2 });
+    expect(line.truncated).toBe(true);
   });
 
   it('caps unknown fields per object instead of rejecting the record', async () => {
@@ -775,6 +798,8 @@ describe('ingest_logs byte budget and quota markers', () => {
     expect(errors.mock.calls.length).toBeLessThanOrEqual(
       Math.ceil((15 * 60_000) / ERROR_LOG_WINDOW_MS) + 1,
     );
+    // Rate-limited: retries inside one log window share one error line.
+    expect(errors.mock.calls.length).toBeLessThan(attempts);
 
     mkdir.mockRestore();
     await vi.advanceTimersByTimeAsync(MARKER_RETRY_MAX_MS);
@@ -790,6 +815,47 @@ describe('ingest_logs byte budget and quota markers', () => {
       await expect(ingest(request([record()]))).rejects.toThrow('audit write failed (ENOSPC)');
     }
     expect(errors).toHaveBeenCalledTimes(1);
+  });
+
+  it('arms the retry timer when the append carrying a due marker fails', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.setSystemTime(NOW);
+    const batch = request(Array.from({ length: 6 }, () => record()));
+    await ingest(batch, 'callboard', new Date(), tiny);
+    expect(markers()).toHaveLength(1);
+
+    // A minute on, this call's marker is due and rides its append, which fails.
+    vi.setSystemTime(NOW.getTime() + 61_000);
+    failAppends();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await expect(ingest(batch, 'callboard', new Date(), tiny)).rejects.toThrow(/ENOSPC/);
+    vi.restoreAllMocks();
+
+    // The disk is back and the caller is silent: only a timer can write it.
+    await vi.advanceTimersByTimeAsync(5_000);
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(markers()).toHaveLength(2));
+    expect(markers()[1].rejected_records).toBe(6);
+  });
+
+  it('writes the marker inline for a call that was in flight when shutdown began', async () => {
+    const batch = request(Array.from({ length: 6 }, () => record()));
+    await ingest(batch, 'callboard', NOW, tiny);
+    expect(markers()).toHaveLength(1);
+
+    // Started before shutdown, refused after it began, inside the interval.
+    const inFlight = ingest(batch, 'callboard', new Date(NOW.getTime() + 5_000), tiny);
+    beginAuditShutdown();
+    await inFlight;
+    // On disk before the reply, with no flush needed.
+    expect(markers()).toHaveLength(2);
+    expect(markers()[1].rejected_records).toBe(6);
+  });
+
+  it('refuses new calls once shutdown has begun', async () => {
+    beginAuditShutdown();
+    await expect(ingest(request([record()]))).rejects.toThrow('server shutting down');
+    expect(fs.existsSync(root)).toBe(false);
   });
 
   it('keeps a marker’s counts when the append carrying it fails', async () => {

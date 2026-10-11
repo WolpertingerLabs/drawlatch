@@ -460,7 +460,8 @@ function keyValues(list: unknown, depth: number, notes: Notes, where: string): P
     keepUnknown(kv, ['key', 'value'], at, notes);
     const key = kv.key;
     if (typeof key !== 'string' || key.length === 0 || key.length > MAX_KEY_CHARS) {
-      notes.markInvalid(at, `key not a 1-${MAX_KEY_CHARS} char string`, key);
+      // Keep the value too: only the key is unusable.
+      notes.markInvalid(at, `key not a 1-${MAX_KEY_CHARS} char string`, { key, value: kv.value });
       continue;
     }
     if (seen.has(key)) {
@@ -1130,21 +1131,31 @@ function scheduleMarker(callerDir: string, q: CallerQuota, now: number): void {
         })
         .finally(() => {
           if (q.pending) {
-            q.retryDelayMs = Math.min(
-              MARKER_RETRY_MAX_MS,
-              q.retryDelayMs ? q.retryDelayMs * 2 : MARKER_RETRY_MIN_MS,
-            );
-            q.retryAt = Date.now() + q.retryDelayMs;
+            retryMarkerLater(callerDir, q);
           } else {
             q.retryDelayMs = 0;
             q.retryAt = undefined;
           }
-          if (quotas.get(callerDir) === q) scheduleMarker(callerDir, q, Date.now());
         });
     },
     Math.max(0, due - now),
   );
   q.timer.unref();
+}
+
+/**
+ * A marker attempt left counts pending: back off (1 s doubling to
+ * MARKER_RETRY_MAX_MS, from now) and make sure a timer is armed. Used by the
+ * timer itself and by a failed inline marker, so pending counts always have
+ * a timer and never wait on the caller's next call.
+ */
+function retryMarkerLater(callerDir: string, q: CallerQuota): void {
+  q.retryDelayMs = Math.min(
+    MARKER_RETRY_MAX_MS,
+    q.retryDelayMs ? q.retryDelayMs * 2 : MARKER_RETRY_MIN_MS,
+  );
+  q.retryAt = Date.now() + q.retryDelayMs;
+  if (quotas.get(callerDir) === q) scheduleMarker(callerDir, q, Date.now());
 }
 
 /**
@@ -1200,6 +1211,25 @@ function safeWriteError(err: unknown): Error {
 }
 
 /**
+ * Set by graceful shutdown. New calls are refused (the client keeps its batch
+ * and resends after the restart, as with wait_for_events' drain), and calls
+ * already in flight write their quota marker inline, so a refusal answered
+ * during shutdown is never left pending.
+ */
+let shuttingDown = false;
+
+export const SHUTTING_DOWN_MESSAGE = 'ingest_logs: server shutting down; retry after restart';
+
+export function beginAuditShutdown(): void {
+  shuttingDown = true;
+}
+
+/** Accept calls again (a new app in the same process, and tests). */
+export function resumeAuditIngest(): void {
+  shuttingDown = false;
+}
+
+/**
  * Validate and append one `ingest_logs` batch for `callerAlias`.
  *
  * Every line in a call shares one received_at, so a batch lands in a single
@@ -1214,6 +1244,7 @@ export async function ingestLogs(
   callerAlias: string,
   options: IngestOptions = {},
 ): Promise<IngestLogsResponse> {
+  if (shuttingDown) throw new Error(SHUTTING_DOWN_MESSAGE);
   const auditRoot = options.auditRoot ?? auditRootDir();
   const callerDir = auditCallerDir(auditRoot, callerAlias);
   const batch = parseIngestRequest(input);
@@ -1270,7 +1301,8 @@ export async function ingestLogs(
         }
 
         if (refusedRecords > 0) addPending(q, refusedRecords, refusedBytes, now);
-        const marker = takeMarker(q, seq + 1, now);
+        // During shutdown nothing may stay pending: write the marker now.
+        const marker = takeMarker(q, seq + 1, now, shuttingDown);
         if (marker) {
           seq++;
           chunks.push(marker.text);
@@ -1282,7 +1314,12 @@ export async function ingestLogs(
           lastSequence: seq,
           rollback: () => {
             q.tokens = Math.min(budget.capacityBytes, q.tokens + spent);
-            marker?.rollback();
+            if (marker) {
+              marker.rollback();
+              // takeMarker cleared pending before scheduleMarker ran, so no
+              // timer is armed for the restored counts. Arm one.
+              retryMarkerLater(callerDir, q);
+            }
           },
         };
       });
@@ -1303,6 +1340,7 @@ export async function ingestLogs(
 export function resetAuditLogState(): void {
   sequences.clear();
   errorLogState.clear();
+  shuttingDown = false;
   for (const q of quotas.values()) {
     if (q.timer) clearTimeout(q.timer);
   }
