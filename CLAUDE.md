@@ -19,6 +19,7 @@ To try the daemon without touching your real setup, set `MCP_CONFIG_DIR` to a te
 - **Connection templates:** `src/connections/<category>/<alias>.json`. The alias is the filename. Secrets referenced in `headers` count as required; the rest are optional.
 - **Config:** schema, defaults, secret resolution, and timeout constants are in `src/shared/config.ts`. Secrets resolve from a caller's `env` literal or `<ALIAS>_<NAME>` only, never a bare env var.
 - **Listeners:** `src/remote/ingestors/` (manager, plus `discord/`, `slack/`, `webhook/`, `poll/`).
+- **Audit log:** `ingest_logs` in `src/remote/audit-log.ts`. Records land in `<config dir>/audit/<caller>/<YYYY-MM-DD>.jsonl` (UTC), one flattened JSON line each, stamped `drawlatch.caller`/`received_at`/`sequence`/`source` by the daemon; the daemon's own `quota_exceeded` lines have `source: daemon`. Keep it write-only: no tool may read, list, or modify those files (the canary sweep in `audit-log.server.test.ts` calls every tool to check this).
 - **`plans/`:** design records. Leave them as they are.
 
 ## Docs

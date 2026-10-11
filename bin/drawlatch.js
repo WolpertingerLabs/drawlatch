@@ -28,7 +28,7 @@ const SERVER_ENTRY = join(PKG_ROOT, "dist/remote/server.js");
 const GENERATE_KEYS_ENTRY = join(PKG_ROOT, "dist/cli/generate-keys.js");
 
 // Import config helpers from compiled drawlatch code
-const { getConfigDir, getEnvFilePath, getCallerKeysDir, getServerKeysDir, getProxyConfigPath, getRemoteConfigPath, loadProxyConfig, loadRemoteConfig } = await import(
+const { getConfigDir, getEnvFilePath, getCallerKeysDir, getServerKeysDir, getProxyConfigPath, getRemoteConfigPath, loadProxyConfig, loadRemoteConfig, STOP_KILL_AFTER_MS } = await import(
   join(PKG_ROOT, "dist/shared/config.js")
 );
 
@@ -426,7 +426,9 @@ async function cmdStop() {
     return;
   }
 
-  const stopped = await waitForExit(pid, 5000);
+  // Long enough for the daemon's own forced exit and final audit flush;
+  // SIGKILL is only for a daemon that has wedged.
+  const stopped = await waitForExit(pid, STOP_KILL_AFTER_MS);
   if (!stopped) {
     console.log("Server did not stop gracefully, sending SIGKILL...");
     try {
@@ -1448,7 +1450,8 @@ Options:
   -h, --help   Show this help message
 
 Sends SIGTERM to the server process and waits for graceful shutdown.
-Falls back to SIGKILL if the process does not exit within 5 seconds.
+Falls back to SIGKILL if the process does not exit within 15 seconds
+(the daemon's own 10s forced exit plus its final audit flush, with slack).
 `);
 }
 

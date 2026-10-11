@@ -45,10 +45,16 @@ import {
   type ProxyRequest,
   type ProxyResponse,
 } from '../shared/protocol/index.js';
-import { getCallerKeysDir, getServerKeysDir } from '../shared/config.js';
+import {
+  getCallerKeysDir,
+  getServerKeysDir,
+  SHUTDOWN_FLUSH_MS,
+  SHUTDOWN_FORCE_EXIT_MS,
+} from '../shared/config.js';
 import { IngestorManager } from './ingestors/index.js';
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller } from '../shared/env-utils.js';
+import { beginAuditShutdown, flushQuotaMarkersWithin, resumeAuditIngest } from './audit-log.js';
 import { toolHandlers, type ToolContext } from './tool-dispatch.js';
 import { releaseAllWaits, resumeWaits } from './wait-for-events.js';
 import { setTunnelUrl, getTunnelUrl } from './tunnel-state.js';
@@ -434,6 +440,7 @@ export function createApp(options: CreateAppOptions = {}) {
   // A host that ran gracefulShutdown() and builds a new app in the same
   // process must not inherit the old app's draining state.
   resumeWaits();
+  resumeAuditIngest();
 
   // Create or use the provided ingestor manager.
   // When config is loaded from disk (production), pass loadRemoteConfig as the
@@ -947,8 +954,9 @@ export function createApp(options: CreateAppOptions = {}) {
 // ── Shutdown ───────────────────────────────────────────────────────────────
 
 /**
- * Graceful shutdown: answer held waits, stop the tunnel, stop ingestors, then
- * close the HTTP server. Resolves once the server has closed.
+ * Graceful shutdown: answer held waits, write pending audit quota markers,
+ * stop the tunnel, stop ingestors, then close the HTTP server and write any
+ * markers added meanwhile. Resolves once the server has closed.
  *
  * Held `wait_for_events` requests are released first. Otherwise each one keeps
  * its request open for up to 55s, `server.close()` cannot finish, and the
@@ -965,6 +973,14 @@ export async function gracefulShutdown(
   const released = releaseAllWaits();
   if (released > 0) console.log(`[remote] Released ${released} held wait(s)`);
 
+  // From here ingest_logs refuses new calls ("shutting down"), and a call
+  // already in flight writes any quota_exceeded marker inline, so nothing
+  // refused during shutdown is left pending. Then, before anything that can
+  // stall (server.close() waits on every open socket), write what is pending,
+  // bounded so a stuck disk can't stall shutdown.
+  beginAuditShutdown();
+  await flushQuotaMarkersWithin(SHUTDOWN_FLUSH_MS);
+
   // Stop tunnel first (fast — just kills a child process)
   setTunnelUrl(null);
   if (stopTunnel) {
@@ -980,6 +996,38 @@ export async function gracefulShutdown(
   await new Promise<void>((resolve) => {
     server.close(() => resolve());
   });
+
+  // Again after close: retries a pre-close flush that failed or timed out.
+  await flushQuotaMarkersWithin(SHUTDOWN_FLUSH_MS);
+}
+
+/**
+ * Force exit if connections don't drain within SHUTDOWN_FORCE_EXIT_MS, after
+ * a last bounded flush of quota_exceeded markers. `drawlatch stop` waits
+ * STOP_KILL_AFTER_MS, which is derived from the same constants and longer
+ * than this whole path, before it sends SIGKILL.
+ */
+export function armForcedExit(
+  exit: (code: number) => void = (code) => process.exit(code),
+): NodeJS.Timeout {
+  const timer = setTimeout(() => {
+    console.error('[remote] Forced shutdown after timeout.');
+    void exitAfterFlushingMarkers(exit);
+  }, SHUTDOWN_FORCE_EXIT_MS);
+  timer.unref();
+  return timer;
+}
+
+/**
+ * The forced-exit path: one last bounded flush of pending quota markers,
+ * then exit(1). Finishes within SHUTDOWN_FLUSH_MS of being called, so with
+ * SHUTDOWN_FORCE_EXIT_MS it stays inside the CLI's STOP_KILL_AFTER_MS.
+ */
+export async function exitAfterFlushingMarkers(
+  exit: (code: number) => void = (code) => process.exit(code),
+): Promise<void> {
+  await flushQuotaMarkersWithin(SHUTDOWN_FLUSH_MS);
+  exit(1);
 }
 
 // waitForTunnelReady is now exported from tunnel.ts — imported dynamically
@@ -1141,11 +1189,7 @@ export function main(): void {
       process.exit(0);
     });
 
-    // Force exit after 10 seconds if connections don't drain
-    setTimeout(() => {
-      console.error('[remote] Forced shutdown after timeout.');
-      process.exit(1);
-    }, 10_000).unref();
+    armForcedExit();
   };
 
   server.on('error', (err: NodeJS.ErrnoException) => {
