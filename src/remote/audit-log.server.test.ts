@@ -209,12 +209,14 @@ describe('ingest_logs over /request', () => {
     expect(readAll('alice').map((l) => l.event_name)).not.toContain('spoof');
   });
 
-  it('reports malformed records in partialSuccess', async () => {
+  it('reports rejected and kept-with-warnings records in partialSuccess', async () => {
     const channel = await handshake(aliceKeys);
     const input = batch('ok');
+    input.resourceLogs[0].scopeLogs[0].logRecords.push('not-a-record' as never);
     input.resourceLogs[0].scopeLogs[0].logRecords.push({ traceId: 'nope' } as never);
     const response = await call(channel, 'ingest_logs', input);
     expect(response.success).toBe(true);
+    // The bad traceId is kept under `invalid`; only the non-object is rejected.
     expect(response.result).toMatchObject({ partialSuccess: { rejectedLogRecords: 1 } });
   });
 
@@ -231,43 +233,87 @@ describe('ingest_logs over /request', () => {
 });
 
 describe('ingest_logs is write-only over the protocol', () => {
-  it.each([
-    'read_logs',
-    'list_logs',
-    'query_logs',
-    'get_audit_log',
-    'list_audit_logs',
-    'delete_logs',
-  ])('%s is not a tool', async (toolName) => {
-    const channel = await handshake(aliceKeys);
-    const response = await call(channel, toolName, { caller: 'alice' });
-    expect(response.success).toBe(false);
-    expect(response.error).toBe(`Unknown tool: ${toolName}`);
+  /**
+   * Ingest a unique canary, then call every registered tool, as the owner and
+   * as another caller, with empty input and with inputs pointing straight at
+   * the audit file. No response may contain the canary. This catches a read
+   * path whatever it is named or wherever it lives.
+   */
+  it('no registered tool returns stored audit content', async () => {
+    const canary = `canary-${crypto.randomUUID()}`;
+    const owner = await handshake(aliceKeys);
+    const stored = await call(
+      owner,
+      'ingest_logs',
+      batch(canary, [{ key: 'note', value: { stringValue: canary } }]),
+    );
+    expect(stored.success).toBe(true);
+    const [auditFile] = auditFiles('alice');
+    expect(fs.readFileSync(auditFile, 'utf8')).toContain(canary);
+
+    const auditDir = path.dirname(auditFile);
+    const inputs: Record<string, unknown>[] = [
+      { timeout_ms: 0 },
+      {
+        timeout_ms: 0,
+        caller: 'alice',
+        alias: 'alice',
+        connection: 'audit',
+        path: auditFile,
+        file: auditFile,
+        dir: auditDir,
+        url: `file://${auditFile}`,
+        method: 'GET',
+        after_id: -1,
+        afterId: -1,
+        cursors: {},
+        instance_id: '_default',
+      },
+      {
+        timeout_ms: 0,
+        path: auditDir,
+        url: `${baseUrl}/health`,
+        date: path.basename(auditFile, '.jsonl'),
+      },
+    ];
+
+    const leaks: string[] = [];
+    for (const keys of [aliceKeys, bobKeys]) {
+      for (const toolName of Object.keys(toolHandlers)) {
+        // A fresh session per tool keeps the sweep under the per-session rate limit.
+        const channel = await handshake(keys);
+        for (const input of inputs) {
+          const response = await call(channel, toolName, input);
+          if (JSON.stringify(response).includes(canary)) {
+            leaks.push(
+              `${keys === aliceKeys ? 'alice' : 'bob'}:${toolName}:${JSON.stringify(input)}`,
+            );
+          }
+        }
+      }
+    }
+    expect(leaks).toEqual([]);
   });
 
-  it('ingest_logs is the only tool that touches the audit log', () => {
-    expect(Object.keys(toolHandlers).filter((t) => /log|audit/i.test(t))).toEqual(['ingest_logs']);
-  });
-
-  it('only tool-dispatch imports the audit-log module, and only ingestLogs', () => {
+  it('no source outside audit-log.ts builds a path to the audit directory', () => {
     const srcRoot = path.resolve(here, '..');
-    const importers: string[] = [];
+    const offenders: string[] = [];
     const walk = (dir: string): void => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) walk(full);
-        else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
-          if (/from '\.{1,2}\/(?:remote\/)?audit-log\.js'/.test(fs.readFileSync(full, 'utf8'))) {
-            importers.push(path.relative(srcRoot, full));
-          }
+        else if (
+          entry.name.endsWith('.ts') &&
+          !entry.name.endsWith('.test.ts') &&
+          entry.name !== 'audit-log.ts' &&
+          /['"`]audit['"`/]/.test(fs.readFileSync(full, 'utf8'))
+        ) {
+          offenders.push(path.relative(srcRoot, full));
         }
       }
     };
     walk(srcRoot);
-    expect(importers).toEqual([path.join('remote', 'tool-dispatch.ts')]);
-    expect(fs.readFileSync(path.join(here, 'tool-dispatch.ts'), 'utf8')).toMatch(
-      /import \{ ingestLogs \} from '\.\/audit-log\.js';/,
-    );
+    expect(offenders).toEqual([]);
   });
 
   it('is not exposed by the local MCP server', () => {
