@@ -17,8 +17,18 @@ import net, { type AddressInfo } from 'node:net';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 
-import { createApp, getSessionsSnapshot, gracefulShutdown } from './server.js';
-import type { RemoteServerConfig } from '../shared/config.js';
+import {
+  createApp,
+  exitAfterFlushingMarkers,
+  getSessionsSnapshot,
+  gracefulShutdown,
+} from './server.js';
+import {
+  SHUTDOWN_FLUSH_MS,
+  SHUTDOWN_FORCE_EXIT_MS,
+  STOP_KILL_AFTER_MS,
+  type RemoteServerConfig,
+} from '../shared/config.js';
 import {
   generateKeyBundle,
   extractPublicKeys,
@@ -37,6 +47,7 @@ import { toolHandlers } from './tool-dispatch.js';
 import {
   ingestLogs,
   resetAuditLogState,
+  SHUTTING_DOWN_MESSAGE,
   type AuditLine,
   type QuotaExceededLine,
 } from './audit-log.js';
@@ -333,8 +344,29 @@ describe('ingest_logs is write-only over the protocol', () => {
 });
 
 describe('quota markers at shutdown', () => {
-  it('writes pending markers even while a slow socket holds close() open', async () => {
-    // A server of its own: gracefulShutdown closes the one it is given.
+  const auditRoot = () => path.join(configDir, 'audit');
+  const budget = { capacityBytes: 1, refillBytesPerMinute: 1 };
+
+  /** A flood for `caller`: every record is refused; returns a helper per call. */
+  function flooder(caller: string) {
+    const t0 = Date.now();
+    return (ms: number) =>
+      ingestLogs(batch('flood'), caller, {
+        auditRoot: auditRoot(),
+        budget,
+        now: new Date(t0 + ms),
+      });
+  }
+
+  function markers(caller: string): QuotaExceededLine[] {
+    return auditFiles(caller)
+      .flatMap((f) => fs.readFileSync(f, 'utf8').trim().split('\n'))
+      .map((l) => JSON.parse(l) as AuditLine | QuotaExceededLine)
+      .filter((l): l is QuotaExceededLine => l['drawlatch.source'] === 'daemon');
+  }
+
+  /** A server of its own (gracefulShutdown closes the one it is given). */
+  async function startServer(): Promise<Server> {
     const app = createApp({
       config,
       ownKeys: serverKeys,
@@ -342,51 +374,100 @@ describe('quota markers at shutdown', () => {
       ingestorManager: mgr,
       disableRateLimiting: true,
     });
-    const srv = await new Promise<Server>((resolve) => {
+    return new Promise<Server>((resolve) => {
       const s = app.listen(0, '127.0.0.1', () => resolve(s));
     });
+  }
 
-    // A flood for "carol": the first refusal writes a marker inline, the
-    // second is pending inside the coalescing window.
-    const auditRoot = path.join(configDir, 'audit');
-    const budget = { capacityBytes: 1, refillBytesPerMinute: 1 };
-    const t0 = Date.now();
-    const flood = (ms: number) =>
-      ingestLogs(batch('flood'), 'carol', { auditRoot, budget, now: new Date(t0 + ms) });
-    await flood(0);
-    await flood(1000);
-    const markers = (): QuotaExceededLine[] =>
-      auditFiles('carol')
-        .flatMap((f) => fs.readFileSync(f, 'utf8').trim().split('\n'))
-        .map((l) => JSON.parse(l) as AuditLine | QuotaExceededLine)
-        .filter((l): l is QuotaExceededLine => l['drawlatch.source'] === 'daemon');
-    expect(markers()).toHaveLength(1);
-
-    // An unauthenticated client trickling a large body: close() can't finish.
+  /** An unauthenticated client trickling a large body: close() can't finish. */
+  async function slowSocket(srv: Server): Promise<net.Socket> {
     const sock = net.connect((srv.address() as AddressInfo).port, '127.0.0.1');
     await once(sock, 'connect');
     sock.write(
       'POST /request HTTP/1.1\r\nHost: x\r\nContent-Type: application/octet-stream\r\n' +
         'X-Session-Id: bogus\r\nContent-Length: 1000000\r\n\r\nx',
     );
+    return sock;
+  }
 
+  it('writes pending markers before close() and refuses ingest once shutting down', async () => {
+    const srv = await startServer();
+    const flood = flooder('carol');
+    await flood(0); // marker written inline
+    await flood(1000); // pending inside the coalescing window
+    expect(markers('carol')).toHaveLength(1);
+
+    const sock = await slowSocket(srv);
     let closed = false;
     const done = gracefulShutdown(srv, mgr).then(() => {
       closed = true;
     });
-    // Flushed before close() even though close() is still held open.
-    await vi.waitFor(() => expect(markers()).toHaveLength(2), { timeout: 3000 });
-    expect(markers()[1].rejected_records).toBe(1);
+    // Written while close() is still held open by the slow socket.
+    await vi.waitFor(() => expect(markers('carol')).toHaveLength(2), { timeout: 3000 });
+    expect(markers('carol')[1].rejected_records).toBe(1);
     expect(closed).toBe(false);
 
-    // A refusal while close() waits is caught by the flush after close.
-    await flood(2000);
-    expect(markers()).toHaveLength(2);
+    // Nothing new can be refused (and lost) during shutdown: the call is
+    // refused outright, and the client keeps its batch for the restart.
+    await expect(flood(2000)).rejects.toThrow(SHUTTING_DOWN_MESSAGE);
     sock.destroy();
     await done;
-    expect(markers()).toHaveLength(3);
+    expect(markers('carol')).toHaveLength(2);
+    resumeWaits();
+    // Deliberately not resetting the audit shutdown flag: the next test's
+    // createApp() must do it.
+  });
 
+  it('retries a failed pre-close flush after close(), on a fresh app', async () => {
+    const srv = await startServer(); // must clear the previous test's shutdown
+    const flood = flooder('dave');
+    await flood(0);
+    await flood(1000);
+    expect(markers('dave')).toHaveLength(1);
+
+    // The first marker append fails once, as a transient ENOSPC would.
+    const realOpen = fs.promises.open.bind(fs.promises);
+    let failures = 0;
+    vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const fh = await realOpen(...args);
+      if (String(args[0]).endsWith('.jsonl') && failures === 0) {
+        fh.appendFile = () => {
+          failures++;
+          return Promise.reject(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }));
+        };
+      }
+      return fh;
+    });
+
+    const sock = await slowSocket(srv);
+    const done = gracefulShutdown(srv, mgr);
+    await vi.waitFor(() => expect(failures).toBe(1), { timeout: 3000 });
+    expect(markers('dave')).toHaveLength(1);
+    sock.destroy();
+    await done;
+    vi.restoreAllMocks();
+    expect(markers('dave')).toHaveLength(2);
+    expect(markers('dave')[1].rejected_records).toBe(1);
     resumeWaits();
     resetAuditLogState();
+  });
+
+  it('the forced-exit path flushes pending markers before exiting', async () => {
+    const flood = flooder('erin');
+    await flood(0);
+    await flood(1000);
+    expect(markers('erin')).toHaveLength(1);
+
+    const exit = vi.fn();
+    await exitAfterFlushingMarkers(exit);
+    expect(markers('erin')).toHaveLength(2);
+    expect(exit).toHaveBeenCalledWith(1);
+    resetAuditLogState();
+  });
+
+  it('drawlatch stop waits out the whole daemon shutdown before SIGKILL', () => {
+    expect(STOP_KILL_AFTER_MS).toBeGreaterThan(SHUTDOWN_FORCE_EXIT_MS + SHUTDOWN_FLUSH_MS);
+    const cli = fs.readFileSync(path.join(here, '..', '..', 'bin', 'drawlatch.js'), 'utf8');
+    expect(cli).toMatch(/waitForExit\(pid, STOP_KILL_AFTER_MS\)/);
   });
 });

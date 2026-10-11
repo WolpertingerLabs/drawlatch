@@ -45,11 +45,16 @@ import {
   type ProxyRequest,
   type ProxyResponse,
 } from '../shared/protocol/index.js';
-import { getCallerKeysDir, getServerKeysDir } from '../shared/config.js';
+import {
+  getCallerKeysDir,
+  getServerKeysDir,
+  SHUTDOWN_FLUSH_MS,
+  SHUTDOWN_FORCE_EXIT_MS,
+} from '../shared/config.js';
 import { IngestorManager } from './ingestors/index.js';
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller } from '../shared/env-utils.js';
-import { flushQuotaMarkers, flushQuotaMarkersWithin } from './audit-log.js';
+import { beginAuditShutdown, flushQuotaMarkersWithin, resumeAuditIngest } from './audit-log.js';
 import { toolHandlers, type ToolContext } from './tool-dispatch.js';
 import { releaseAllWaits, resumeWaits } from './wait-for-events.js';
 import { setTunnelUrl, getTunnelUrl } from './tunnel-state.js';
@@ -435,6 +440,7 @@ export function createApp(options: CreateAppOptions = {}) {
   // A host that ran gracefulShutdown() and builds a new app in the same
   // process must not inherit the old app's draining state.
   resumeWaits();
+  resumeAuditIngest();
 
   // Create or use the provided ingestor manager.
   // When config is loaded from disk (production), pass loadRemoteConfig as the
@@ -947,9 +953,6 @@ export function createApp(options: CreateAppOptions = {}) {
 
 // ── Shutdown ───────────────────────────────────────────────────────────────
 
-/** Longest a shutdown waits on writing pending audit quota markers, per attempt. */
-export const SHUTDOWN_FLUSH_MS = 2000;
-
 /**
  * Graceful shutdown: answer held waits, write pending audit quota markers,
  * stop the tunnel, stop ingestors, then close the HTTP server and write any
@@ -970,9 +973,12 @@ export async function gracefulShutdown(
   const released = releaseAllWaits();
   if (released > 0) console.log(`[remote] Released ${released} held wait(s)`);
 
-  // Before anything that can stall (server.close() waits on every open
-  // socket, and a slow one can outlast the forced exit), write pending
-  // quota_exceeded markers, bounded so a stuck disk can't stall shutdown.
+  // From here ingest_logs refuses new calls ("shutting down"), and a call
+  // already in flight writes any quota_exceeded marker inline, so nothing
+  // refused during shutdown is left pending. Then, before anything that can
+  // stall (server.close() waits on every open socket), write what is pending,
+  // bounded so a stuck disk can't stall shutdown.
+  beginAuditShutdown();
   await flushQuotaMarkersWithin(SHUTDOWN_FLUSH_MS);
 
   // Stop tunnel first (fast — just kills a child process)
@@ -991,8 +997,20 @@ export async function gracefulShutdown(
     server.close(() => resolve());
   });
 
-  // Again after close, for refusals from requests that were still in flight.
-  await flushQuotaMarkers();
+  // Again after close: retries a pre-close flush that failed or timed out.
+  await flushQuotaMarkersWithin(SHUTDOWN_FLUSH_MS);
+}
+
+/**
+ * The forced-exit path: one last bounded flush of pending quota markers,
+ * then exit(1). Finishes within SHUTDOWN_FLUSH_MS of being called, so with
+ * SHUTDOWN_FORCE_EXIT_MS it stays inside the CLI's STOP_KILL_AFTER_MS.
+ */
+export async function exitAfterFlushingMarkers(
+  exit: (code: number) => void = (code) => process.exit(code),
+): Promise<void> {
+  await flushQuotaMarkersWithin(SHUTDOWN_FLUSH_MS);
+  exit(1);
 }
 
 // waitForTunnelReady is now exported from tunnel.ts — imported dynamically
@@ -1154,12 +1172,13 @@ export function main(): void {
       process.exit(0);
     });
 
-    // Force exit after 10 seconds if connections don't drain, writing any
-    // quota_exceeded markers that refusals added since the first flush.
+    // Force exit if connections don't drain, after a last bounded flush of
+    // quota_exceeded markers. `drawlatch stop` waits STOP_KILL_AFTER_MS,
+    // longer than this whole path, before it sends SIGKILL.
     setTimeout(() => {
       console.error('[remote] Forced shutdown after timeout.');
-      void flushQuotaMarkersWithin(SHUTDOWN_FLUSH_MS).finally(() => process.exit(1));
-    }, 10_000).unref();
+      void exitAfterFlushingMarkers();
+    }, SHUTDOWN_FORCE_EXIT_MS).unref();
   };
 
   server.on('error', (err: NodeJS.ErrnoException) => {

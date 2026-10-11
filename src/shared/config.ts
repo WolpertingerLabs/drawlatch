@@ -428,6 +428,21 @@ export const MAX_OUTBOUND_TIMEOUT_MS = 290_000;
  */
 export const MAX_LOCAL_TIMEOUT_MS = MAX_OUTBOUND_TIMEOUT_MS + LOCAL_TIMEOUT_SLACK_MS;
 
+// ── Daemon shutdown ──────────────────────────────────────────────────────
+
+/** After SIGTERM/SIGINT the daemon exits on its own after this long, even if
+ *  connections haven't drained. */
+export const SHUTDOWN_FORCE_EXIT_MS = 10_000;
+/** Longest each shutdown flush of pending audit quota markers may take. */
+export const SHUTDOWN_FLUSH_MS = 2_000;
+/**
+ * How long `drawlatch stop`/`restart` waits before SIGKILL. Derived from the
+ * daemon's own limits (forced exit, then its final bounded flush) plus slack,
+ * so the CLI never kills a daemon that is still shutting down as designed.
+ * SIGKILL is only for a daemon that is wedged.
+ */
+export const STOP_KILL_AFTER_MS = SHUTDOWN_FORCE_EXIT_MS + SHUTDOWN_FLUSH_MS + 3_000;
+
 /**
  * Deadline (ms) for the local → remote POST.
  *
