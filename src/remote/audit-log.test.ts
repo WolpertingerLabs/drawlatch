@@ -1,38 +1,47 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import {
   auditCallerDir,
+  flushQuotaMarkers,
   ingestLogs,
   parseIngestRequest,
   resetAuditLogState,
   MAX_ARRAY_ITEMS,
   MAX_ATTRIBUTES,
   MAX_BYTES_PER_CALL,
-  MAX_FILE_BYTES,
   MAX_RECORDS_PER_CALL,
   MAX_RECORD_BYTES,
   MAX_STRING_CHARS,
   MAX_VALUE_DEPTH,
+  QUOTA_MARKER_INTERVAL_MS,
   TRUNCATION_MARKER,
   type AuditLine,
+  type BudgetOptions,
+  type QuotaExceededLine,
 } from './audit-log.js';
 
 const NOW = new Date('2026-10-11T12:00:00.000Z');
 const TRACE = '0123456789abcdef0123456789abcdef';
 const SPAN = '0123456789abcdef';
 
+/** A private parent dir per test, so nothing is ever asserted about shared /tmp. */
+let parent: string;
 let root: string;
 
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), 'drawlatch-audit-'));
+  parent = fs.mkdtempSync(path.join(os.tmpdir(), 'drawlatch-audit-'));
+  root = path.join(parent, 'audit');
   resetAuditLogState();
 });
 
 afterEach(() => {
-  fs.rmSync(root, { recursive: true, force: true });
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  resetAuditLogState();
+  fs.rmSync(parent, { recursive: true, force: true });
 });
 
 function str(v: string) {
@@ -73,21 +82,33 @@ function request(records: unknown[], extra: { resource?: unknown; scope?: unknow
   };
 }
 
-function ingest(input: unknown, caller = 'callboard', now = NOW) {
-  return ingestLogs(input, caller, { auditRoot: root, now });
+function ingest(input: unknown, caller = 'callboard', now = NOW, budget?: BudgetOptions) {
+  return ingestLogs(input, caller, { auditRoot: root, now, ...(budget && { budget }) });
 }
 
 function fileFor(caller = 'callboard', day = '2026-10-11'): string {
   return path.join(root, caller, `${day}.jsonl`);
 }
 
-function readLines(file = fileFor()): AuditLine[] {
+function readLines<T = AuditLine>(file = fileFor()): T[] {
   const text = fs.readFileSync(file, 'utf8');
   expect(text.endsWith('\n')).toBe(true);
   return text
     .slice(0, -1)
     .split('\n')
-    .map((l) => JSON.parse(l) as AuditLine);
+    .map((l) => JSON.parse(l) as T);
+}
+
+function clientLines(file = fileFor()): AuditLine[] {
+  return readLines<AuditLine | QuotaExceededLine>(file).filter(
+    (l): l is AuditLine => l['drawlatch.source'] === 'client',
+  );
+}
+
+function markers(file = fileFor()): QuotaExceededLine[] {
+  return readLines<AuditLine | QuotaExceededLine>(file).filter(
+    (l): l is QuotaExceededLine => l['drawlatch.source'] === 'daemon',
+  );
 }
 
 describe('ingest_logs storage format', () => {
@@ -100,6 +121,7 @@ describe('ingest_logs storage format', () => {
       'drawlatch.caller': 'callboard',
       'drawlatch.received_at': NOW.toISOString(),
       'drawlatch.sequence': 1,
+      'drawlatch.source': 'client',
       time_unix_nano: '1760184000000000000',
       observed_time_unix_nano: '1760184000000000001',
       severity_number: 9,
@@ -116,21 +138,24 @@ describe('ingest_logs storage format', () => {
     });
   });
 
-  it('writes stamps, then record fields, then context', async () => {
+  it('writes stamps first and shared context last', async () => {
     await ingest(request([record()]));
     const keys = Object.keys(readLines()[0]);
-    expect(keys.slice(0, 3)).toEqual([
+    expect(keys.slice(0, 4)).toEqual([
       'drawlatch.caller',
       'drawlatch.received_at',
       'drawlatch.sequence',
+      'drawlatch.source',
     ]);
     expect(keys.slice(-3)).toEqual(['attributes', 'resource', 'scope']);
   });
 
-  it('flattens every AnyValue kind', async () => {
+  it('flattens every AnyValue kind, including proto3 JSON spellings', async () => {
     await ingest(
       request([
         record({
+          severityNumber: 'SEVERITY_NUMBER_WARN2',
+          flags: '1',
           attributes: [
             { key: 's', value: str('x') },
             { key: 'b', value: { boolValue: false } },
@@ -139,7 +164,11 @@ describe('ingest_logs storage format', () => {
             { key: 'big', value: { intValue: '9223372036854775807' } },
             { key: 'neg', value: { intValue: '-5' } },
             { key: 'd', value: { doubleValue: 1.5 } },
+            { key: 'dstr', value: { doubleValue: '2.5' } },
+            { key: 'nan', value: { doubleValue: 'NaN' } },
+            { key: 'inf', value: { doubleValue: '-Infinity' } },
             { key: 'bytes', value: { bytesValue: 'aGk=' } },
+            { key: 'urlbytes', value: { bytesValue: 'a-_b' } },
             { key: 'arr', value: { arrayValue: { values: [str('a'), { intValue: 1 }] } } },
             { key: 'kv', value: { kvlistValue: { values: [{ key: 'k', value: str('v') }] } } },
             { key: 'empty', value: {} },
@@ -148,7 +177,10 @@ describe('ingest_logs storage format', () => {
         }),
       ]),
     );
-    expect(readLines()[0].attributes).toEqual({
+    const [line] = readLines();
+    expect(line.severity_number).toBe(14);
+    expect(line.flags).toBe(1);
+    expect(line.attributes).toEqual({
       s: 'x',
       b: false,
       i: 42,
@@ -156,12 +188,22 @@ describe('ingest_logs storage format', () => {
       big: '9223372036854775807',
       neg: -5,
       d: 1.5,
+      dstr: 2.5,
+      nan: 'NaN',
+      inf: '-Infinity',
       bytes: 'aGk=',
+      urlbytes: 'a-_b',
       arr: ['a', 1],
       kv: { k: 'v' },
       empty: null,
       missing: null,
     });
+    expect(line.invalid).toBeUndefined();
+  });
+
+  it('keeps a __proto__ key as plain data', async () => {
+    await ingest(request([record({ attributes: [{ key: '__proto__', value: str('x') }] })]));
+    expect(fs.readFileSync(fileFor(), 'utf8')).toContain('"__proto__":"x"');
   });
 
   it('omits ids that OTLP/JSON sends as empty strings', async () => {
@@ -170,18 +212,13 @@ describe('ingest_logs storage format', () => {
     expect(line).not.toHaveProperty('trace_id');
     expect(line).not.toHaveProperty('span_id');
     expect(line).not.toHaveProperty('parent_span_id');
-  });
-
-  it('keeps a __proto__ key as plain data', async () => {
-    await ingest(request([record({ attributes: [{ key: '__proto__', value: str('x') }] })]));
-    const raw = fs.readFileSync(fileFor(), 'utf8');
-    expect(raw).toContain('"__proto__":"x"');
+    expect(line.invalid).toBeUndefined();
   });
 
   it('accepts an empty request and creates nothing', async () => {
     expect(await ingest({})).toEqual({});
     expect(await ingest({ resourceLogs: [] })).toEqual({});
-    expect(fs.existsSync(path.join(root, 'callboard'))).toBe(false);
+    expect(fs.existsSync(root)).toBe(false);
   });
 
   it('names the file by the UTC day of receipt', async () => {
@@ -191,72 +228,193 @@ describe('ingest_logs storage format', () => {
   });
 });
 
-describe('ingest_logs validation', () => {
-  it('throws on a malformed top level', async () => {
+describe('ingest_logs lenient validation', () => {
+  it('throws only on an unusable top level', async () => {
     await expect(ingest(null)).rejects.toThrow(/must be an object/);
     await expect(ingest([])).rejects.toThrow(/must be an object/);
     await expect(ingest({ resourceLogs: {} })).rejects.toThrow(/must be an array/);
-    await expect(ingest({ resourceLogs: [], extra: 1 })).rejects.toThrow(/unknown field/);
   });
 
   it.each([
-    ['not an object', 'nope'],
-    ['unknown field', record({ evil: true })],
-    ['short traceId', record({ traceId: 'abc' })],
-    ['non-hex spanId', record({ spanId: 'zzzzzzzzzzzzzzzz' })],
-    ['bad parentSpanId', record({ parentSpanId: TRACE })],
-    ['severity out of range', record({ severityNumber: 25 })],
-    ['fractional severity', record({ severityNumber: 1.5 })],
-    ['negative time', record({ timeUnixNano: -1 })],
-    ['time overflow', record({ timeUnixNano: '18446744073709551616' })],
-    ['time not a number', record({ timeUnixNano: '12abc' })],
-    ['flags too big', record({ flags: 2 ** 32 })],
-    ['long eventName', record({ eventName: 'e'.repeat(257) })],
-    ['non-string severityText', record({ severityText: 3 })],
-    ['body not AnyValue', record({ body: 'plain' })],
-    ['body with two kinds', record({ body: { stringValue: 'a', boolValue: true } })],
-    ['unknown AnyValue kind', record({ body: { mapValue: {} } })],
-    ['NaN double', record({ body: { doubleValue: Number.NaN } })],
-    ['int64 overflow', record({ body: { intValue: '9223372036854775808' } })],
-    ['unsafe int number', record({ body: { intValue: 2 ** 60 } })],
-    ['bad base64', record({ body: { bytesValue: '!!' } })],
-    ['attributes not array', record({ attributes: {} })],
+    ['short traceId', { traceId: 'abc' }, 'logRecord.traceId', 'trace_id'],
+    ['non-hex spanId', { spanId: 'zzzzzzzzzzzzzzzz' }, 'logRecord.spanId', 'span_id'],
+    ['bad parentSpanId', { parentSpanId: TRACE }, 'logRecord.parentSpanId', 'parent_span_id'],
     [
-      'duplicate attribute key',
-      record({
-        attributes: [
-          { key: 'a', value: str('1') },
-          { key: 'a', value: str('2') },
-        ],
-      }),
+      'severity out of range',
+      { severityNumber: 25 },
+      'logRecord.severityNumber',
+      'severity_number',
     ],
-    ['empty attribute key', record({ attributes: [{ key: '', value: str('1') }] })],
-    ['long attribute key', record({ attributes: [{ key: 'k'.repeat(257), value: str('1') }] })],
-    ['extra field on KeyValue', record({ attributes: [{ key: 'a', value: str('1'), x: 1 }] })],
-  ])('rejects a record with %s and keeps the rest', async (_name, bad) => {
-    const res = await ingest(request([record(), bad, record()]));
-    expect(res.partialSuccess?.rejectedLogRecords).toBe(1);
-    expect(typeof res.partialSuccess?.errorMessage).toBe('string');
-    expect(readLines().map((l) => l['drawlatch.sequence'])).toEqual([1, 2]);
+    [
+      'unknown severity name',
+      { severityNumber: 'LOUD' },
+      'logRecord.severityNumber',
+      'severity_number',
+    ],
+    ['negative time', { timeUnixNano: -1 }, 'logRecord.timeUnixNano', 'time_unix_nano'],
+    [
+      'time overflow',
+      { timeUnixNano: '18446744073709551616' },
+      'logRecord.timeUnixNano',
+      'time_unix_nano',
+    ],
+    ['flags too big', { flags: 2 ** 32 }, 'logRecord.flags', 'flags'],
+    ['long eventName', { eventName: 'e'.repeat(257) }, 'logRecord.eventName', 'event_name'],
+    ['non-string severityText', { severityText: 3 }, 'logRecord.severityText', 'severity_text'],
+    ['body not AnyValue', { body: 'plain' }, 'logRecord.body', 'body'],
+    [
+      'body with two kinds',
+      { body: { stringValue: 'a', boolValue: true } },
+      'logRecord.body',
+      'body',
+    ],
+    ['null double (NaN through JSON)', { body: { doubleValue: null } }, 'logRecord.body', 'body'],
+    ['int64 overflow', { body: { intValue: '9223372036854775808' } }, 'logRecord.body', 'body'],
+    ['unsafe int number', { body: { intValue: 2 ** 60 } }, 'logRecord.body', 'body'],
+    ['bad base64', { body: { bytesValue: '!!' } }, 'logRecord.body', 'body'],
+  ])('keeps a record with %s, moving the value to invalid', async (_name, bad, where, field) => {
+    const res = await ingest(request([record(), record(bad), record()]));
+    expect(res.partialSuccess?.rejectedLogRecords).toBe(0);
+    expect(res.partialSuccess?.errorMessage).toMatch(/^kept: invalid /);
+
+    const lines = readLines();
+    expect(lines.map((l) => l['drawlatch.sequence'])).toEqual([1, 2, 3]);
+    expect(lines[1]).not.toHaveProperty(field);
+    expect(lines[1].invalid?.[where]).toMatchObject({ reason: expect.any(String) });
+    expect(lines[1].invalid?.[where]).toHaveProperty('raw');
+    expect(lines[0].invalid).toBeUndefined();
   });
 
-  it('rejects every record under a malformed resource or scope', async () => {
+  it('keeps the good attributes when one is bad', async () => {
+    await ingest(
+      request([
+        record({
+          attributes: [
+            { key: 'latency_ms', value: { doubleValue: null } },
+            { key: 'a', value: str('1') },
+            { key: 'a', value: str('2') },
+            { key: '', value: str('x') },
+            { key: 'k'.repeat(257), value: str('x') },
+            'not-a-kv',
+            { key: 'ok', value: str('yes') },
+          ],
+        }),
+      ]),
+    );
+    const [line] = readLines();
+    expect(line.attributes).toEqual({ a: '1', ok: 'yes' });
+    expect(Object.keys(line.invalid ?? {}).sort()).toEqual([
+      'logRecord.attributes.latency_ms',
+      'logRecord.attributes[2]',
+      'logRecord.attributes[3]',
+      'logRecord.attributes[4]',
+      'logRecord.attributes[5]',
+    ]);
+  });
+
+  it('keeps unknown fields at every level under extra', async () => {
+    const res = await ingest({
+      futureTop: 1,
+      resourceLogs: [
+        {
+          resource: {
+            attributes: [{ key: 'service.name', value: str('callboard') }],
+            entityRefs: [{ type: 'service' }],
+          },
+          schemaUrl: 'https://opentelemetry.io/schemas/1.0.0',
+          rlNew: true,
+          scopeLogs: [
+            {
+              scope: { name: 'callboard.permission-review', scopeNew: 'x' },
+              slNew: 2,
+              logRecords: [
+                record({
+                  spanID: 'typo',
+                  attributes: [{ key: 'a', value: { stringValue: 'v', futureKind: 1 }, kvNew: 3 }],
+                }),
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(res.partialSuccess?.rejectedLogRecords).toBe(0);
+    const [line] = readLines();
+    expect(line.extra).toEqual({
+      'request.futureTop': 1,
+      'resourceLogs.rlNew': true,
+      'resource.entityRefs': [{ type: 'service' }],
+      'scopeLogs.slNew': 2,
+      'scope.scopeNew': 'x',
+      'logRecord.spanID': 'typo',
+      'logRecord.attributes[0].kvNew': 3,
+      'logRecord.attributes.a.futureKind': 1,
+    });
+    expect(line.attributes).toEqual({ a: 'v' });
+    expect(line.resource_schema_url).toBe('https://opentelemetry.io/schemas/1.0.0');
+  });
+
+  it('keeps malformed resource and scope containers as invalid, not rejected', async () => {
     const res = await ingest({
       resourceLogs: [
         { resource: { attributes: 'bad' }, scopeLogs: [{ logRecords: [record(), record()] }] },
-        { scopeLogs: [{ scope: { name: 5 }, logRecords: [record(), record(), record()] }] },
-        { scopeLogs: [{ logRecords: [record()] }] },
+        { scopeLogs: [{ scope: { name: 5 }, logRecords: [record()] }] },
+        { resource: 'nope', scopeLogs: [{ scope: [], logRecords: [record()] }] },
       ],
     });
-    expect(res.partialSuccess?.rejectedLogRecords).toBe(5);
+    expect(res.partialSuccess?.rejectedLogRecords).toBe(0);
+    const lines = readLines();
+    expect(lines).toHaveLength(4);
+    expect(Object.keys(lines[0].invalid ?? {})).toEqual(['resource.attributes']);
+    expect(Object.keys(lines[2].invalid ?? {})).toEqual(['scope.name']);
+    expect(Object.keys(lines[3].invalid ?? {}).sort()).toEqual(['resource', 'scope']);
+  });
+
+  it('rejects only what it cannot reach or keep, counting records exactly', async () => {
+    const res = await ingest({
+      resourceLogs: [
+        'not-an-object',
+        { scopeLogs: 'not-an-array' },
+        { scopeLogs: ['not-an-object', { logRecords: 'not-an-array' }] },
+        { scopeLogs: [{ logRecords: [record(), 'not-a-record', 7, null] }] },
+        { scopeLogs: [{ logRecords: [] }, {}] },
+      ],
+    });
+    // 1 + 1 + (1 + 1) + 3 + 0
+    expect(res.partialSuccess?.rejectedLogRecords).toBe(7);
     expect(readLines()).toHaveLength(1);
+  });
+
+  it('counts zero rejected for an oversize resource with empty scopes', async () => {
+    const bigAttrs = Array.from({ length: 20 }, (_, i) => ({
+      key: `k${i}`,
+      value: str('x'.repeat(MAX_STRING_CHARS)),
+    }));
+    const empty = await ingest({
+      resourceLogs: [
+        { resource: { attributes: bigAttrs }, scopeLogs: [{}, {}, { logRecords: [] }] },
+      ],
+    });
+    expect(empty).toEqual({});
+
+    const two = await ingest(request([record(), record()], { resource: { attributes: bigAttrs } }));
+    expect(two.partialSuccess?.rejectedLogRecords).toBe(2);
+    expect(two.partialSuccess?.errorMessage).toMatch(/resource exceeds/);
+  });
+
+  it('bounds and marks what it keeps in extra', async () => {
+    await ingest(request([record({ huge: 'z'.repeat(MAX_STRING_CHARS + 5) })]));
+    const [line] = readLines();
+    expect(line.extra?.['logRecord.huge']).toBe('z'.repeat(MAX_STRING_CHARS) + TRUNCATION_MARKER);
+    expect(line.truncated).toBe(true);
   });
 
   it('bounds the error message', async () => {
     const bad = Array.from({ length: 50 }, (_, i) => record({ [`f${i}${'x'.repeat(500)}`]: 1 }));
-    const res = await ingest(request(bad));
-    expect(res.partialSuccess?.rejectedLogRecords).toBe(50);
-    expect(res.partialSuccess?.errorMessage.length).toBeLessThan(3000);
+    const res = await ingest(request([...bad, ...Array.from({ length: 30 }, () => 'bad')]));
+    expect(res.partialSuccess?.rejectedLogRecords).toBe(30);
+    expect(res.partialSuccess?.errorMessage.length).toBeLessThan(5000);
+    expect(res.partialSuccess?.errorMessage).toMatch(/^rejected: /);
   });
 });
 
@@ -345,27 +503,180 @@ describe('ingest_logs size bounds', () => {
     const res = await ingest(
       request(Array.from({ length: 20 }, () => record({ attributes: attrs }))),
     );
-    const stored = fs.statSync(fileFor()).size;
-    expect(stored).toBeLessThanOrEqual(MAX_BYTES_PER_CALL);
+    expect(fs.statSync(fileFor()).size).toBeLessThanOrEqual(MAX_BYTES_PER_CALL);
     const kept = readLines().length;
     expect(kept).toBeGreaterThan(10);
     expect(res.partialSuccess?.rejectedLogRecords).toBe(20 - kept);
     expect(res.partialSuccess?.errorMessage).toMatch(/stored bytes/);
   });
+});
 
-  it(`enforces the ${MAX_FILE_BYTES}-byte daily quota per caller`, async () => {
-    const file = fileFor();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    // Sparse file just under the quota, ending in a valid line.
-    const tailLine =
-      JSON.stringify({ 'drawlatch.caller': 'callboard', 'drawlatch.sequence': 41 }) + '\n';
-    fs.writeFileSync(file, '');
-    fs.truncateSync(file, MAX_FILE_BYTES - 200 - tailLine.length);
-    fs.appendFileSync(file, tailLine);
+describe('ingest_logs cost stays linear in request size', () => {
+  // Before the fix, shared resource/scope data was re-serialized per record:
+  // a 10 MB request blocked the event loop for ~28 s. The bound is loose on
+  // purpose; the linear path takes well under a second here.
+  const BOUND_MS = 5000;
 
-    const res = await ingest(request([record()]));
-    expect(res.partialSuccess?.errorMessage).toMatch(/daily audit quota/);
-    expect(fs.statSync(file).size).toBe(MAX_FILE_BYTES - 200);
+  it('handles ~10 MB of oversize shared resource quickly', async () => {
+    const chunk = 'x'.repeat(MAX_STRING_CHARS);
+    const attrs = Array.from({ length: MAX_ATTRIBUTES }, (_, i) => ({
+      key: `k${i}`,
+      value: { arrayValue: { values: Array.from({ length: 5 }, () => str(chunk)) } },
+    }));
+    const input = request(
+      Array.from({ length: MAX_RECORDS_PER_CALL }, () => ({ eventName: 'tiny' })),
+      { resource: { attributes: attrs } },
+    );
+    expect(JSON.stringify(input).length).toBeGreaterThan(10_000_000);
+
+    const start = performance.now();
+    const res = await ingest(input);
+    expect(performance.now() - start).toBeLessThan(BOUND_MS);
+    expect(res.partialSuccess?.rejectedLogRecords).toBe(MAX_RECORDS_PER_CALL);
+  });
+
+  it('handles ~10 MB of near-limit shared resources quickly', async () => {
+    // Each resource is just under the line limit, shared by 25 tiny records.
+    const attrs = Array.from({ length: 15 }, (_, i) => ({
+      key: `k${i}`,
+      value: str('x'.repeat(MAX_STRING_CHARS)),
+    }));
+    const input = {
+      resourceLogs: Array.from({ length: 40 }, () => ({
+        resource: { attributes: attrs },
+        scopeLogs: [{ logRecords: Array.from({ length: 25 }, () => ({ eventName: 'tiny' })) }],
+      })),
+    };
+    expect(JSON.stringify(input).length).toBeGreaterThan(9_500_000);
+
+    const start = performance.now();
+    const res = await ingest(input);
+    expect(performance.now() - start).toBeLessThan(BOUND_MS);
+    // The per-call byte cap stores ~17 of them and rejects the rest.
+    const stored = readLines().length;
+    expect(stored).toBeGreaterThan(10);
+    expect(res.partialSuccess?.rejectedLogRecords).toBe(1000 - stored);
+  });
+});
+
+describe('ingest_logs byte budget and quota markers', () => {
+  const tiny: BudgetOptions = { capacityBytes: 3000, refillBytesPerMinute: 1 };
+
+  it('refuses records past the budget and writes a daemon marker', async () => {
+    const res = await ingest(
+      request(Array.from({ length: 10 }, () => record())),
+      'callboard',
+      NOW,
+      tiny,
+    );
+    const kept = clientLines().length;
+    expect(kept).toBeGreaterThan(0);
+    expect(kept).toBeLessThan(10);
+    expect(res.partialSuccess?.rejectedLogRecords).toBe(10 - kept);
+    expect(res.partialSuccess?.errorMessage).toMatch(/budget exhausted/);
+
+    const [m] = markers();
+    expect(m).toMatchObject({
+      'drawlatch.caller': 'callboard',
+      'drawlatch.source': 'daemon',
+      'drawlatch.event': 'quota_exceeded',
+      'drawlatch.sequence': kept + 1,
+      rejected_records: 10 - kept,
+      window_start: NOW.toISOString(),
+      window_end: NOW.toISOString(),
+      budget: { capacity_bytes: 3000, refill_bytes_per_minute: 1 },
+    });
+    expect(m.rejected_bytes).toBeGreaterThan(0);
+  });
+
+  it('coalesces refusals into at most one marker per interval', async () => {
+    const batch = request([record(), record(), record(), record(), record(), record()]);
+    await ingest(batch, 'callboard', NOW, tiny);
+    const first = markers()[0].rejected_records;
+
+    const t1 = new Date(NOW.getTime() + 10_000);
+    const t2 = new Date(NOW.getTime() + 20_000);
+    await ingest(batch, 'callboard', t1, tiny);
+    await ingest(batch, 'callboard', t2, tiny);
+    expect(markers()).toHaveLength(1);
+
+    const t3 = new Date(NOW.getTime() + QUOTA_MARKER_INTERVAL_MS + 1);
+    await ingest(request([record()]), 'callboard', t3, tiny);
+    const all = markers();
+    expect(all).toHaveLength(2);
+    expect(all[1]).toMatchObject({
+      rejected_records: 6 + 6 + 1,
+      window_start: t1.toISOString(),
+      window_end: t3.toISOString(),
+    });
+    expect(first).toBeGreaterThan(0);
+  });
+
+  it('writes a pending marker from the timer even if the client goes quiet', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.setSystemTime(NOW);
+    const batch = request(Array.from({ length: 6 }, () => record()));
+    await ingest(batch, 'callboard', new Date(), tiny);
+    vi.setSystemTime(NOW.getTime() + 5_000);
+    await ingest(batch, 'callboard', new Date(), tiny);
+    expect(markers()).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(QUOTA_MARKER_INTERVAL_MS);
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(markers()).toHaveLength(2));
+    expect(markers()[1].rejected_records).toBe(6);
+  });
+
+  it('flushes pending markers on shutdown regardless of the interval', async () => {
+    const batch = request(Array.from({ length: 6 }, () => record()));
+    const now = new Date();
+    await ingest(batch, 'callboard', now, tiny);
+    await ingest(batch, 'callboard', new Date(now.getTime() + 1000), tiny);
+    const file = fileFor('callboard', now.toISOString().slice(0, 10));
+    expect(markers(file)).toHaveLength(1);
+
+    await flushQuotaMarkers();
+    expect(markers(file)).toHaveLength(2);
+  });
+
+  it('accepts records again once the bucket refills', async () => {
+    const budget = { capacityBytes: 2000, refillBytesPerMinute: 60_000 };
+    const batch = request(Array.from({ length: 6 }, () => record()));
+    const first = await ingest(batch, 'callboard', NOW, budget);
+    expect(first.partialSuccess?.rejectedLogRecords).toBeGreaterThan(0);
+
+    const later = await ingest(
+      request([record()]),
+      'callboard',
+      new Date(NOW.getTime() + 60_000),
+      budget,
+    );
+    expect(later).toEqual({});
+  });
+
+  it('keeps budgets per caller', async () => {
+    const batch = request(Array.from({ length: 6 }, () => record()));
+    await ingest(batch, 'alpha', NOW, tiny);
+    expect(await ingest(request([record()]), 'beta', NOW, tiny)).toEqual({});
+  });
+
+  it('a client cannot forge a daemon line', async () => {
+    await ingest(
+      request([
+        record({
+          'drawlatch.source': 'daemon',
+          'drawlatch.event': 'quota_exceeded',
+          attributes: [{ key: 'drawlatch.source', value: str('daemon') }],
+        }),
+      ]),
+    );
+    const [line] = readLines<Record<string, unknown>>();
+    expect(line['drawlatch.source']).toBe('client');
+    expect(line).not.toHaveProperty('drawlatch.event');
+    expect(line.extra).toEqual({
+      'logRecord.drawlatch.source': 'daemon',
+      'logRecord.drawlatch.event': 'quota_exceeded',
+    });
   });
 });
 
@@ -375,9 +686,10 @@ describe('ingest_logs caller stamping', () => {
       request(
         [
           record({
+            'drawlatch.caller': 'admin',
+            'drawlatch.sequence': 999,
             attributes: [
               { key: 'drawlatch.caller', value: str('admin') },
-              { key: 'drawlatch.sequence', value: { intValue: 999 } },
               { key: 'drawlatch.received_at', value: str('1970-01-01T00:00:00Z') },
             ],
           }),
@@ -393,13 +705,8 @@ describe('ingest_logs caller stamping', () => {
     // The claims survive only as nested, client-supplied data.
     expect(line.attributes['drawlatch.caller']).toBe('admin');
     expect(line.resource['drawlatch.caller']).toBe('admin');
+    expect(line.extra?.['logRecord.drawlatch.caller']).toBe('admin');
     expect(fs.existsSync(path.join(root, 'admin'))).toBe(false);
-  });
-
-  it('rejects top-level stamp fields in a record', async () => {
-    const res = await ingest(request([record({ 'drawlatch.caller': 'admin' })]));
-    expect(res.partialSuccess?.rejectedLogRecords).toBe(1);
-    expect(fs.existsSync(fileFor())).toBe(false);
   });
 
   it('keeps callers in separate directories and sequences', async () => {
@@ -421,8 +728,8 @@ describe('ingest_logs path safety', () => {
 
   it('writes nothing outside the audit root for a refused alias', async () => {
     await expect(ingest(request([record()]), '../escape')).rejects.toThrow();
-    expect(fs.readdirSync(root)).toEqual([]);
-    expect(fs.existsSync(path.join(path.dirname(root), 'escape'))).toBe(false);
+    // `parent` is private to this test, so this can't see another run's leftovers.
+    expect(fs.readdirSync(parent)).toEqual([]);
   });
 
   it('accepts ordinary aliases', () => {
@@ -476,11 +783,83 @@ describe('ingest_logs append-only writes', () => {
     expect((JSON.parse(raw[2]) as AuditLine)['drawlatch.sequence']).toBe(2);
   });
 
+  it('keeps sequences unique after an append that fails partway', async () => {
+    await ingest(request([record()]));
+
+    // The next append writes two whole lines and a torn third, then fails
+    // the way a full disk does.
+    const realOpen = fs.promises.open.bind(fs.promises);
+    vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const fh = await realOpen(...args);
+      if (!String(args[0]).endsWith('.jsonl')) return fh;
+      const realAppend = fh.appendFile.bind(fh);
+      fh.appendFile = async (data: string | Uint8Array) => {
+        const text = String(data);
+        const cut = text.indexOf('\n', text.indexOf('\n') + 1) + 1 + 10;
+        await realAppend(text.slice(0, cut));
+        throw Object.assign(
+          new Error(`ENOSPC: no space left on device, write '${String(args[0])}'`),
+          {
+            code: 'ENOSPC',
+          },
+        );
+      };
+      return fh;
+    });
+    const failed = ingest(request([record(), record(), record(), record()]));
+    await expect(failed).rejects.toThrow('ingest_logs: audit write failed (ENOSPC)');
+    await expect(failed).rejects.not.toThrow(new RegExp(parent));
+    vi.restoreAllMocks();
+
+    await ingest(request([record(), record()]));
+    // The torn line stays (append-only) on its own line; every whole line
+    // has a unique sequence continuing from what actually reached the disk.
+    const raw = fs.readFileSync(fileFor(), 'utf8').trimEnd().split('\n');
+    const whole = raw.flatMap((l) => {
+      try {
+        return [(JSON.parse(l) as AuditLine)['drawlatch.sequence']];
+      } catch {
+        return [];
+      }
+    });
+    expect(raw).toHaveLength(6);
+    expect(whole).toEqual([1, 2, 3, 4, 5]);
+  });
+
   it('never rewrites earlier lines', async () => {
     await ingest(request([record()]));
     const before = fs.readFileSync(fileFor(), 'utf8');
     await ingest(request([record({ eventName: 'second' })]));
     expect(fs.readFileSync(fileFor(), 'utf8').startsWith(before)).toBe(true);
+  });
+
+  it('fsyncs the parent directory only when it creates an entry', async () => {
+    const realOpen = fs.promises.open.bind(fs.promises);
+    const opened: string[] = [];
+    vi.spyOn(fs.promises, 'open').mockImplementation((...args) => {
+      if (args[1] === 'r') opened.push(String(args[0]));
+      return realOpen(...args);
+    });
+    await ingest(request([record()]));
+    expect(opened.sort()).toEqual([parent, root, path.join(root, 'callboard')].sort());
+
+    opened.length = 0;
+    await ingest(request([record()]));
+    expect(opened).toEqual([]);
+
+    await ingest(request([record()]), 'callboard', new Date('2026-10-12T00:00:01Z'));
+    expect(opened).toEqual([path.join(root, 'callboard')]);
+  });
+
+  it('starts a fresh sequence for each day', async () => {
+    await ingest(request([record(), record()]));
+    await ingest(request([record()]), 'callboard', new Date('2026-10-12T00:00:01Z'));
+    // A batch received before midnight but written after still continues its own file.
+    await ingest(request([record()]), 'callboard', new Date('2026-10-11T23:59:59Z'));
+    expect(readLines().map((l) => l['drawlatch.sequence'])).toEqual([1, 2, 3]);
+    expect(
+      readLines(fileFor('callboard', '2026-10-12')).map((l) => l['drawlatch.sequence']),
+    ).toEqual([1]);
   });
 });
 
@@ -498,7 +877,7 @@ describe('ingest_logs file modes', () => {
   });
 
   it('tightens pre-existing loose permissions', async () => {
-    fs.mkdirSync(path.join(root, 'callboard'), { mode: 0o755 });
+    fs.mkdirSync(path.join(root, 'callboard'), { recursive: true, mode: 0o755 });
     fs.chmodSync(path.join(root, 'callboard'), 0o755);
     fs.writeFileSync(fileFor(), '', { mode: 0o644 });
     fs.chmodSync(fileFor(), 0o644);

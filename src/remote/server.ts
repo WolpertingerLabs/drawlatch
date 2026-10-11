@@ -49,6 +49,7 @@ import { getCallerKeysDir, getServerKeysDir } from '../shared/config.js';
 import { IngestorManager } from './ingestors/index.js';
 import { listConnectionTemplates } from '../shared/connections.js';
 import { isSecretSetForCaller } from '../shared/env-utils.js';
+import { flushQuotaMarkers } from './audit-log.js';
 import { toolHandlers, type ToolContext } from './tool-dispatch.js';
 import { releaseAllWaits, resumeWaits } from './wait-for-events.js';
 import { setTunnelUrl, getTunnelUrl } from './tunnel-state.js';
@@ -980,6 +981,10 @@ export async function gracefulShutdown(
   await new Promise<void>((resolve) => {
     server.close(() => resolve());
   });
+
+  // After close, so no request can add to them: write any quota_exceeded
+  // markers still waiting out their interval.
+  await flushQuotaMarkers();
 }
 
 // waitForTunnelReady is now exported from tunnel.ts — imported dynamically
