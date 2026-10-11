@@ -289,7 +289,15 @@ Each caller also has a stored-bytes budget: a 16 MiB burst refilling at 192 KiB 
  "window_start":"…","window_end":"…","budget":{"capacity_bytes":16777216,"refill_bytes_per_minute":196608}}
 ```
 
-There is at most one such line per caller per minute, covering every refusal since the last one. The first refusal after a quiet minute is recorded in the same append that answers the call. Later ones wait for a timer, which writes them even if the caller stops sending, and retries with backoff (1 s doubling to 5 min) if the write fails. On SIGTERM or SIGINT, pending counts are written before the daemon closes its port, again after it closes, and once more before a forced exit; each attempt waits at most 2 s, so an open connection can't hold them back. A SIGKILL, crash, or power loss still loses the counts waiting in the current window: up to a minute of refusals, for each caller over budget. These lines come from a separate 1 MiB-a-day allowance, not the caller's budget. `jq 'select(."drawlatch.source" == "daemon")'` finds them.
+There is at most one such line per caller per minute, covering every refusal since the last one. The first refusal after a quiet minute is recorded in the same append that answers the call. Later ones wait for a timer, which writes them even if the caller stops sending. Whenever a marker write fails, the timer retries with backoff (1 s doubling to 5 min) until it succeeds.
+
+On SIGTERM or SIGINT (`drawlatch stop` sends SIGTERM):
+- `ingest_logs` stops accepting calls and answers `server shutting down; retry after restart`. Callboard keeps the batch and resends it after the restart.
+- A call already in progress writes its marker in the same append that answers it.
+- Pending counts are written before the daemon closes its port, again after it closes, and once more if it reaches its 10 s forced exit. Each attempt waits at most 2 s, so a held-open connection can't hold them back.
+- `drawlatch stop` waits 15 s before falling back to SIGKILL, longer than the daemon's own shutdown.
+
+So once a shutdown has begun, every refusal is on disk before the daemon exits, unless the day's marker allowance is used up or the disk keeps failing. What can still be lost is the counts waiting for the timer when the daemon is SIGKILLed or crashes, or the machine loses power: up to a minute of refusals for each caller over budget, or longer while a failing disk keeps the timer retrying. These lines come from a separate 1 MiB-a-day allowance, not the caller's budget. `jq 'select(."drawlatch.source" == "daemon")'` finds them.
 
 Every authenticated caller can write to its own log; there is no per-caller switch. Records carry the client's own timestamps, but only the `drawlatch.*` stamps are the daemon's. Anyone holding a caller's private key can add records as that caller, but not change or remove existing ones. Within the budget they can also crowd out real records; the `quota_exceeded` lines make that visible on the hub.
 
@@ -349,7 +357,7 @@ start                    Start the daemon in the background
     -f, --foreground       Run in the foreground (for process managers)
     -t, --tunnel           Also start a Cloudflare quick tunnel (requires cloudflared)
     --port <n>, --host <addr>
-stop | restart           Stop (SIGTERM, then SIGKILL after 5s) / restart; restart keeps an active tunnel
+stop | restart           Stop (SIGTERM, then SIGKILL after 15s) / restart; restart keeps an active tunnel
 status                   PID, address, dashboard URL, password state, uptime, health, sessions
 logs                     Show the log (~/.drawlatch/logs/drawlatch.log)
     -n, --lines <n>        Lines to show (default 50)
