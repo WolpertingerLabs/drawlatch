@@ -2,7 +2,7 @@
   "name": "X (Twitter) API",
   "stability": "beta",
   "category": "social-media",
-  "description": "X (formerly Twitter) API v2 — tweets, users, spaces, lists, and more. Auth is handled automatically via the X_BEARER_TOKEN environment variable (App-only Bearer token from the X Developer Portal). Both api.x.com and api.twitter.com domains are allowlisted. Includes a poll ingestor that searches recent tweets matching a configurable query — set X_SEARCH_QUERY and use poll_events to retrieve them.",
+  "description": "X (formerly Twitter) API v2 — tweets, users, spaces, lists, and more. Auth is handled automatically via the X_BEARER_TOKEN environment variable (App-only Bearer token from the X Developer Console). Both api.x.com and api.twitter.com domains are allowlisted. Includes a poll ingestor that searches recent tweets matching a configurable query — set X_SEARCH_QUERY and use poll_events to retrieve them.",
   "docsUrl": "https://developer.x.com/en/docs/x-api",
   "headers": {
     "Authorization": "Bearer ${X_BEARER_TOKEN}"
@@ -27,10 +27,10 @@
     }
   },
   "testIngestor": {
-    "description": "Fetches the authenticated user to verify X API access",
+    "description": "Fetches the app's API usage to verify X API access",
     "strategy": "poll_once",
     "request": {
-      "url": "https://api.x.com/2/users/me",
+      "url": "https://api.x.com/2/usage/tweets?days=1",
       "expectedStatus": [200]
     }
   },
@@ -61,7 +61,7 @@
     ]
   },
   "testConnection": {
-    "url": "https://api.x.com/2/users/me",
-    "description": "Fetches the authenticated X/Twitter user"
+    "url": "https://api.x.com/2/usage/tweets?days=1",
+    "description": "Fetches the app's X API usage for the last day"
   }
 }
