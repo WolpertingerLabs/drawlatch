@@ -2,20 +2,24 @@
 
 /**
  * Cut a GitHub release for the current package.json version, with the
- * `npm pack` tarball attached as a release asset.
+ * `npm pack` tarball attached twice: once under its versioned npm name and
+ * once as `drawlatch.tgz`.
  *
  * Usage:
  *   npm run release:gh
  *
  * Creates tag `v<version>` on GitHub at the current HEAD (gh creates the tag
- * itself; no local `git tag` needed). Versions with a prerelease suffix
- * (e.g. 1.0.0-alpha.69) are marked as GitHub prereleases.
+ * itself; no local `git tag` needed) and marks the release as Latest.
  *
- * Consumers can then install without the npm registry, either from the tag
- * (built from source via `prepare`):
- *   "github:WolpertingerLabs/drawlatch#v<version>"
- * or from the prebuilt tarball asset:
+ * Consumers can then install without the npm registry. To always track the
+ * newest release:
+ *   "https://github.com/WolpertingerLabs/drawlatch/releases/latest/download/drawlatch.tgz"
+ * To pin one version:
  *   "https://github.com/WolpertingerLabs/drawlatch/releases/download/v<version>/wolpertingerlabs-drawlatch-<version>.tgz"
+ *
+ * Releases are deliberately NOT marked as GitHub prereleases even though every
+ * version is an alpha: GitHub's /releases/latest skips prereleases, so marking
+ * them would leave the tracking URL above with nothing to resolve to.
  *
  * Refuses to run when the working tree is dirty, HEAD isn't on the remote, or
  * the release already exists, since each would publish something other than
@@ -23,7 +27,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -47,9 +51,10 @@ const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 const version = pkg.version;
 const tag = `v${version}`;
 const tarballName = `${pkg.name.replace(/^@/, '').replace('/', '-')}-${version}.tgz`;
-const isPrerelease = version.includes('-');
+// Fixed asset name so /releases/latest/download/<name> always resolves.
+const STABLE_ASSET = 'drawlatch.tgz';
 
-console.log(`=== GitHub release ${tag}${isPrerelease ? ' (prerelease)' : ''} ===`);
+console.log(`=== GitHub release ${tag} ===`);
 
 // 1. Preconditions
 if (capture('git', ['status', '--porcelain'])) {
@@ -77,23 +82,27 @@ const outDir = mkdtempSync(join(tmpdir(), 'drawlatch-release-'));
 try {
   run('npm', ['pack', '--pack-destination', outDir]);
   const tarball = join(outDir, tarballName);
+  const stableTarball = join(outDir, STABLE_ASSET);
+  copyFileSync(tarball, stableTarball);
 
-  // 3. Create the release with the tarball attached
-  const args = [
+  // 3. Create the release with both copies attached, marked Latest
+  run('gh', [
     'release',
     'create',
     tag,
     tarball,
+    stableTarball,
     '--target',
     head,
     '--title',
     tag,
     '--generate-notes',
-  ];
-  if (isPrerelease) args.push('--prerelease');
-  run('gh', args);
+    '--latest',
+  ]);
 
-  console.log(`\nReleased ${tag} at ${head.slice(0, 7)} with asset ${tarballName}`);
+  console.log(
+    `\nReleased ${tag} at ${head.slice(0, 7)} with assets ${tarballName} and ${STABLE_ASSET}`,
+  );
 } finally {
   rmSync(outDir, { recursive: true, force: true });
 }
