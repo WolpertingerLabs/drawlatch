@@ -21,27 +21,38 @@ import { checkAuth, onAuthRequired } from "./auth";
 /** Why the first auth check couldn't decide, shown on the splash. */
 interface PendingCheck {
   message: string;
-  retryAfter: number;
+  /** Epoch ms of the next automatic check. */
+  retryAt: number;
 }
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [serverError, setServerError] = useState<string>("");
   const [pending, setPending] = useState<PendingCheck | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const retryTimer = useRef<number | null>(null);
+  const inFlight = useRef(false);
   const navigate = useNavigate();
 
   const runCheck = useCallback(() => {
+    // One check at a time: a double-click on "Try now" must not send two.
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setChecking(true);
     if (retryTimer.current !== null) {
       window.clearTimeout(retryTimer.current);
       retryTimer.current = null;
     }
     void checkAuth().then((result) => {
+      inFlight.current = false;
+      setChecking(false);
       if (result.authenticated === null) {
         // Rate limited or unreachable: keep the current screen (a signed-in
         // user stays signed in) and try again later.
         const retryAfter = result.retryAfter ?? 10;
-        setPending({ message: result.error ?? "", retryAfter });
+        setNow(Date.now());
+        setPending({ message: result.error ?? "", retryAt: Date.now() + retryAfter * 1000 });
         retryTimer.current = window.setTimeout(runCheck, retryAfter * 1000);
         return;
       }
@@ -58,6 +69,13 @@ export default function App() {
     };
   }, [runCheck]);
 
+  // Tick the splash countdown once a second while it's showing.
+  useEffect(() => {
+    if (!pending || authed !== null) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [pending, authed]);
+
   // Mid-session 401 from any admin call -> boot back to Login.
   useEffect(() => {
     return onAuthRequired(() => {
@@ -68,20 +86,31 @@ export default function App() {
 
   if (authed === null) {
     return (
-      <div className="auth-splash" role="status">
+      <div className="auth-splash">
         {pending ? (
           <div className="auth-splash-pending">
-            <span>{pending.message}</span>
-            <span>Checking again in {pending.retryAfter}s.</span>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={runCheck}>
+            {/* Only the reason is a live region; a countdown in one would be
+                read out every second. */}
+            <span role="status">{pending.message}</span>
+            <span>
+              {checking
+                ? "Checking…"
+                : `Checking again in ${Math.max(0, Math.ceil((pending.retryAt - now) / 1000))}s.`}
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={runCheck}
+              disabled={checking}
+            >
               Try now
             </button>
           </div>
         ) : (
-          <>
+          <div className="auth-splash-pending" role="status">
             <span className="spinner" aria-hidden="true" />
             <span>Loading…</span>
-          </>
+          </div>
         )}
       </div>
     );

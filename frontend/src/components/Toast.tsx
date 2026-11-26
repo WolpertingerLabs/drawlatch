@@ -74,10 +74,25 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="toast-region" role="region" aria-label="Notifications" aria-live="polite">
-        {items.map((t) => (
-          <ToastView key={t.id} item={t} onDismiss={dismiss} />
-        ))}
+      {/* Two live regions that exist before any toast does (a region
+          inserted together with its text is often not announced): errors
+          are assertive, everything else polite. The toasts themselves carry
+          no role, so nothing is announced twice. */}
+      <div className="toast-region" role="region" aria-label="Notifications">
+        <div className="toast-stack" aria-live="assertive" aria-atomic="false">
+          {items
+            .filter((t) => t.kind === "error")
+            .map((t) => (
+              <ToastView key={t.id} item={t} onDismiss={dismiss} />
+            ))}
+        </div>
+        <div className="toast-stack" aria-live="polite" aria-atomic="false">
+          {items
+            .filter((t) => t.kind !== "error")
+            .map((t) => (
+              <ToastView key={t.id} item={t} onDismiss={dismiss} />
+            ))}
+        </div>
       </div>
     </ToastContext.Provider>
   );
@@ -98,7 +113,6 @@ function ToastView({ item, onDismiss }: { item: ToastItem; onDismiss: (id: numbe
   return (
     <div
       className={`toast toast-${item.kind}`}
-      role={item.kind === "error" ? "alert" : "status"}
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)}
