@@ -67,7 +67,8 @@ export default function SecretMatrix() {
           <span>polling every 10s</span>
         </div>
       </div>
-      {summary && summary.total > 0 && (
+      {/* Hidden while offline: a stale count beside "not reachable". */}
+      {summary && summary.total > 0 && daemon !== "down" && (
         <span className="page-subtitle">
           {summary.present} of {summary.total} required secrets configured
         </span>
@@ -239,8 +240,10 @@ function MatrixTable({ matrix, onlyMissing }: { matrix: Matrix; onlyMissing: boo
               Secret
             </th>
             {matrix.callers.map((alias) => (
-              <th key={alias} scope="col" className="dl-matrix-caller">
-                <span className="mono">{alias}</span>
+              <th key={alias} scope="col" className="dl-matrix-caller" title={alias}>
+                {/* Clamped to a few lines so one long alias can't make the
+                    header band tall; the full alias is the title. */}
+                <span className="mono dl-matrix-caller-name">{alias}</span>
               </th>
             ))}
           </tr>

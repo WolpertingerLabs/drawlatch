@@ -51,7 +51,10 @@ export default function SessionTable() {
           <span>polling every 5s</span>
         </div>
       </div>
-      {sorted && <span className="page-subtitle">{plural(sorted.length, "session")}</span>}
+      {/* Hidden while offline: a stale count beside "not reachable". */}
+      {sorted && daemon !== "down" && (
+        <span className="page-subtitle">{plural(sorted.length, "session")}</span>
+      )}
     </header>
   );
 

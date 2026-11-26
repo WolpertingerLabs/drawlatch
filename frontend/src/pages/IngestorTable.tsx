@@ -56,7 +56,8 @@ export default function IngestorTable() {
           <span>polling every 2s</span>
         </div>
       </div>
-      {ingestors && (
+      {/* Hidden while offline: a stale count beside "not reachable". */}
+      {ingestors && daemon !== "down" && (
         <span className="page-subtitle">{plural(ingestors.length, "listener")}</span>
       )}
     </header>
