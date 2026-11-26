@@ -38,9 +38,12 @@ export default function VaultPage() {
   const [error, setError] = useState<string | null>(null);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
+  // Polls overlap with event-driven reloads; only the latest may write.
+  const statusSeq = useRef(0);
   const loadStatus = useCallback(async () => {
+    const mine = ++statusSeq.current;
     const res = await api.vaultStatus();
-    if (!isDaemonDown(res)) setStatus(res);
+    if (mine === statusSeq.current && !isDaemonDown(res)) setStatus(res);
   }, []);
 
   const loadCallers = useCallback(async () => {
@@ -186,7 +189,9 @@ export default function VaultPage() {
 
       <div id="dl-vault-panel" role="tabpanel" aria-labelledby={`dl-vault-tab-${tab}`}>
         {callers === null && daemon === "up" && !error && <LoadingState label="Loading the vault…" />}
-        {!offline && tab === "items" && noCallers && (
+        {/* The tabs stay mounted through an offline blip, so a dialog with
+            typed values survives it (saving fails until the daemon is back). */}
+        {tab === "items" && noCallers && (
           <EmptyState
             icon={<Users size={20} />}
             title="No callers yet"
@@ -198,20 +203,20 @@ export default function VaultPage() {
             }
           />
         )}
-        {!offline && tab === "items" && !noCallers && callers !== null && caller === undefined && (
+        {tab === "items" && !noCallers && callers !== null && caller === undefined && (
           <EmptyState
             icon={<Users size={20} />}
             title={`No caller named "${requested}"`}
             body="Choose a caller from the list above."
           />
         )}
-        {!offline && tab === "items" && caller && (
+        {tab === "items" && caller && (
           <ItemsTab key={caller.alias} caller={caller} onChanged={() => void loadCallers()} />
         )}
-        {!offline && tab === "requests" && daemon === "up" && (
+        {tab === "requests" && (daemon === "up" || callers !== null) && (
           <RequestsTab onChanged={() => void loadCallers()} />
         )}
-        {!offline && tab === "grants" && daemon === "up" && (
+        {tab === "grants" && (daemon === "up" || callers !== null) && (
           <GrantsTab onChanged={() => void loadCallers()} />
         )}
       </div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Check, Copy, Plus, Trash2, Users } from "lucide-react";
 import type { AdminCaller } from "drawlatch-admin-types";
@@ -38,6 +38,10 @@ export default function CallerList() {
   const [confirmDeleteAlias, setConfirmDeleteAlias] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Focus after the delete dialog: back to the trash button on Cancel; to
+  // "New caller" once the row (and its button) is gone.
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const newCallerRef = useRef<HTMLButtonElement>(null);
 
   const refetch = useCallback(async () => {
     const res = await api.callers();
@@ -74,7 +78,7 @@ export default function CallerList() {
   };
 
   const handleCreate = async () => {
-    if (creating) return;
+    if (creating || daemon === "down") return;
     const alias = newAlias.trim();
     if (!alias) {
       setNewCallerError("Alias is required.");
@@ -117,16 +121,20 @@ export default function CallerList() {
       return;
     }
     toast.show(`Deleted caller ${confirmDeleteAlias}`);
+    if (newCallerRef.current) returnFocusRef.current = newCallerRef.current;
     setConfirmDeleteAlias(null);
     await refetch();
   };
 
-  const askDelete = (alias: string) => {
+  const askDelete = (alias: string, trigger: HTMLElement) => {
+    returnFocusRef.current = trigger;
     setDeleteError(null);
     setConfirmDeleteAlias(alias);
   };
 
-  if (daemon === "down") {
+  // Offline before anything loaded: just the banner. Once loaded, the list
+  // (and a half-typed new caller) stays under the banner.
+  if (daemon === "down" && state.status !== "ok") {
     return (
       <>
         <header className="page-header">
@@ -158,12 +166,14 @@ export default function CallerList() {
           </div>
         </div>
         {!showNewCaller && callers.length > 0 && (
-          <button type="button" className="btn btn-primary" onClick={openNew}>
+          <button ref={newCallerRef} type="button" className="btn btn-primary" onClick={openNew}>
             <Plus size={14} aria-hidden="true" />
             New caller
           </button>
         )}
       </header>
+
+      {daemon === "down" && <DaemonOffline action="manage callers" />}
 
       {showNewCaller && (
         <form
@@ -217,7 +227,11 @@ export default function CallerList() {
             />
           </div>
           <div className="dl-callers-newcaller-actions">
-            <button type="submit" className="btn btn-primary" disabled={creating}>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={creating || daemon === "down"}
+            >
               {creating && <span className="spinner" aria-hidden="true" />}
               {creating ? "Creating…" : "Create caller"}
             </button>
@@ -297,6 +311,8 @@ export default function CallerList() {
                   onClick={(e) => {
                     // The alias link handles its own click (and middle-click).
                     if ((e.target as HTMLElement).closest("a, button")) return;
+                    // Selecting text in the row (to copy a name) isn't a click.
+                    if (window.getSelection()?.toString()) return;
                     navigate(`/callers/${encodeURIComponent(c.alias)}`);
                   }}
                 >
@@ -332,7 +348,7 @@ export default function CallerList() {
                         className="btn btn-ghost btn-icon btn-sm dl-callers-del-btn"
                         title={`Delete caller ${c.alias}`}
                         aria-label={`Delete caller ${c.alias}`}
-                        onClick={() => askDelete(c.alias)}
+                        onClick={(e) => askDelete(c.alias, e.currentTarget)}
                       >
                         <Trash2 size={14} aria-hidden="true" />
                       </button>
@@ -362,7 +378,7 @@ export default function CallerList() {
                     type="button"
                     className="btn btn-ghost btn-icon dl-callers-del-btn"
                     aria-label={`Delete caller ${c.alias}`}
-                    onClick={() => askDelete(c.alias)}
+                    onClick={(e) => askDelete(c.alias, e.currentTarget)}
                   >
                     <Trash2 size={16} aria-hidden="true" />
                   </button>
@@ -398,6 +414,7 @@ export default function CallerList() {
           }
           busy={deleting}
           error={deleteError}
+          returnFocusRef={returnFocusRef}
           onConfirm={handleConfirmDelete}
           onCancel={() => {
             if (deleting) return;
@@ -456,7 +473,16 @@ export function Fingerprint({ value, short = false }: { value: string | null; sh
       : value;
   const copy = async () => {
     if (await copyText(value)) setCopied(true);
-    else toast.show("Copy failed. Select the fingerprint and copy it by hand.", { kind: "error" });
+    // The table shows a shortened fingerprint, so the toast carries the
+    // whole one, selectable, for copying by hand.
+    else
+      toast.show(
+        <>
+          Couldn&apos;t copy. Select it here instead:{" "}
+          <span className="mono dl-callers-fp-full">{value}</span>
+        </>,
+        { kind: "error" },
+      );
   };
   return (
     <span className="dl-callers-fp">

@@ -113,6 +113,32 @@
   align-items: center;
 }
 
+/* The actions column stays in view when the table is wider than its box
+ * (tablets: the sidebar leaves ~790px). */
+.dl-vault-table.has-actions th:last-child,
+.dl-vault-table.has-actions td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: var(--z-sticky);
+  box-shadow: -1px 0 0 var(--border-light);
+}
+
+.dl-vault-table.has-actions td:last-child {
+  background: var(--surface);
+}
+
+.dl-vault-table.has-actions th:last-child {
+  background: var(--bg-secondary);
+}
+
+@media (max-width: 1024px) {
+  /* The value-changed time is in the cell's title; the date column is the
+   * cheapest to drop for room. */
+  .dl-vault-col-optional {
+    display: none;
+  }
+}
+
 .dl-vault-icon-danger:hover:not(:disabled) {
   background: var(--danger-bg);
   color: var(--danger-text);

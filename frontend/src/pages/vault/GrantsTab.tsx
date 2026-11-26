@@ -1,10 +1,11 @@
 /**
  * Vault → Grants: active grants with Revoke; revoked ones collapsed below.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Ban, Share2 } from "lucide-react";
 import type { AdminVaultGrant } from "drawlatch-admin-types";
 import { api, isDaemonDown, notifyVaultRequestsChanged } from "../../api";
+import { useDaemon } from "../../contexts/DaemonContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import EmptyState, { LoadingState } from "../../components/EmptyState";
 import { useToast } from "../../components/Toast";
@@ -48,14 +49,28 @@ export default function GrantsTab({ onChanged }: { onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const seq = useRef(0);
   const refresh = useCallback(async () => {
+    const mine = ++seq.current;
     const res = await api.vaultGrants();
+    if (mine !== seq.current) return;
     if (isDaemonDown(res)) {
-      setLoad({ status: "error", message: res.error });
+      setLoad((prev) => (prev.status === "ok" ? prev : { status: "error", message: res.error }));
       return;
     }
     setLoad({ status: "ok", data: res });
   }, []);
+
+  // Back from an offline blip: reload what may have changed meanwhile.
+  const { daemon } = useDaemon();
+  const wasDown = useRef(false);
+  useEffect(() => {
+    if (daemon === "down") wasDown.current = true;
+    else if (daemon === "up" && wasDown.current) {
+      wasDown.current = false;
+      void refresh();
+    }
+  }, [daemon, refresh]);
 
   useEffect(() => {
     void refresh();

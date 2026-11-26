@@ -94,6 +94,12 @@
   overflow-wrap: anywhere;
 }
 
+/* The whole fingerprint in the "Couldn't copy" toast, one click to select. */
+.dl-callers-fp-full {
+  user-select: all;
+  overflow-wrap: anywhere;
+}
+
 .dl-callers-fp-copy {
   color: var(--text-faint);
 }
@@ -202,6 +208,22 @@
 
 .dl-caller-conn-card .secret-ref-list {
   justify-content: flex-end;
+}
+
+.dl-caller-conn-cards {
+  list-style: none;
+}
+
+@media (min-width: 1025px) {
+  .dl-caller-conn-cards {
+    display: none;
+  }
+}
+
+@media (max-width: 1024px) {
+  .dl-caller-conn-table {
+    display: none;
+  }
 }
 
 @media (max-width: 768px) {

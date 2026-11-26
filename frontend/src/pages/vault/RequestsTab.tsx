@@ -141,8 +141,14 @@ export default function RequestsTab({ onChanged }: { onChanged: () => void }) {
   const [action, setAction] = useState<Action | null>(null);
   const lastPending = useRef<number | null>(null);
 
+  // Refreshes overlap (the 10s poll, a visibility change, a decision just
+  // made). Only the latest one may write: an older, slower answer would put
+  // a request you just granted back in the queue.
+  const seq = useRef(0);
   const refresh = useCallback(async () => {
+    const mine = ++seq.current;
     const res = await api.vaultRequests();
+    if (mine !== seq.current) return;
     if (isDaemonDown(res)) {
       // A failed poll keeps the list on screen; only the first load errors.
       setLoad((prev) => (prev.status === "ok" ? prev : { status: "error", message: res.error }));
@@ -206,14 +212,14 @@ export default function RequestsTab({ onChanged }: { onChanged: () => void }) {
       )}
       {pending.length > 0 && !isMobile && (
         <div className="data-table-wrap">
-          <table className="data-table dl-vault-table">
+          <table className="data-table dl-vault-table has-actions">
             <thead>
               <tr>
                 <th>Requester</th>
                 <th>Item</th>
                 <th>Mode asked</th>
                 <th>Reason</th>
-                <th>Asked</th>
+                <th className="dl-vault-col-optional">Asked</th>
                 <th>
                   <span className="sr-only">Actions</span>
                 </th>
@@ -232,7 +238,7 @@ export default function RequestsTab({ onChanged }: { onChanged: () => void }) {
                   <td>
                     <ReasonCell r={r} />
                   </td>
-                  <td>{formatTime(r.createdAt)}</td>
+                  <td className="dl-vault-col-optional">{formatTime(r.createdAt)}</td>
                   <td>
                     <DecisionButtons r={r} onAction={setAction} />
                   </td>

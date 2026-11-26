@@ -3,10 +3,11 @@
  * item, Edit, Replace value, Delete and Reveal. A table on wide screens,
  * cards on phones.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Eye, KeyRound, LockKeyhole, Pencil, Plus, Trash2 } from "lucide-react";
 import type { AdminCaller, AdminVaultItem, AdminVaultItems } from "drawlatch-admin-types";
 import { api, isDaemonDown } from "../../api";
+import { useDaemon } from "../../contexts/DaemonContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import EmptyState, { LoadingState } from "../../components/EmptyState";
 import { useToast } from "../../components/Toast";
@@ -94,11 +95,20 @@ export default function ItemsTab({
   const [action, setAction] = useState<Action | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Focus after the delete dialog: the row's trash button on Cancel; "New
+  // item" once the row is gone.
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const newItemRef = useRef<HTMLButtonElement>(null);
 
+  // Only the latest refresh may write (they overlap after a save).
+  const seq = useRef(0);
   const refresh = useCallback(async () => {
+    const mine = ++seq.current;
     const res = await api.vaultItems(caller.alias);
+    if (mine !== seq.current) return;
     if (isDaemonDown(res)) {
-      setLoad({ status: "error", message: res.error });
+      // A failed refresh keeps the list (and any open dialog) on screen.
+      setLoad((prev) => (prev.status === "ok" ? prev : { status: "error", message: res.error }));
       return;
     }
     setLoad({ status: "ok", data: res });
@@ -109,6 +119,17 @@ export default function ItemsTab({
       return fresh ? { ...a, item: fresh } : a;
     });
   }, [caller.alias]);
+
+  // Back from an offline blip: reload what may have changed meanwhile.
+  const { daemon } = useDaemon();
+  const wasDown = useRef(false);
+  useEffect(() => {
+    if (daemon === "down") wasDown.current = true;
+    else if (daemon === "up" && wasDown.current) {
+      wasDown.current = false;
+      void refresh();
+    }
+  }, [daemon, refresh]);
 
   /** A write got 409 (the vault changed since the list loaded): reload the
    *  list and its revision so the next attempt can succeed. */
@@ -145,13 +166,19 @@ export default function ItemsTab({
       if (res.status === 409) conflict();
       return;
     }
+    if (newItemRef.current) returnFocusRef.current = newItemRef.current;
     setAction(null);
     toast.show(`Deleted ${item.name}`);
     saved();
   };
 
   const newButton = (
-    <button type="button" className="btn btn-primary" onClick={() => setAction({ kind: "new" })}>
+    <button
+      ref={newItemRef}
+      type="button"
+      className="btn btn-primary"
+      onClick={() => setAction({ kind: "new" })}
+    >
       <Plus size={14} aria-hidden="true" />
       New item
     </button>
@@ -192,7 +219,7 @@ export default function ItemsTab({
 
       {items.length > 0 && !isMobile && (
         <div className="data-table-wrap">
-          <table className="data-table dl-vault-table">
+          <table className="data-table dl-vault-table has-actions">
             <thead>
               <tr>
                 <th>Name</th>
@@ -201,7 +228,7 @@ export default function ItemsTab({
                 <th>Tags</th>
                 <th>Connections</th>
                 <th>Shared with</th>
-                <th>Updated</th>
+                <th className="dl-vault-col-optional">Updated</th>
                 <th>
                   <span className="sr-only">Actions</span>
                 </th>
@@ -229,7 +256,10 @@ export default function ItemsTab({
                   <td>
                     <SharedWith item={item} />
                   </td>
-                  <td title={`Value changed ${formatTime(item.valueUpdatedAt)}`}>
+                  <td
+                    className="dl-vault-col-optional"
+                    title={`Value changed ${formatTime(item.valueUpdatedAt)}`}
+                  >
                     {formatTime(item.updatedAt)}
                   </td>
                   <td>
@@ -249,7 +279,10 @@ export default function ItemsTab({
                       <button
                         type="button"
                         className="btn btn-ghost btn-icon btn-sm dl-vault-icon-danger"
-                        onClick={() => open("delete", item)}
+                        onClick={(e) => {
+                    returnFocusRef.current = e.currentTarget;
+                    open("delete", item);
+                  }}
                         aria-label={`Delete ${item.name}`}
                         title="Delete"
                       >
@@ -325,7 +358,10 @@ export default function ItemsTab({
                 <button
                   type="button"
                   className="btn btn-danger-outline btn-sm btn-icon"
-                  onClick={() => open("delete", item)}
+                  onClick={(e) => {
+                    returnFocusRef.current = e.currentTarget;
+                    open("delete", item);
+                  }}
                   aria-label={`Delete ${item.name}`}
                   title="Delete"
                 >
@@ -381,6 +417,7 @@ export default function ItemsTab({
           }
           busy={deleting}
           error={deleteError}
+          returnFocusRef={returnFocusRef}
           onConfirm={() => handleDelete(action.item)}
           onCancel={() => {
             if (!deleting) setAction(null);

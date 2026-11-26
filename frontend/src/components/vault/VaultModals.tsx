@@ -11,6 +11,7 @@ import type {
   AdminVaultKind,
 } from "drawlatch-admin-types";
 import { api, type VaultItemPatch } from "../../api";
+import { useDaemon } from "../../contexts/DaemonContext";
 import Modal from "../Modal";
 import ConfirmDialog from "../ConfirmDialog";
 import { useToast } from "../Toast";
@@ -63,6 +64,7 @@ export function ModalShell({
 }) {
   const formId = useId();
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const offline = useDaemon().daemon === "down";
   const requestClose = () => {
     if (busy) return;
     if (dirty) setConfirmDiscard(true);
@@ -80,10 +82,17 @@ export function ModalShell({
       busy={busy}
       footer={
         <>
-          {error && (
-            <div className="modal-error dl-vf-footer-error" role="alert">
-              {error}
+          {offline ? (
+            <div className="modal-error dl-vf-footer-error" role="status">
+              The Drawlatch daemon isn&apos;t reachable. What you typed is kept; save once it&apos;s
+              back.
             </div>
+          ) : (
+            error && (
+              <div className="modal-error dl-vf-footer-error" role="alert">
+                {error}
+              </div>
+            )
           )}
           <button
             type="button"
@@ -97,7 +106,7 @@ export function ModalShell({
             type="submit"
             form={formId}
             className="btn btn-primary"
-            disabled={!canSave || busy}
+            disabled={!canSave || busy || offline}
           >
             {busy && <Loader2 size={14} className="spinner" aria-hidden="true" />}
             {saveLabel}
@@ -110,7 +119,7 @@ export function ModalShell({
         className="dl-vf-form"
         onSubmit={(e) => {
           e.preventDefault();
-          if (canSave && !busy) onSave();
+          if (canSave && !busy && !offline) onSave();
         }}
       >
         {children}
