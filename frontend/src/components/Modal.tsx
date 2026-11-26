@@ -11,10 +11,25 @@
  * - Escape closes only the topmost modal, and doesn't reach window-level
  *   Escape handlers underneath (a ConfirmDialog over a legacy panel closes
  *   just the dialog).
- * - A backdrop click closes only if the press started on the backdrop too
- *   (dragging a text selection out of a field doesn't close it).
+ * - A backdrop click closes only if the press both started and ended on the
+ *   backdrop (dragging a text selection out of a field, or into the panel,
+ *   doesn't close it).
  * - Locks body scroll while open, and becomes a full-screen sheet at ≤768px
  *   (`size="sm"` becomes a bottom sheet).
+ *
+ * Events: the modal is portaled, but React still bubbles its events to the
+ * component that rendered it. The overlay stops `click`, `submit` and
+ * `keydown` there, so Enter on a button inside can't trigger a clickable
+ * row's onKeyDown, and a form inside can't submit an outer form. Because a
+ * React stopPropagation also stops the native event at <body>, document-
+ * and window-level click/keydown listeners never see events from inside a
+ * modal. Close a popover inside a modal from a `mousedown` listener (not
+ * stopped) or one on the panel, not a document `click` listener.
+ *
+ * Focus on close goes to `returnFocusRef` if given and still in the page,
+ * else to whatever had focus at open, else (when that element is gone, or
+ * is removed within a few seconds, as when a delete refetches the list the
+ * trigger was in) to the page's <h1>.
  *
  * Closing rules:
  * - `busy`: nothing closes it, and × is disabled (a request is in flight).
@@ -67,6 +82,9 @@ export interface ModalProps {
   bodyClassName?: string;
   /** Hide the × button (the footer has the only way out). */
   hideClose?: boolean;
+  /** Where focus goes on close. Default: the element focused at open, or
+   *  the page heading if that element has been removed. */
+  returnFocusRef?: RefObject<HTMLElement>;
 }
 
 // Open modals, oldest first. Only the last one handles Escape and Tab.
@@ -81,6 +99,59 @@ function focusables(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
     (el) => el.getClientRects().length > 0 && !el.closest("[inert]"),
   );
+}
+
+function restoreFocus(
+  preferred: HTMLElement | null,
+  previous: HTMLElement | null,
+  self: HTMLElement | null,
+): void {
+  for (const el of [preferred, previous]) {
+    if (el && el.isConnected && !(self && self.contains(el))) {
+      el.focus({ preventScroll: true });
+      if (document.activeElement === el) {
+        // The usual delete flow closes the dialog, then refetches and drops
+        // the row the trigger was on. If that takes focus with it, recover.
+        watchForRemoval(el);
+        return;
+      }
+    }
+  }
+  focusFallback(self);
+}
+
+/** The trigger is gone: stay in the next modal up, else the page heading. */
+function focusFallback(self: HTMLElement | null): void {
+  const panels = Array.from(
+    document.querySelectorAll<HTMLElement>(".modal-overlay .modal-panel"),
+  ).filter((p) => p !== self);
+  if (stack.length > 0 && panels.length > 0) {
+    panels[panels.length - 1].focus({ preventScroll: true });
+    return;
+  }
+  const heading = document.querySelector<HTMLElement>(".main-content h1");
+  if (heading) {
+    if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1");
+    heading.focus({ preventScroll: true });
+  }
+}
+
+const REMOVAL_WATCH_MS = 5_000;
+
+function watchForRemoval(el: HTMLElement): void {
+  if (typeof MutationObserver === "undefined") return;
+  const observer = new MutationObserver(() => {
+    if (el.isConnected) return;
+    stop();
+    const active = document.activeElement;
+    if (!active || active === document.body) focusFallback(null);
+  });
+  const timer = window.setTimeout(() => stop(), REMOVAL_WATCH_MS);
+  const stop = () => {
+    observer.disconnect();
+    window.clearTimeout(timer);
+  };
+  observer.observe(document.body, { childList: true, subtree: true });
 }
 
 export default function Modal(props: ModalProps) {
@@ -106,15 +177,18 @@ function OpenModal({
   className,
   bodyClassName,
   hideClose = false,
+  returnFocusRef,
 }: ModalProps) {
   const id = useId();
   const titleId = `${id}-title`;
   const panelRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const downOnBackdrop = useRef(false);
+  const upOnBackdrop = useRef(false);
   // Read the latest props from the document listener without re-binding it.
-  const latest = useRef({ onClose, busy });
-  latest.current = { onClose, busy };
+  const latest = useRef({ onClose, busy, returnFocusRef });
+  latest.current = { onClose, busy, returnFocusRef };
   // Decided once, at open: was another modal already up?
   const depthRef = useRef<number | null>(null);
   if (depthRef.current === null) depthRef.current = stack.length;
@@ -123,6 +197,7 @@ function OpenModal({
   // Register on the stack, lock scroll, and restore focus on close.
   useLayoutEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
+    const self = panelRef.current;
     stack.push(id);
     if (scrollLocks++ === 0) {
       savedOverflow = document.body.style.overflow;
@@ -132,9 +207,11 @@ function OpenModal({
       const i = stack.lastIndexOf(id);
       if (i !== -1) stack.splice(i, 1);
       if (--scrollLocks === 0) document.body.style.overflow = savedOverflow;
-      if (previouslyFocused && document.contains(previouslyFocused)) {
-        previouslyFocused.focus({ preventScroll: true });
-      }
+      restoreFocus(
+        latest.current.returnFocusRef?.current ?? null,
+        previouslyFocused,
+        self,
+      );
     };
   }, [id]);
 
@@ -151,44 +228,54 @@ function OpenModal({
     // Only on open: later prop changes must not steal focus back.
   }, []);
 
-  // Escape and the Tab trap, for the topmost modal only. Bubble phase on
-  // document: a field inside that handles Escape itself (and calls
-  // preventDefault or stopPropagation) wins, and stopping here keeps the
-  // key from window-level listeners of whatever is underneath.
+  // Escape and the Tab trap, for the topmost modal only. Returns true when
+  // it handled the key. A field inside that handles Escape itself (calling
+  // preventDefault, or stopPropagation so it never gets here) wins.
+  const handleKey = (e: {
+    key: string;
+    shiftKey: boolean;
+    defaultPrevented: boolean;
+    preventDefault: () => void;
+  }): boolean => {
+    if (stack[stack.length - 1] !== id) return false;
+    const panel = panelRef.current;
+    if (!panel) return false;
+    if (e.key === "Escape") {
+      if (e.defaultPrevented) return false;
+      e.preventDefault();
+      if (!latest.current.busy) latest.current.onClose();
+      return true;
+    }
+    if (e.key !== "Tab") return false;
+    const items = focusables(panel);
+    e.preventDefault();
+    if (items.length === 0) {
+      panel.focus();
+      return true;
+    }
+    const active = document.activeElement;
+    const i = active instanceof HTMLElement ? items.indexOf(active) : -1;
+    const next = e.shiftKey
+      ? items[i <= 0 ? items.length - 1 : i - 1]
+      : items[i === -1 || i === items.length - 1 ? 0 : i + 1];
+    next.focus();
+    return true;
+  };
+  const handleKeyRef = useRef(handleKey);
+  handleKeyRef.current = handleKey;
+
+  // Keys from inside the modal are handled by the overlay's onKeyDown below
+  // (which also stops them). This catches the rest: focus left on <body>
+  // after a click on a non-dismissible backdrop, say.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (stack[stack.length - 1] !== id) return;
-      const panel = panelRef.current;
-      if (!panel) return;
-      if (e.key === "Escape") {
-        if (e.defaultPrevented) return;
-        e.preventDefault();
-        e.stopPropagation();
-        if (!latest.current.busy) latest.current.onClose();
-        return;
-      }
-      if (e.key !== "Tab") return;
-      const items = focusables(panel);
-      if (items.length === 0) {
-        e.preventDefault();
-        panel.focus();
-        return;
-      }
-      const first = items[0];
-      const last = items[items.length - 1];
-      const active = document.activeElement;
-      const inside = active instanceof Node && panel.contains(active);
-      if (e.shiftKey && (active === first || !inside)) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && (active === last || !inside)) {
-        e.preventDefault();
-        first.focus();
-      }
+      const overlay = overlayRef.current;
+      if (overlay && e.target instanceof Node && overlay.contains(e.target)) return;
+      if (handleKeyRef.current(e)) e.stopPropagation();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [id]);
+  }, []);
 
   const overlayClass = [
     "modal-overlay",
@@ -197,24 +284,48 @@ function OpenModal({
   ]
     .filter(Boolean)
     .join(" ");
-  const panelClass = ["modal-panel", `modal-${size}`, className ?? ""]
+  const panelClass = [
+    "modal-panel",
+    `modal-${size}`,
+    footer ? "has-footer" : "no-footer",
+    className ?? "",
+  ]
     .filter(Boolean)
     .join(" ");
 
   return createPortal(
     <div
+      ref={overlayRef}
       className={overlayClass}
       role="presentation"
       onMouseDown={(e) => {
         downOnBackdrop.current = e.target === e.currentTarget;
+        upOnBackdrop.current = false;
+      }}
+      onMouseUp={(e) => {
+        upOnBackdrop.current = e.target === e.currentTarget;
       }}
       onClick={(e) => {
         // Keep clicks from reaching React ancestors of the component that
         // rendered the modal (a clickable table row, say).
         e.stopPropagation();
-        const onBackdrop = downOnBackdrop.current && e.target === e.currentTarget;
+        // Both ends of the press on the backdrop: a drag from the panel out,
+        // or from the backdrop in, is not a backdrop click.
+        const onBackdrop =
+          downOnBackdrop.current && upOnBackdrop.current && e.target === e.currentTarget;
         downOnBackdrop.current = false;
+        upOnBackdrop.current = false;
         if (onBackdrop && dismissible && !busy) onClose();
+      }}
+      onKeyDown={(e) => {
+        handleKey(e);
+        // Not to React ancestors (a row's Enter-to-open), and not to window
+        // listeners of a legacy panel underneath.
+        e.stopPropagation();
+      }}
+      onSubmit={(e) => {
+        // A form inside must not also submit a form around the modal.
+        e.stopPropagation();
       }}
     >
       <div

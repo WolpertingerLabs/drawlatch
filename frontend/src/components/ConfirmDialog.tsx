@@ -34,6 +34,9 @@ interface ConfirmDialogProps {
   error?: string | null;
   /** Defaults to true, for parents that mount the dialog conditionally. */
   open?: boolean;
+  /** Where focus goes on close (see Modal). Useful when confirming removes
+   *  the button that opened the dialog. */
+  returnFocusRef?: React.RefObject<HTMLElement>;
   onConfirm: () => void | Promise<void>;
   onCancel: () => void;
 }
@@ -47,6 +50,7 @@ export default function ConfirmDialog({
   busy = false,
   error = null,
   open = true,
+  returnFocusRef,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -67,6 +71,7 @@ export default function ConfirmDialog({
       iconTone="danger"
       describedBy={descId}
       initialFocusRef={cancelRef}
+      returnFocusRef={returnFocusRef}
       className="dl-confirm-panel"
       footer={
         <>
