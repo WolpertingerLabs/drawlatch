@@ -24,20 +24,24 @@ import type {
   CallerBundleV1,
   DaemonOfflineEnvelope,
 } from "drawlatch-admin-types";
-import { notifyAuthRequired } from "./auth";
+import { isGatewayFailure, notifyAuthRequired } from "./auth";
 
 /**
  * What a read returns instead of data when it fails. `kind` says why:
  * - `network`: no response at all (connection refused, DNS, offline). Since
  *   the daemon serves this dashboard, this is what "daemon down" looks like.
  * - `http`: something answered with a non-2xx status (`status`); `error`
- *   carries the daemon's own message when it sent one. 502/503/504 come from
- *   a proxy in front of a stopped daemon, so they count as down too.
+ *   carries the daemon's own message when it sent one (`fromDaemon`). A
+ *   502/503/504 *without* the daemon's JSON error comes from a proxy in front
+ *   of a stopped daemon, so it counts as down; the daemon's own 503s (vault
+ *   key missing, no password) don't.
  * - `auth`: 401; the session is gone and the app is already showing Login.
  */
 export interface DaemonDownEnvelope extends DaemonOfflineEnvelope {
   kind?: "network" | "http" | "auth";
   status?: number;
+  /** The body was the daemon's own JSON error, so the daemon is running. */
+  fromDaemon?: boolean;
 }
 
 export type DaemonResponse<T> = T | DaemonDownEnvelope;
@@ -60,7 +64,12 @@ export function isDaemonDown<T>(
 /** True when a failed read means the daemon itself can't be reached. */
 export function isUnreachable(body: DaemonDownEnvelope): boolean {
   if (body.kind === "network") return true;
-  return body.kind === "http" && (body.status === 502 || body.status === 503 || body.status === 504);
+  return (
+    body.kind === "http" &&
+    body.status !== undefined &&
+    body.fromDaemon !== true &&
+    isGatewayFailure(body.status)
+  );
 }
 
 /** Fired when a request gets no response, so the daemon status is
@@ -102,10 +111,12 @@ async function getJson<T>(path: string): Promise<DaemonResponse<T>> {
     } catch {
       // empty / non-JSON body
     }
+    const fromDaemon = typeof message === "string" && message !== "";
     const envelope: DaemonDownEnvelope = {
       daemon: "down",
       kind: "http",
       status: res.status,
+      fromDaemon,
       error:
         typeof message === "string" && message !== ""
           ? `${message} (HTTP ${res.status})`
@@ -166,7 +177,9 @@ async function mutate<T>(
   if (!res.ok) {
     const error =
       (parsed as { error?: string } | null)?.error ?? `HTTP ${res.status}`;
-    if (res.status === 502 || res.status === 503 || res.status === 504) notifyUnreachable();
+    if (isGatewayFailure(res.status, (parsed as { error?: unknown } | null)?.error)) {
+      notifyUnreachable();
+    }
     return { ok: false, error, status: res.status };
   }
   return { ok: true, data: parsed as T };

@@ -39,6 +39,17 @@ function friendly429(): string {
   return "Too many attempts. Try again in a minute.";
 }
 
+/**
+ * A 502/503/504 that a proxy in front of the daemon sent because the daemon
+ * isn't answering. The daemon also sends 503 itself (no password set, vault
+ * key missing), always with a JSON `{ error }`; that is a real error from a
+ * running daemon, not "offline". Shared by api.ts and checkAuth.
+ */
+export function isGatewayFailure(status: number, daemonError?: unknown): boolean {
+  if (status !== 502 && status !== 503 && status !== 504) return false;
+  return !(typeof daemonError === "string" && daemonError !== "");
+}
+
 /** Seconds from a 429's Retry-After (or RateLimit-Reset), clamped to 1–120. */
 function retryAfterSeconds(res: Response, fallback: number): number {
   for (const name of ["retry-after", "ratelimit-reset"]) {
@@ -75,13 +86,13 @@ export async function checkAuth(): Promise<AuthCheckResult> {
       error: "Too many requests to the daemon.",
     };
   }
-  if (res.status === 502 || res.status === 504) {
-    return { authenticated: null, unreachable: true, retryAfter: 5, error: UNREACHABLE };
-  }
   const data = (await res.json().catch(() => ({}))) as {
     authenticated?: boolean;
     error?: string;
   };
+  if (isGatewayFailure(res.status, data.error)) {
+    return { authenticated: null, unreachable: true, retryAfter: 5, error: UNREACHABLE };
+  }
   if (res.ok) return { authenticated: !!data.authenticated };
   return { authenticated: false, error: data.error };
 }
