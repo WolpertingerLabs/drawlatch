@@ -48,6 +48,7 @@ import DaemonOffline from "./DaemonOffline";
 import EmptyState from "./EmptyState";
 import Modal from "./Modal";
 import { useToast } from "./Toast";
+import { toolResult } from "../utils/toolResult";
 import "./ListenerConfigPanel.css";
 
 interface ListenerConfigPanelProps {
@@ -313,7 +314,9 @@ export default function ListenerConfigPanel({
         setControlBusy(action);
         setControlError(null);
       }
-      const res = await api.controlListener(caller, connection, action, instanceId);
+      // Tool failures are HTTP 200 with success: false (or, for several
+      // instances, an array with failed items): toolResult catches both.
+      const res = toolResult(await api.controlListener(caller, connection, action, instanceId));
       if (!mounted.current) return;
       if (instanceId) {
         setInstanceBusy((prev) => {
@@ -325,11 +328,12 @@ export default function ListenerConfigPanel({
         setControlBusy(null);
       }
       const target = instanceId ? `Instance ${instanceId}` : isMulti ? "All instances" : "Listener";
+      // Refresh either way: a partly failed bulk action still changed some.
+      onChanged();
+      void fetchIngestors();
+      if (isMulti) void fetchInstances();
       if (res.ok) {
         toast.show(`${target} ${DONE[action]}`);
-        onChanged();
-        void fetchIngestors();
-        if (isMulti) void fetchInstances();
       } else if (instanceId) {
         toast.show(`Couldn't ${action} ${instanceId}: ${res.error}`, { kind: "error" });
       } else {
@@ -350,7 +354,7 @@ export default function ListenerConfigPanel({
         delete next[field.key];
         return next;
       });
-      const res = await api.resolveListenerOptions(caller, connection, field.key);
+      const res = toolResult(await api.resolveListenerOptions(caller, connection, field.key));
       if (!mounted.current) return;
       setLoadingOptions(null);
       const data: ResolveOptionsResult | null = res.ok ? res.data : null;
@@ -358,7 +362,7 @@ export default function ListenerConfigPanel({
         setDynamicOptions((prev) => ({ ...prev, [field.key]: data.options ?? [] }));
         return;
       }
-      const message = !res.ok ? res.error : (data?.error ?? "The API returned no options.");
+      const message = !res.ok ? res.error : "The API returned no options.";
       setOptionErrors((prev) => ({ ...prev, [field.key]: message }));
     },
     [caller, connection, dynamicOptions, loadingOptions],
@@ -373,13 +377,18 @@ export default function ListenerConfigPanel({
     if (Object.keys(changed).length === 0 || saving) return;
     setSaving(true);
     setSaveError(null);
-    const res = await api.setListenerParams(caller, connection, changed, {
-      instanceId: editingInstanceId ?? undefined,
-    });
+    // The form this save is for; if it was replaced meanwhile (another
+    // instance loaded), the response must not become that form's baseline.
+    const ticket = paramsRequest.current;
+    const res = toolResult(
+      await api.setListenerParams(caller, connection, changed, {
+        instanceId: editingInstanceId ?? undefined,
+      }),
+    );
     if (!mounted.current) return;
     setSaving(false);
     if (res.ok) {
-      setOriginalValues({ ...formValues });
+      if (ticket === paramsRequest.current) setOriginalValues({ ...formValues });
       toast.show(
         editingInstanceId
           ? `Saved ${editingInstanceId}'s parameters. The listener restarts with them.`
@@ -432,7 +441,7 @@ export default function ListenerConfigPanel({
     }
     setCreating(true);
     setNewInstanceError(null);
-    const res = await api.createListenerInstance(caller, connection, id, {});
+    const res = toolResult(await api.createListenerInstance(caller, connection, id, {}));
     if (!mounted.current) return;
     setCreating(false);
     if (res.ok) {
@@ -463,12 +472,14 @@ export default function ListenerConfigPanel({
       if (deletingInstance) return;
       setDeletingInstance(instanceId);
       setDeleteError(null);
-      const res = await api.deleteListenerInstance(caller, connection, instanceId);
+      const res = toolResult(await api.deleteListenerInstance(caller, connection, instanceId));
       if (!mounted.current) return;
       setDeletingInstance(null);
       if (!res.ok) {
-        // Keep the dialog open with the reason.
+        // Keep the dialog open with the reason, and reload the list: the
+        // usual cause is an instance removed elsewhere.
         setDeleteError(res.error);
+        void fetchInstances();
         return;
       }
       setConfirmDelete(null);
@@ -783,6 +794,9 @@ export default function ListenerConfigPanel({
                               isEditing ? `Close the editor for ${id}` : `Edit ${id}'s parameters`
                             }
                             title={isEditing ? "Close editor" : "Edit parameters"}
+                            // Switching mid-save would hand this save's values
+                            // to the next instance's form.
+                            disabled={saving}
                             onClick={() =>
                               guard(() => {
                                 if (isEditing) stopEditing();
@@ -797,7 +811,7 @@ export default function ListenerConfigPanel({
                             className="btn btn-ghost btn-icon btn-sm dl-lcp-danger-icon"
                             aria-label={`Delete ${id}`}
                             title="Delete instance"
-                            disabled={isDeleting}
+                            disabled={isDeleting || saving}
                             onClick={() => {
                               setDeleteError(null);
                               setConfirmDelete(id);
@@ -903,6 +917,7 @@ export default function ListenerConfigPanel({
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm dl-lcp-editing-cancel"
+                  disabled={saving}
                   onClick={() => guard(stopEditing)}
                 >
                   Stop editing

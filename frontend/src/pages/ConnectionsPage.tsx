@@ -42,6 +42,7 @@ import EmptyState, { LoadingState } from "../components/EmptyState";
 import { useToast } from "../components/Toast";
 import { TestResultView, toOutcome, type TestOutcome } from "../components/TestResult";
 import { GoogleBadges } from "../components/AuthSummary";
+import { toolResult } from "../utils/toolResult";
 import "./ConnectionsPage.css";
 
 const INGESTOR_POLL_MS = 5_000;
@@ -191,6 +192,8 @@ export default function ConnectionsPage() {
     setLoadError(null);
     setConnections([]);
     setIngestors([]);
+    // A toggle still in flight belongs to the previous caller's list.
+    setTogglingAlias(null);
     void refetch(caller);
     void fetchIngestors(caller);
   }, [daemon, selectedCaller, refetch, fetchIngestors]);
@@ -238,21 +241,28 @@ export default function ConnectionsPage() {
   // ── Toggle (optimistic) ─────────────────────────────────────────────────
   const handleToggle = async (c: AdminConnectionStatus, enabled: boolean) => {
     const alias = c.alias;
+    // The request is for this caller; the user may pick another before it
+    // settles, and then this caller's revert must not touch that list.
+    const caller = selectedCallerRef.current;
     setTogglingAlias(alias);
     setConnections((prev) => prev.map((x) => (x.alias === alias ? { ...x, enabled } : x)));
-    const res = await api.setConnectionEnabled(selectedCallerRef.current, alias, enabled);
-    setTogglingAlias(null);
+    const res = toolResult(await api.setConnectionEnabled(caller, alias, enabled));
+    const stillHere = selectedCallerRef.current === caller;
+    if (stillHere) setTogglingAlias(null);
     if (!res.ok) {
-      setConnections((prev) =>
-        prev.map((x) => (x.alias === alias ? { ...x, enabled: !enabled } : x)),
+      if (stillHere) {
+        setConnections((prev) =>
+          prev.map((x) => (x.alias === alias ? { ...x, enabled: !enabled } : x)),
+        );
+      }
+      toast.show(
+        `Couldn't ${enabled ? "enable" : "disable"} ${c.name} for ${caller}: ${res.error}`,
+        { kind: "error" },
       );
-      toast.show(`Couldn't ${enabled ? "enable" : "disable"} ${c.name}: ${res.error}`, {
-        kind: "error",
-      });
       return;
     }
-    toast.show(`${c.name} ${enabled ? "enabled" : "disabled"}`);
-    void refetch(selectedCallerRef.current);
+    toast.show(`${c.name} ${enabled ? "enabled" : "disabled"} for ${caller}`);
+    if (stillHere) void refetch(caller);
   };
 
   const triggerRefetch = useCallback(() => {
@@ -734,7 +744,8 @@ function ConnectionCard({
 
   const handleControl = async (action: "start" | "stop" | "restart") => {
     setControlAction(action);
-    const res = await api.controlListener(caller, c.alias, action);
+    // Tool failures come back as HTTP 200 with success: false.
+    const res = toolResult(await api.controlListener(caller, c.alias, action));
     setControlAction(null);
     if (res.ok) {
       const done = action === "start" ? "started" : action === "stop" ? "stopped" : "restarted";
