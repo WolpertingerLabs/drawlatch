@@ -86,9 +86,32 @@
   font-family: var(--font-mono);
 }
 
-/* A hidden multi-line note: textareas have no type="password". */
+/* A hidden multi-line note being typed: textareas have no type="password",
+ * so this masks the paint only (ValuesEditor says so to screen readers). */
 .dl-vf-masked > textarea.is-hidden {
   -webkit-text-security: disc;
+}
+
+@supports not (-webkit-text-security: disc) {
+  .dl-vf-masked > textarea.is-hidden {
+    color: transparent;
+    text-shadow: 0 0 7px var(--text);
+  }
+}
+
+/* A hidden revealed note: dots only, the value isn't in the DOM. */
+.dl-vf-hidden-note {
+  display: flex;
+  flex-direction: column;
+  min-height: 34px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  letter-spacing: 1px;
+  cursor: default;
+}
+
+.dl-vf-dots {
+  display: block;
 }
 
 .dl-vf-masked > .btn {

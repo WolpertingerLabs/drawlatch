@@ -12,6 +12,7 @@ import { useLocation } from "react-router-dom";
 import { Check, Copy, Eye, EyeOff } from "lucide-react";
 import type { AdminVaultItem } from "drawlatch-admin-types";
 import { api } from "../../api";
+import { useDaemon } from "../../contexts/DaemonContext";
 import ConfirmDialog from "../ConfirmDialog";
 import Modal from "../Modal";
 import { copyText } from "../../utils/clipboard";
@@ -39,6 +40,16 @@ export default function RevealFlow({ caller, item, onClose }: Props) {
     setValues(null);
     onClose();
   };
+
+  // The daemon going away → clear and close (the vault page stays mounted
+  // through an offline blip, so this doesn't happen by itself).
+  const { daemon } = useDaemon();
+  useEffect(() => {
+    if (daemon === "down") {
+      setValues(null);
+      onClose();
+    }
+  }, [daemon, onClose]);
 
   // Route change (including ?caller=) → clear and close.
   useEffect(() => {
@@ -137,7 +148,8 @@ function RevealedField({ field, value }: { field: string; value: string }) {
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
-  const multiline = value.includes("\n");
+  const lines = value.split("\n").length;
+  const multiline = lines > 1;
   const id = `dl-vault-revealed-${field}`;
 
   const doCopy = async () => {
@@ -154,12 +166,32 @@ function RevealedField({ field, value }: { field: string; value: string }) {
         {field}
       </label>
       <div className="dl-vf-masked">
-        {multiline ? (
+        {multiline && !show ? (
+          // Hidden: the value isn't in the page at all (a masked textarea
+          // would still hand it to screen readers). Only Show mounts it.
+          <div
+            id={id}
+            className="input dl-vf-textarea dl-vf-hidden-note"
+            role="textbox"
+            aria-readonly="true"
+            aria-multiline="true"
+            aria-label={`${field}, hidden, ${lines} lines`}
+            tabIndex={0}
+          >
+            <span aria-hidden="true">
+              {Array.from({ length: Math.min(lines, 8) }, (_, i) => (
+                <span key={i} className="dl-vf-dots">
+                  ••••••••••••
+                </span>
+              ))}
+            </span>
+          </div>
+        ) : multiline ? (
           <textarea
             id={id}
-            className={`input dl-vf-textarea${show ? "" : " is-hidden"}`}
+            className="input dl-vf-textarea"
             readOnly
-            rows={Math.min(8, value.split("\n").length)}
+            rows={Math.min(8, lines)}
             value={value}
           />
         ) : (

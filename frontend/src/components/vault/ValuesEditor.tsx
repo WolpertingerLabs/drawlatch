@@ -173,10 +173,15 @@ function MaskedInput({
   return (
     <div className="dl-vf-masked">
       {multiline ? (
+        // Masked on screen only: a textarea has no type="password", so
+        // assistive tech still reads what is typed. Say so rather than imply
+        // otherwise. (A revealed note is different: RevealFlow keeps a hidden
+        // value out of the page entirely.)
         <textarea
           id={id}
           className={`input dl-vf-textarea${show ? "" : " is-hidden"}`}
           aria-label={label}
+          aria-describedby={show ? undefined : `${id}-masked`}
           autoComplete="off"
           spellCheck={false}
           rows={4}
@@ -196,6 +201,11 @@ function MaskedInput({
           value={value}
           onChange={(e) => onChange(e.target.value)}
         />
+      )}
+      {multiline && !show && (
+        <span id={`${id}-masked`} className="sr-only">
+          Hidden on screen only; a screen reader still reads this field.
+        </span>
       )}
       <button
         type="button"
