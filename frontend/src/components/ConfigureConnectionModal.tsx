@@ -28,12 +28,13 @@ import {
   addedScopes,
   draftFrom,
   draftProblem,
-  sameSelection,
+  selectionChanged,
   selectionFrom,
   wideningReasons,
   type GoogleDraft,
 } from "../utils/googleSelection";
 import { TestResultView, toOutcome, type TestOutcome } from "./TestResult";
+import { toolResult } from "../utils/toolResult";
 import "./ConfigureConnectionModal.css";
 
 interface ConfigureConnectionModalProps {
@@ -126,7 +127,9 @@ export default function ConfigureConnectionModal({
     [catalog, draft],
   );
   const selectionDirty =
-    draftSelection !== null && !sameSelection(draftSelection, googleView?.selection ?? null);
+    draftSelection !== null && selectionChanged(googleView?.selection ?? null, draftSelection);
+  // Only a draft the user changed is checked: an untouched editor shows no
+  // validation error, and Save stays disabled until there is something to save.
   const selectionProblem = selectionDirty && catalog && draft ? draftProblem(catalog, draft) : null;
 
   // For google, the secrets section follows the draft's auth mode.
@@ -238,7 +241,7 @@ export default function ConfigureConnectionModal({
     const selectionSaved = selectionDirty && draftSelection !== null;
     if (secretCount > 0) {
       // Secrets still go through set_secrets with origin "admin".
-      const result = await api.setSecrets(caller, connection.alias, pendingSecrets);
+      const result = toolResult(await api.setSecrets(caller, connection.alias, pendingSecrets));
       if (!mounted.current) return;
       if (!result.ok) {
         setWiden(null);
