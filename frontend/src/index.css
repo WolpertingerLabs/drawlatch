@@ -39,7 +39,8 @@
   /* Same for destructive buttons: white on --danger is 3.35:1. */
   --danger-solid: #da3633;
   --danger-solid-hover: #c9302c;
-  /* Kept for compatibility; it is the solid fill's hover now. */
+  /* Kept for compatibility; it is the solid fill's hover now. Fills only:
+   * as a text colour on the dark surfaces it fails AA. */
   --danger-hover: var(--danger-solid-hover);
   --success: #3fb950;
   --warning: #d29922;
