@@ -239,9 +239,10 @@
 .dl-conn-stability-btn:focus-visible {
   outline-offset: -2px;
 }
+/* White text on a fill: --accent-solid, not --accent, for AA contrast. */
 .dl-conn-stability-btn.is-active,
 .dl-conn-stability-btn.is-active:hover {
-  background: var(--accent);
+  background: var(--accent-solid);
   color: var(--text-on-accent);
 }
 

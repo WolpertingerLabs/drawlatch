@@ -132,13 +132,14 @@
   color: var(--text);
 }
 
+/* White text on a fill: --accent-solid, not --accent, for AA contrast. */
 .dl-secrets-btn-primary {
-  background: var(--accent);
+  background: var(--accent-solid);
   color: var(--text-on-accent);
 }
 
 .dl-secrets-btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--accent-solid-hover);
 }
 
 .dl-secrets-btn:disabled {
