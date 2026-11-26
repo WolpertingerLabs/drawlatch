@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronRight, Radio, RefreshCw } from "lucide-react";
 import type { AdminCaller, AdminEvent, AdminIngestor, IngestorState } from "drawlatch-admin-types";
 import { api, isDaemonDown } from "../api";
@@ -33,12 +33,22 @@ const STATE_DOT: Record<IngestorState, string> = {
 };
 
 /**
- * An event's identity. Ids are only unique per listener (boot second × 1e6 +
- * a counter), so two listeners started in the same second hand out the same
- * ids; the source and instance make it unique.
+ * An event's identity in the feed.
+ *
+ * `id` alone isn't enough. It is `epoch × 1e6 + counter`, where each listener
+ * claims its own epoch (`nextEpoch++` from the boot second), so within one
+ * daemon run ids are unique. But the feed keeps its events across a daemon
+ * restart, and a listener in the new run can claim an epoch a listener held
+ * in the old run (the new boot second equals old boot + N). Its counter
+ * restarts at 0, so different events come back with ids already on screen.
+ * `receivedAtMs` and `idempotencyKey` (a delivery id or a random UUID) differ
+ * between those events, and are identical in every re-polled copy of one
+ * event, so true duplicates still collapse.
  */
-export function eventKey(e: Pick<AdminEvent, "source" | "instanceId" | "id">): string {
-  return `${e.source}:${e.instanceId ?? ""}:${e.id}`;
+export function eventKey(
+  e: Pick<AdminEvent, "source" | "instanceId" | "id" | "receivedAtMs" | "idempotencyKey">,
+): string {
+  return JSON.stringify([e.source, e.instanceId ?? "", e.id, e.receivedAtMs, e.idempotencyKey]);
 }
 
 /** Newest first: by receive time, then id. */
@@ -50,13 +60,32 @@ function newestFirst(a: AdminEvent, b: AdminEvent): number {
  * Adds the events not seen yet to the list, newest first, capped at
  * MAX_EVENTS. Returns `prev` itself when nothing is new, so React skips the
  * render.
+ *
+ * Once the list is full, anything older than its oldest event is ignored:
+ * those are the events the cap already dropped, and the daemon keeps
+ * returning them while they are in its buffer.
  */
 export function mergeEvents(prev: AdminEvent[], incoming: readonly AdminEvent[]): AdminEvent[] {
   if (incoming.length === 0) return prev;
   const seen = new Set(prev.map(eventKey));
-  const novel = incoming.filter((e) => !seen.has(eventKey(e)));
+  const oldestKept = prev.length >= MAX_EVENTS ? prev[prev.length - 1] : null;
+  const novel = incoming.filter(
+    (e) => !seen.has(eventKey(e)) && (!oldestKept || newestFirst(e, oldestKept) < 0),
+  );
   if (novel.length === 0) return prev;
   return [...novel, ...prev].sort(newestFirst).slice(0, MAX_EVENTS);
+}
+
+/** Previews are computed once per event object, not on every clock tick. */
+const previewCache = new WeakMap<AdminEvent, string>();
+
+function eventPreview(ev: AdminEvent): string {
+  let text = previewCache.get(ev);
+  if (text === undefined) {
+    text = dataPreview(ev.data);
+    previewCache.set(ev, text);
+  }
+  return text;
 }
 
 /** Short, single-line preview of an event's unknown `data` payload. */
@@ -188,13 +217,20 @@ export default function EventsView() {
     }
   };
 
-  // ── Derived: source counts + filtered events ────────────────────────────
-  const sourceCounts = new Map<string, number>();
-  for (const ev of events) {
-    sourceCounts.set(ev.source, (sourceCounts.get(ev.source) ?? 0) + 1);
-  }
-  const sources = [...sourceCounts.keys()].sort((a, b) => a.localeCompare(b));
-  const filteredEvents = activeSource ? events.filter((e) => e.source === activeSource) : events;
+  // ── Derived: source counts + filtered events (not on every clock tick) ──
+  const { sourceCounts, sources } = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const ev of events) counts.set(ev.source, (counts.get(ev.source) ?? 0) + 1);
+    return { sourceCounts: counts, sources: [...counts.keys()].sort((a, b) => a.localeCompare(b)) };
+  }, [events]);
+  const filteredEvents = useMemo(
+    () => (activeSource ? events.filter((e) => e.source === activeSource) : events),
+    [events, activeSource],
+  );
+  const toggleEvent = useCallback(
+    (key: string) => setExpandedKey((current) => (current === key ? null : key)),
+    [],
+  );
   const callers = callersState.status === "ok" ? callersState.callers : [];
 
   const title = (
@@ -337,10 +373,12 @@ export default function EventsView() {
                 return (
                   <EventRow
                     key={key}
+                    rowKey={key}
                     ev={ev}
-                    now={now}
+                    // A string, so a row re-renders only when its label changes.
+                    timeLabel={timeAgo(ev.receivedAtMs, now)}
                     expanded={expandedKey === key}
-                    onToggle={() => setExpandedKey(expandedKey === key ? null : key)}
+                    onToggle={toggleEvent}
                   />
                 );
               })}
@@ -384,7 +422,6 @@ function ListenerSummary({ ingestors, now }: { ingestors: AdminIngestor[]; now: 
 }
 
 function ListenerCard({ ing, now }: { ing: AdminIngestor; now: number }) {
-  const [showError, setShowError] = useState(false);
   return (
     <article className="dl-events-ingestor-card">
       <div className="dl-events-ingestor-head">
@@ -398,35 +435,79 @@ function ListenerCard({ ing, now }: { ing: AdminIngestor; now: number }) {
         <span>{plural(ing.totalEventsReceived, "event")}</span>
         {ing.lastEventAt && <span>last {timeAgo(ing.lastEventAt, now)}</span>}
       </div>
-      {ing.error && (
-        // One line until tapped: the full message is reachable without hover.
-        <button
-          type="button"
-          className={`dl-events-ingestor-error ${showError ? "is-expanded" : ""}`}
-          aria-expanded={showError}
-          onClick={() => setShowError((v) => !v)}
-        >
-          {ing.error}
-        </button>
-      )}
+      {ing.error && <ListenerError text={ing.error} />}
     </article>
   );
 }
 
-function EventRow({
+/**
+ * One line, with "Show all" only when the line is actually cut off: the full
+ * message is then reachable without hover, and a short error that fits isn't
+ * a control that does nothing.
+ */
+function ListenerError({ text }: { text: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [overflows, setOverflows] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || expanded) return;
+    // The text's own extent, not scrollWidth: with an ellipsis Chrome can
+    // report scrollWidth within a pixel of clientWidth while text is cut.
+    const range = document.createRange();
+    const measure = () => {
+      range.selectNodeContents(el);
+      setOverflows(range.getBoundingClientRect().width > el.clientWidth + 0.5);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [text, expanded]);
+
+  return (
+    <div className="dl-events-ingestor-error-row">
+      <p ref={ref} className={`dl-events-ingestor-error ${expanded ? "is-expanded" : ""}`}>
+        {text}
+      </p>
+      {(overflows || expanded) && (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm dl-events-ingestor-error-toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? "Show less" : "Show all"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Memoised: the page re-renders every second for the time labels, and a
+ *  feed of up to 1000 rows shouldn't re-render (or re-serialise) with it. */
+const EventRow = memo(function EventRow({
+  rowKey,
   ev,
-  now,
+  timeLabel,
   expanded,
   onToggle,
 }: {
+  rowKey: string;
   ev: AdminEvent;
-  now: number;
+  timeLabel: string;
   expanded: boolean;
-  onToggle: () => void;
+  onToggle: (key: string) => void;
 }) {
   return (
     <div className="dl-events-row-wrap">
-      <button type="button" className="dl-events-row" aria-expanded={expanded} onClick={onToggle}>
+      <button
+        type="button"
+        className="dl-events-row"
+        aria-expanded={expanded}
+        onClick={() => onToggle(rowKey)}
+      >
         {expanded ? (
           <ChevronDown size={14} className="dl-events-chevron" aria-hidden="true" />
         ) : (
@@ -435,9 +516,9 @@ function EventRow({
         <span className="badge badge-info dl-events-source mono">{ev.source}</span>
         {ev.instanceId && <span className="dl-events-instance mono">{ev.instanceId}</span>}
         <span className="dl-events-type mono">{ev.eventType}</span>
-        <span className="dl-events-preview">{dataPreview(ev.data)}</span>
+        <span className="dl-events-preview">{eventPreview(ev)}</span>
         <span className="dl-events-time" title={ev.receivedAt}>
-          {timeAgo(ev.receivedAtMs, now)}
+          {timeLabel}
         </span>
       </button>
       {expanded && (
@@ -469,4 +550,4 @@ function EventRow({
       )}
     </div>
   );
-}
+});
