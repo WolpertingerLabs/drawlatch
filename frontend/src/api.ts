@@ -26,7 +26,21 @@ import type {
 } from "drawlatch-admin-types";
 import { notifyAuthRequired } from "./auth";
 
-export type DaemonResponse<T> = T | DaemonOfflineEnvelope;
+/**
+ * What a read returns instead of data when it fails. `kind` says why:
+ * - `network`: no response at all (connection refused, DNS, offline). Since
+ *   the daemon serves this dashboard, this is what "daemon down" looks like.
+ * - `http`: something answered with a non-2xx status (`status`); `error`
+ *   carries the daemon's own message when it sent one. 502/503/504 come from
+ *   a proxy in front of a stopped daemon, so they count as down too.
+ * - `auth`: 401; the session is gone and the app is already showing Login.
+ */
+export interface DaemonDownEnvelope extends DaemonOfflineEnvelope {
+  kind?: "network" | "http" | "auth";
+  status?: number;
+}
+
+export type DaemonResponse<T> = T | DaemonDownEnvelope;
 
 /** Result of a mutating call — never an "offline" envelope; errors are explicit. */
 export type MutationResult<T> =
@@ -35,7 +49,7 @@ export type MutationResult<T> =
 
 export function isDaemonDown<T>(
   body: DaemonResponse<T>,
-): body is DaemonOfflineEnvelope {
+): body is DaemonDownEnvelope {
   return (
     typeof body === "object" &&
     body !== null &&
@@ -43,15 +57,39 @@ export function isDaemonDown<T>(
   );
 }
 
+/** True when a failed read means the daemon itself can't be reached. */
+export function isUnreachable(body: DaemonDownEnvelope): boolean {
+  if (body.kind === "network") return true;
+  return body.kind === "http" && (body.status === 502 || body.status === 503 || body.status === 504);
+}
+
+/** Fired when a request gets no response, so the daemon status is
+ *  re-checked at once instead of at the next 5s poll. */
+export const DAEMON_UNREACHABLE = "drawlatch:daemon-unreachable";
+
+const UNREACHABLE_MESSAGE = "Can't reach the Drawlatch daemon. Is it running?";
+
+function notifyUnreachable(): void {
+  window.dispatchEvent(new Event(DAEMON_UNREACHABLE));
+}
+
 async function getJson<T>(path: string): Promise<DaemonResponse<T>> {
-  const res = await fetch(path, {
-    credentials: "include",
-    headers: { accept: "application/json" },
-  });
+  // Never throws: every failure comes back as an envelope, so a page's
+  // load() always settles and can show its error or offline state.
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      credentials: "include",
+      headers: { accept: "application/json" },
+    });
+  } catch {
+    notifyUnreachable();
+    return { daemon: "down", kind: "network", error: UNREACHABLE_MESSAGE };
+  }
   if (res.status === 401) {
     // Session expired (or missing) — boot the user back to Login.
     notifyAuthRequired();
-    return { daemon: "down", error: "Not authenticated" };
+    return { daemon: "down", kind: "auth", status: 401, error: "Not authenticated" };
   }
   if (!res.ok) {
     // Show the daemon's own message when it sent one. Admin error messages
@@ -64,15 +102,30 @@ async function getJson<T>(path: string): Promise<DaemonResponse<T>> {
     } catch {
       // empty / non-JSON body
     }
-    return {
+    const envelope: DaemonDownEnvelope = {
       daemon: "down",
+      kind: "http",
+      status: res.status,
       error:
         typeof message === "string" && message !== ""
           ? `${message} (HTTP ${res.status})`
           : `HTTP ${res.status}`,
     };
+    if (isUnreachable(envelope)) notifyUnreachable();
+    return envelope;
   }
-  return (await res.json()) as DaemonResponse<T>;
+  try {
+    return (await res.json()) as DaemonResponse<T>;
+  } catch {
+    // The connection dropped mid-body, or something that isn't the daemon
+    // answered with HTML.
+    return {
+      daemon: "down",
+      kind: "http",
+      status: res.status,
+      error: `Unreadable response (HTTP ${res.status})`,
+    };
+  }
 }
 
 async function mutate<T>(
@@ -96,12 +149,13 @@ async function mutate<T>(
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } catch {
+    notifyUnreachable();
+    return { ok: false, error: UNREACHABLE_MESSAGE };
   }
   if (res.status === 401) {
     notifyAuthRequired();
-    return { ok: false, error: "Not authenticated" };
+    return { ok: false, error: "Not authenticated", status: 401 };
   }
   let parsed: unknown = null;
   try {
@@ -112,6 +166,7 @@ async function mutate<T>(
   if (!res.ok) {
     const error =
       (parsed as { error?: string } | null)?.error ?? `HTTP ${res.status}`;
+    if (res.status === 502 || res.status === 503 || res.status === 504) notifyUnreachable();
     return { ok: false, error, status: res.status };
   }
   return { ok: true, data: parsed as T };
