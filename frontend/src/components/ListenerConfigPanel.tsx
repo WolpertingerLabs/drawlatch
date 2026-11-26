@@ -143,6 +143,7 @@ export default function ListenerConfigPanel({
   // Multi-instance list
   const [instances, setInstances] = useState<InstanceInfo[]>([]);
   const [loadingInstances, setLoadingInstances] = useState(false);
+  const [instancesError, setInstancesError] = useState<string | null>(null);
 
   // Create-instance form
   const [showCreate, setShowCreate] = useState(false);
@@ -155,6 +156,7 @@ export default function ListenerConfigPanel({
   const [formValues, setFormValues] = useState<FormValues>({});
   const [originalValues, setOriginalValues] = useState<FormValues>({});
   const [paramsLoading, setParamsLoading] = useState(false);
+  const [paramsError, setParamsError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -257,16 +259,28 @@ export default function ListenerConfigPanel({
     if (!mounted.current) return;
     setLoadingInstances(false);
     if (isDaemonDown(res)) {
-      noteFailure(res);
+      setInstancesError(noteFailure(res));
       return;
     }
     setOffline(false);
+    // list_listener_instances runs through runTool: its own failure is a 200
+    // with success: false and no `instances`. Keep the last list then.
+    const result = toolResult({ ok: true, data: res });
+    if (!result.ok || !Array.isArray(res.instances)) {
+      setInstancesError(result.ok ? "The daemon returned no instance list." : result.error);
+      return;
+    }
+    setInstancesError(null);
     setInstances(res.instances);
   }, [caller, connection, noteFailure]);
 
   useEffect(() => {
     if (config && isMulti) void fetchInstances();
   }, [config, isMulti, fetchInstances]);
+  // fetchParams reloads the list when its instance is gone, without
+  // depending on (and re-running for) fetchInstances.
+  const fetchInstancesRef = useRef(fetchInstances);
+  fetchInstancesRef.current = fetchInstances;
 
   // ── Fetch params ────────────────────────────────────────────────────────
   // Each load gets a number; a response for an older one (the user switched
@@ -279,14 +293,24 @@ export default function ListenerConfigPanel({
       setFormValues({});
       setOriginalValues({});
       setSaveError(null);
+      setParamsError(null);
       const res = await api.getListenerParams(caller, connection, instanceId);
       if (!mounted.current || ticket !== paramsRequest.current) return;
       setParamsLoading(false);
       if (isDaemonDown(res)) {
-        setSaveError(`Couldn't load the parameters: ${noteFailure(res)}`);
+        setParamsError(noteFailure(res));
         return;
       }
       setOffline(false);
+      // get_listener_params runs through runTool: a failure (an instance
+      // removed elsewhere, say) is a 200 with success: false. Show it instead
+      // of an editable form of defaults that Save could only fail on.
+      const checked = toolResult({ ok: true, data: res });
+      if (!checked.ok) {
+        setParamsError(checked.error);
+        if (instanceId) void fetchInstancesRef.current();
+        return;
+      }
       const result: ListenerParamsResult = res;
       const merged: FormValues = { ...result.defaults, ...result.params };
       setFormValues(merged);
@@ -548,6 +572,7 @@ export default function ListenerConfigPanel({
     setFormValues({});
     setOriginalValues({});
     setSaveError(null);
+    setParamsError(null);
   };
 
   const singleState: IngestorState = singleStatus?.state ?? "stopped";
@@ -580,7 +605,7 @@ export default function ListenerConfigPanel({
         <button
           type="button"
           className="btn btn-primary"
-          disabled={!isDirty || saving || offline || paramsLoading}
+          disabled={!isDirty || saving || offline || paramsLoading || paramsError !== null}
           onClick={() => void handleSave()}
         >
           {saving && <Loader2 size={14} className="spinner" aria-hidden="true" />}
@@ -744,14 +769,32 @@ export default function ListenerConfigPanel({
               </div>
             )}
 
-            {loadingInstances && instances.length === 0 && (
+            {instancesError && (
+              <div className="modal-error dl-lcp-load-error dl-lcp-inline-error" role="alert">
+                <span>
+                  Couldn&apos;t load the instances: {instancesError}
+                  {instances.length > 0 && " Showing the last list."}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={loadingInstances}
+                  onClick={() => void fetchInstances()}
+                >
+                  <RotateCw size={13} aria-hidden="true" />
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {loadingInstances && instances.length === 0 && !instancesError && (
               <div className="dl-lcp-state dl-lcp-state-sm" role="status">
                 <Loader2 size={14} className="spinner" aria-hidden="true" />
                 <span>Loading instances…</span>
               </div>
             )}
 
-            {!loadingInstances && instances.length === 0 && (
+            {!loadingInstances && !instancesError && instances.length === 0 && (
               <EmptyState
                 compact
                 className="dl-lcp-empty"
@@ -933,6 +976,18 @@ export default function ListenerConfigPanel({
               <div className="dl-lcp-state dl-lcp-state-sm" role="status">
                 <Loader2 size={14} className="spinner" aria-hidden="true" />
                 <span>Loading parameters…</span>
+              </div>
+            ) : paramsError ? (
+              <div className="modal-error dl-lcp-load-error" role="alert">
+                <span>Couldn&apos;t load the parameters: {paramsError}</span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => void fetchParams(editingInstanceId ?? undefined)}
+                >
+                  <RotateCw size={13} aria-hidden="true" />
+                  Retry
+                </button>
               </div>
             ) : (
               groupedFields.map(({ group, fields }) => {
