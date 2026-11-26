@@ -151,6 +151,11 @@ export default function Overview() {
       setTunnelError(res.error);
       return;
     }
+    // Trust what the daemon says it saved, not what was asked for.
+    if (res.data?.tunnel !== next) {
+      setTunnelError("The daemon didn't save the tunnel setting. Try again.");
+      return;
+    }
     setTunnelOptimistic(next);
   };
 
@@ -289,14 +294,16 @@ export default function Overview() {
           </div>
         )}
 
-        <div className="card dl-ov-span-all">
+        {/* One link for the whole card, like Sessions and Secrets: the counts
+            inside are text, not seven links to the same page. */}
+        <Link to="/ingestors" className="card dl-ov-span-all dl-ov-link-card">
           <div className="dl-ov-card-head">
-            <Link to="/ingestors" className="card-label dl-ov-label-link">
+            <span className="card-label">
               Listeners{listenerTotal !== null ? ` (${listenerTotal})` : ""}
-            </Link>
-            <Link to="/ingestors" className="card-sub dl-ov-more">
+            </span>
+            <span className="card-sub dl-ov-more">
               View listeners <ArrowRight size={12} aria-hidden="true" />
-            </Link>
+            </span>
           </div>
           <div className="dl-ov-stats">
             {listeners
@@ -318,7 +325,7 @@ export default function Overview() {
             {!listeners && !healthCounts && <span className="card-value">—</span>}
           </div>
           <CardError message={listeners ? undefined : errors.listeners} />
-        </div>
+        </Link>
       </section>
     </>
   );
@@ -326,11 +333,11 @@ export default function Overview() {
 
 function ListenerStat({ count, label, tone }: { count: number; label: string; tone: string }) {
   return (
-    <Link to="/ingestors" className={`dl-ov-stat ${count === 0 ? "is-zero" : ""}`}>
+    <span className={`dl-ov-stat ${count === 0 ? "is-zero" : ""}`}>
       <span className={`status-dot ${tone}`} aria-hidden="true" />
       <span className="dl-ov-stat-count">{count}</span>
       <span>{label}</span>
-    </Link>
+    </span>
   );
 }
 

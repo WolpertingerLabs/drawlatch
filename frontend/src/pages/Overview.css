@@ -63,8 +63,7 @@
   color: var(--text-muted);
 }
 
-.dl-ov-link-card:hover .dl-ov-more,
-a.dl-ov-more:hover {
+.dl-ov-link-card:hover .dl-ov-more {
   color: var(--accent-hover);
   text-decoration: none;
 }
@@ -95,11 +94,6 @@ a.dl-ov-more:hover {
   gap: var(--space-3);
 }
 
-.dl-ov-label-link:hover {
-  color: var(--text);
-  text-decoration: none;
-}
-
 .dl-ov-stats {
   display: flex;
   flex-wrap: wrap;
@@ -117,13 +111,6 @@ a.dl-ov-more:hover {
   background: var(--bg-secondary);
   color: var(--text-secondary);
   font-size: var(--fs-md);
-  transition: border-color 0.15s ease;
-}
-
-.dl-ov-stat:hover {
-  border-color: var(--border-strong);
-  color: var(--text);
-  text-decoration: none;
 }
 
 .dl-ov-stat-count {
@@ -215,14 +202,15 @@ a.dl-ov-more:hover {
   border-color: var(--border-strong);
 }
 
+/* A fill under a white knob: the solid accent, like .btn-primary. */
 .dl-tunnel-switch.is-on {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
 }
 
 .dl-tunnel-switch.is-on:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  background: var(--accent-solid-hover);
+  border-color: var(--accent-solid-hover);
 }
 
 .dl-tunnel-switch:disabled {
@@ -288,11 +276,5 @@ a.dl-ov-more:hover {
    * this file and its `.card { gap: 6px }` would otherwise win on order. */
   .card.dl-tunnel-card {
     gap: 16px;
-  }
-
-  /* index.css's 44px tap-target rule doesn't cover links; these stats are
-   * the way into the Listeners page on a phone. */
-  .dl-ov-stat {
-    min-height: 44px;
   }
 }
