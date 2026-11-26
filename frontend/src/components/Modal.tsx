@@ -101,6 +101,56 @@ function focusables(root: HTMLElement): HTMLElement[] {
   );
 }
 
+/**
+ * Sequential-focus stops in `root`, the way the browser's Tab sees them:
+ * no tabindex="-1", nothing disabled, hidden or inert, and one stop per
+ * radio group (its checked radio, or the first one if none is checked).
+ * Only used to find the first and last stops; the browser moves focus
+ * between them itself.
+ */
+function tabStops(root: HTMLElement): HTMLElement[] {
+  const seenGroups = new Set<string>();
+  const out: HTMLElement[] = [];
+  for (const el of focusables(root)) {
+    if (el.tabIndex < 0) continue;
+    if (getComputedStyle(el).visibility === "hidden") continue;
+    if (el instanceof HTMLInputElement && el.type === "radio" && el.name) {
+      const key = radioGroupKey(el);
+      if (seenGroups.has(key)) continue;
+      seenGroups.add(key);
+      const group = radioGroup(el, root);
+      out.push(group.find((r) => r.checked) ?? group[0]);
+      continue;
+    }
+    out.push(el);
+  }
+  return out;
+}
+
+function radioGroupKey(el: HTMLInputElement): string {
+  return `${el.form ? el.form.id || "form" : ""}::${el.name}`;
+}
+
+function radioGroup(el: HTMLInputElement, root: HTMLElement): HTMLInputElement[] {
+  return Array.from(root.querySelectorAll<HTMLInputElement>('input[type="radio"]')).filter(
+    (r) => r.name === el.name && r.form === el.form && !r.disabled && r.getClientRects().length > 0,
+  );
+}
+
+/** Same Tab stop: the same element, or two radios of one group. */
+function sameStop(a: Element, b: Element): boolean {
+  if (a === b) return true;
+  return (
+    a instanceof HTMLInputElement &&
+    b instanceof HTMLInputElement &&
+    a.type === "radio" &&
+    b.type === "radio" &&
+    a.name !== "" &&
+    a.name === b.name &&
+    a.form === b.form
+  );
+}
+
 function restoreFocus(
   preferred: HTMLElement | null,
   previous: HTMLElement | null,
@@ -247,19 +297,41 @@ function OpenModal({
       return true;
     }
     if (e.key !== "Tab") return false;
-    const items = focusables(panel);
-    e.preventDefault();
-    if (items.length === 0) {
+    // Only step in when focus would leave the dialog; between the first and
+    // last stops the browser's own order applies (radio groups are one stop,
+    // tabindex="-1" is skipped, and so on).
+    const stops = tabStops(panel);
+    if (stops.length === 0) {
+      e.preventDefault();
       panel.focus();
       return true;
     }
+    const first = stops[0];
+    const last = stops[stops.length - 1];
     const active = document.activeElement;
-    const i = active instanceof HTMLElement ? items.indexOf(active) : -1;
-    const next = e.shiftKey
-      ? items[i <= 0 ? items.length - 1 : i - 1]
-      : items[i === -1 || i === items.length - 1 ? 0 : i + 1];
-    next.focus();
-    return true;
+    const wrapTo = (el: HTMLElement) => {
+      e.preventDefault();
+      el.focus();
+      return true;
+    };
+    if (!(active instanceof HTMLElement) || !panel.contains(active)) {
+      return wrapTo(e.shiftKey ? last : first);
+    }
+    // Is there a stop after (or before) the focused element, not counting
+    // the radio group it belongs to? If not, the browser would leave the
+    // dialog. This also covers focus on the panel itself or on a
+    // tabindex="-1" element after the last stop.
+    const others = stops.filter((s) => !sameStop(s, active));
+    if (e.shiftKey) {
+      const hasBefore =
+        !sameStop(active, first) &&
+        others.some((s) => s.compareDocumentPosition(active) & Node.DOCUMENT_POSITION_FOLLOWING);
+      return hasBefore ? false : wrapTo(last);
+    }
+    const hasAfter =
+      !sameStop(active, last) &&
+      others.some((s) => active.compareDocumentPosition(s) & Node.DOCUMENT_POSITION_FOLLOWING);
+    return hasAfter ? false : wrapTo(first);
   };
   const handleKeyRef = useRef(handleKey);
   handleKeyRef.current = handleKey;
