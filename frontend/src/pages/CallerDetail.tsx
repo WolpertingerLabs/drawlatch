@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { KeyRound, RotateCcw, Ban } from "lucide-react";
+import { ArrowRight, KeyRound, PlugZap, RotateCcw, Trash2, UserX } from "lucide-react";
 import type {
   AdminCaller,
   AdminCallerConnection,
@@ -8,10 +8,14 @@ import type {
 } from "drawlatch-admin-types";
 import { api, isDaemonDown } from "../api";
 import { useDaemon } from "../contexts/DaemonContext";
-import { KeysDirBadge, SourceBadge } from "./CallerList";
+import { Fingerprint, KeysDirBadge, SourceBadge } from "./CallerList";
 import IssueCredentialsModal from "../components/IssueCredentialsModal";
 import ConfirmDialog from "../components/ConfirmDialog";
+import DaemonOffline from "../components/DaemonOffline";
+import EmptyState, { LoadingState } from "../components/EmptyState";
+import { useToast } from "../components/Toast";
 import { AuthSummary } from "../components/AuthSummary";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 type FetchState =
   | { status: "loading" }
@@ -27,17 +31,18 @@ export default function CallerDetail() {
   const { alias } = useParams<{ alias: string }>();
   const { daemon } = useDaemon();
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
+  const toast = useToast();
   const [state, setState] = useState<FetchState>({ status: "loading" });
 
   // Credential-lifecycle UI state.
   const [templates, setTemplates] = useState<string[]>([]);
-  const [defaultEndpoint, setDefaultEndpoint] = useState<string>(
-    window.location.origin,
-  );
+  const [templatesError, setTemplatesError] = useState(false);
+  const [defaultEndpoint, setDefaultEndpoint] = useState<string>(window.location.origin);
   const [showIssue, setShowIssue] = useState(false);
-  const [confirmRevoke, setConfirmRevoke] = useState(false);
-  const [revoking, setRevoking] = useState(false);
-  const [revokeError, setRevokeError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [selfManageSaving, setSelfManageSaving] = useState(false);
   const [selfManageError, setSelfManageError] = useState<string | null>(null);
 
@@ -72,12 +77,14 @@ export default function CallerDetail() {
     if (daemon !== "up") return;
     let cancelled = false;
     (async () => {
-      const [tplRes, metaRes] = await Promise.all([
-        api.connections(),
-        api.meta(),
-      ]);
+      const [tplRes, metaRes] = await Promise.all([api.connections(), api.meta()]);
       if (cancelled) return;
-      if (!isDaemonDown(tplRes)) setTemplates(tplRes.map((t) => t.alias));
+      if (isDaemonDown(tplRes)) {
+        setTemplatesError(true);
+      } else {
+        setTemplatesError(false);
+        setTemplates(tplRes.map((t) => t.alias));
+      }
       if (!isDaemonDown(metaRes) && metaRes.tunnelUrl) {
         setDefaultEndpoint(metaRes.tunnelUrl);
       }
@@ -88,7 +95,7 @@ export default function CallerDetail() {
   }, [daemon]);
 
   const handleSelfManage = async (enabled: boolean) => {
-    if (!alias) return;
+    if (!alias || selfManageSaving) return;
     setSelfManageSaving(true);
     setSelfManageError(null);
     const res = await api.setCallerSelfManage(alias, enabled);
@@ -97,19 +104,25 @@ export default function CallerDetail() {
       setSelfManageError(res.error);
       return;
     }
+    toast.show(
+      enabled
+        ? "The agent can now manage its own connections and secrets"
+        : "Only this dashboard can change this caller's connections and secrets now",
+    );
     await load();
   };
 
-  const handleRevoke = async () => {
+  const handleDelete = async () => {
     if (!alias) return;
-    setRevoking(true);
-    setRevokeError(null);
+    setDeleting(true);
+    setDeleteError(null);
     const res = await api.deleteCaller(alias);
-    setRevoking(false);
+    setDeleting(false);
     if (!res.ok) {
-      setRevokeError(res.error);
+      setDeleteError(res.error);
       return;
     }
+    toast.show(`Deleted caller ${alias}`);
     navigate("/callers");
   };
 
@@ -120,13 +133,7 @@ export default function CallerDetail() {
         <header className="page-header">
           <h1 className="page-title">{alias}</h1>
         </header>
-        <div className="banner banner-offline">
-          <span className="status-dot down" aria-hidden="true" />
-          <span>
-            Drawlatch daemon is not reachable. Start it with{" "}
-            <code>drawlatch start</code>.
-          </span>
-        </div>
+        <DaemonOffline action="load this caller" />
       </>
     );
   }
@@ -135,7 +142,7 @@ export default function CallerDetail() {
     return (
       <>
         <BackLink />
-        <div className="banner banner-loading">Loading…</div>
+        <LoadingState label="Loading caller…" />
       </>
     );
   }
@@ -144,7 +151,7 @@ export default function CallerDetail() {
     return (
       <>
         <BackLink />
-        <div className="banner banner-offline">
+        <div className="banner banner-offline" role="alert">
           <span className="status-dot down" aria-hidden="true" />
           <span>Failed to load caller: {state.message}</span>
         </div>
@@ -156,17 +163,16 @@ export default function CallerDetail() {
     return (
       <>
         <BackLink />
-        <header className="page-header">
-          <h1 className="page-title">Not found</h1>
-        </header>
-        <div className="placeholder">
-          <span className="placeholder-title">
-            No caller named &quot;{alias}&quot;
-          </span>
-          <span>
-            Return to the <Link to="/callers">caller list</Link>.
-          </span>
-        </div>
+        <EmptyState
+          icon={<UserX size={20} />}
+          title={`No caller named "${alias}"`}
+          body="It may have been deleted, or the link has a typo."
+          action={
+            <Link to="/callers" className="btn btn-secondary">
+              Back to callers
+            </Link>
+          }
+        />
       </>
     );
   }
@@ -177,19 +183,24 @@ export default function CallerDetail() {
     <>
       <BackLink />
       <header className="page-header">
-        <div>
+        <div style={{ minWidth: 0 }}>
           <div className="title-row">
             <h1 className="page-title">{caller.name ?? caller.alias}</h1>
-            <KeysDirBadge exists={caller.keysDirExists} />
+            <KeysDirBadge exists={caller.keysDirExists} long />
             <SourceBadge source={caller.source} />
           </div>
           <div className="subtitle-meta">
-            <span className="mono">{caller.alias}</span>
+            {caller.name && <span className="mono">{caller.alias}</span>}
             {caller.fingerprint && (
               <>
-                <span className="dot-sep">·</span>
-                <span className="mono" title="Ed25519 public key fingerprint">
-                  {caller.fingerprint}
+                {caller.name && (
+                  <span className="dot-sep" aria-hidden="true">
+                    ·
+                  </span>
+                )}
+                <span className="dl-caller-fp-row">
+                  <span className="sr-only">Ed25519 public key fingerprint: </span>
+                  <Fingerprint value={caller.fingerprint} />
                 </span>
               </>
             )}
@@ -203,8 +214,8 @@ export default function CallerDetail() {
         <div className="banner banner-offline" role="alert">
           <span className="status-dot down" aria-hidden="true" />
           <span>
-            This caller&apos;s config can&apos;t be loaded, so its agent
-            can&apos;t connect: {caller.configProblem}
+            This caller&apos;s config can&apos;t be loaded, so its agent can&apos;t connect:{" "}
+            {caller.configProblem}
           </span>
         </div>
       )}
@@ -215,37 +226,32 @@ export default function CallerDetail() {
           <p className="detail-note">
             {caller.source === "local-auto" ? (
               <>
-                Auto-shared to a co-located callboard over the filesystem
-                (<code>local-auto</code>). Issuing here mints a fresh keypair and
-                hands back a downloadable bundle instead.
+                Auto-shared to a co-located callboard over the filesystem (
+                <code>local-auto</code>). Issuing here mints a fresh keypair and hands back a
+                downloadable bundle instead.
               </>
             ) : caller.source === "bundle-issued" ? (
               <>
-                Credentials were issued as a downloadable bundle. drawlatch holds
-                only the public key — rotate to mint a fresh keypair, or revoke to
-                end access.
+                Credentials were issued as a downloadable bundle. Drawlatch holds only the public
+                key. Rotate to mint a fresh keypair, or delete the caller to end its access.
               </>
             ) : (
               <>
-                No credential bundle has been issued from drawlatch for this
-                caller yet. Issue one to hand a callboard instance its identity.
+                No credential bundle has been issued from Drawlatch for this caller yet. Issue one
+                to hand a callboard instance its identity.
               </>
             )}
           </p>
           <div className="dl-cred-actions">
-            <button
-              type="button"
-              className="dl-cred-btn dl-cred-btn-primary"
-              onClick={() => setShowIssue(true)}
-            >
+            <button type="button" className="btn btn-primary" onClick={() => setShowIssue(true)}>
               {caller.source ? (
                 <>
-                  <RotateCcw size={14} />
+                  <RotateCcw size={14} aria-hidden="true" />
                   Rotate credentials
                 </>
               ) : (
                 <>
-                  <KeyRound size={14} />
+                  <KeyRound size={14} aria-hidden="true" />
                   Issue credentials
                 </>
               )}
@@ -253,14 +259,14 @@ export default function CallerDetail() {
             {caller.alias !== "default" && (
               <button
                 type="button"
-                className="dl-cred-btn dl-cred-btn-danger"
+                className="btn btn-danger-outline"
                 onClick={() => {
-                  setRevokeError(null);
-                  setConfirmRevoke(true);
+                  setDeleteError(null);
+                  setConfirmDelete(true);
                 }}
               >
-                <Ban size={14} />
-                Revoke
+                <Trash2 size={14} aria-hidden="true" />
+                Delete caller
               </button>
             )}
           </div>
@@ -269,19 +275,26 @@ export default function CallerDetail() {
 
       <section className="detail-section">
         <h2 className="section-title">Vault</h2>
-        <p className="detail-note">
-          <Link to={`/vault?caller=${encodeURIComponent(caller.alias)}`}>
-            Vault:{" "}
-            {caller.vaultItems === null
-              ? "unavailable"
-              : `${caller.vaultItems} item${caller.vaultItems === 1 ? "" : "s"}`}
+        {caller.vaultItems === null ? (
+          <p className="detail-note">
+            The vault can&apos;t be read right now.{" "}
+            <Link to={`/vault?caller=${encodeURIComponent(caller.alias)}`}>Open the vault</Link>{" "}
+            for details.
+          </p>
+        ) : (
+          <Link
+            to={`/vault?caller=${encodeURIComponent(caller.alias)}`}
+            className="dl-caller-vault-link"
+          >
+            {caller.vaultItems} item{caller.vaultItems === 1 ? "" : "s"} · Open vault
+            <ArrowRight size={14} aria-hidden="true" />
           </Link>
-        </p>
+        )}
       </section>
 
       <section className="detail-section">
         <h2 className="section-title">Agent permissions</h2>
-        <label className="secret-matrix-toggle">
+        <label className={`dl-caller-self-manage${selfManageSaving ? " is-saving" : ""}`}>
           <input
             type="checkbox"
             checked={caller.selfManage}
@@ -289,34 +302,80 @@ export default function CallerDetail() {
             onChange={(e) => void handleSelfManage(e.target.checked)}
           />
           <span>
-            Let this caller&apos;s agent enable connections and set its own
-            secrets (<code>set_connection_enabled</code>,{" "}
-            <code>set_secrets</code>)
+            Let this caller&apos;s agent enable connections and set its own secrets (
+            <code>set_connection_enabled</code>, <code>set_secrets</code>)
           </span>
         </label>
-        <p className="detail-note">
-          When off, only this dashboard can change the caller&apos;s connections
-          and secrets. An agent that can enable connections for itself can pick
-          up any existing secret that a newly enabled connection shares by name.
+        <p className="detail-note" style={{ marginTop: 8, marginBottom: 0 }}>
+          When off, only this dashboard can change the caller&apos;s connections and secrets. An
+          agent that can enable connections for itself can pick up any existing secret that a
+          newly enabled connection shares by name.
         </p>
         {selfManageError && (
-          <p className="detail-note" role="alert">
-            {selfManageError}
-          </p>
+          <div className="modal-error dl-caller-error" role="alert">
+            Couldn&apos;t save: {selfManageError}
+          </div>
         )}
       </section>
 
       <section className="detail-section">
-        <h2 className="section-title">
-          Connections ({connections.length})
-        </h2>
+        <h2 className="section-title">Connections ({connections.length})</h2>
         {connections.length === 0 ? (
-          <p className="detail-note">
-            This caller has no connections enabled.
-          </p>
+          <EmptyState
+            compact
+            icon={<PlugZap size={20} />}
+            title="No connections enabled"
+            body="This caller's agent can't reach any API yet."
+            action={
+              <Link to="/connections" className="btn btn-secondary">
+                Go to Connections
+              </Link>
+            }
+          />
+        ) : isMobile ? (
+          <ul className="mobile-card-list" aria-label="Connections">
+            {connections.map((c) => (
+              <li key={c.connectionAlias} className="mobile-card dl-caller-conn-card">
+                <div className="mobile-card-header">
+                  <div className="mobile-card-title mono">{c.connectionAlias}</div>
+                  <div className="badge-row">
+                    <EnabledBadge enabled={c.enabled} />
+                    {c.isCustom && <span className="badge badge-info">Custom</span>}
+                  </div>
+                </div>
+                {(c.auth || c.problem) && (
+                  <AuthSummary callerAuth={c.auth} problem={c.problem} compact />
+                )}
+                <dl className="mobile-card-kv">
+                  <div className="mobile-card-kv-row">
+                    <dt>Required</dt>
+                    <dd>
+                      <SecretRefList secrets={c.requiredSecrets} emptyText="—" />
+                    </dd>
+                  </div>
+                  <div className="mobile-card-kv-row">
+                    <dt>Optional</dt>
+                    <dd>
+                      <SecretRefList secrets={c.optionalSecrets} emptyText="—" />
+                    </dd>
+                  </div>
+                  <div className="mobile-card-kv-row">
+                    <dt>Listener</dt>
+                    <dd>
+                      {!c.hasIngestor
+                        ? "—"
+                        : c.instances.length === 0
+                          ? "Yes"
+                          : `Yes · ${c.instances.length} instance${c.instances.length === 1 ? "" : "s"}`}
+                    </dd>
+                  </div>
+                </dl>
+              </li>
+            ))}
+          </ul>
         ) : (
           <div className="data-table-wrap">
-            <table className="data-table">
+            <table className="data-table dl-caller-conns">
               <thead>
                 <tr>
                   <th>Connection</th>
@@ -324,53 +383,44 @@ export default function CallerDetail() {
                   <th>Auth</th>
                   <th>Required secrets</th>
                   <th>Optional secrets</th>
-                  <th>Ingestor</th>
-                  <th className="num">Instances</th>
+                  <th>Listener</th>
                 </tr>
               </thead>
               <tbody>
                 {connections.map((c) => (
                   <tr key={c.connectionAlias}>
                     <td>
-                      <div className="cell-primary mono">
-                        {c.connectionAlias}
-                      </div>
+                      <div className="cell-primary mono">{c.connectionAlias}</div>
                     </td>
                     <td>
                       <div className="badge-row">
                         <EnabledBadge enabled={c.enabled} />
-                        {c.isCustom && (
-                          <span className="tag tag-custom">custom</span>
-                        )}
+                        {c.isCustom && <span className="badge badge-info">Custom</span>}
                       </div>
                     </td>
-                    <td>
-                      <AuthSummary
-                        callerAuth={c.auth}
-                        problem={c.problem}
-                        compact
-                      />
+                    <td className={c.auth || c.problem ? "dl-caller-auth" : undefined}>
+                      <AuthSummary callerAuth={c.auth} problem={c.problem} compact />
                     </td>
                     <td>
-                      <SecretRefList
-                        secrets={c.requiredSecrets}
-                        emptyText="—"
-                      />
+                      <SecretRefList secrets={c.requiredSecrets} emptyText="—" />
                     </td>
                     <td>
-                      <SecretRefList
-                        secrets={c.optionalSecrets}
-                        emptyText="—"
-                      />
+                      <SecretRefList secrets={c.optionalSecrets} emptyText="—" />
                     </td>
-                    <td>
+                    <td className="dl-caller-listener">
                       {c.hasIngestor ? (
-                        <span className="tag">yes</span>
+                        <>
+                          <span className="tag">Yes</span>
+                          {c.instances.length > 0 && (
+                            <div className="cell-secondary">
+                              {c.instances.length} instance{c.instances.length === 1 ? "" : "s"}
+                            </div>
+                          )}
+                        </>
                       ) : (
                         <span className="cell-muted">—</span>
                       )}
                     </td>
-                    <td className="num">{c.instances.length}</td>
                   </tr>
                 ))}
               </tbody>
@@ -383,9 +433,8 @@ export default function CallerDetail() {
         <IssueCredentialsModal
           alias={caller.alias}
           callerConnections={caller.connections}
-          availableConnections={[
-            ...new Set([...templates, ...caller.connections]),
-          ]}
+          availableConnections={[...new Set([...templates, ...caller.connections])]}
+          connectionsIncomplete={templatesError}
           defaultEndpoint={defaultEndpoint}
           isRotation={caller.source !== null}
           onClose={() => setShowIssue(false)}
@@ -393,24 +442,24 @@ export default function CallerDetail() {
         />
       )}
 
-      {confirmRevoke && (
+      {confirmDelete && (
         <ConfirmDialog
-          title={`Revoke "${caller.alias}"?`}
-          confirmLabel="Revoke"
+          title={`Delete caller "${caller.alias}"?`}
+          confirmLabel="Delete caller"
           description={
             <>
-              This deletes <code>{caller.alias}</code> and its public-key entry,
-              so it can no longer authenticate. Any active sessions are dropped.
-              This cannot be undone.
+              This deletes <code>{caller.alias}</code>, its vault items, and its public-key entry,
+              so it can no longer authenticate. Any active sessions are dropped. This cannot be
+              undone.
             </>
           }
-          busy={revoking}
-          error={revokeError}
-          onConfirm={handleRevoke}
+          busy={deleting}
+          error={deleteError}
+          onConfirm={handleDelete}
           onCancel={() => {
-            if (revoking) return;
-            setConfirmRevoke(false);
-            setRevokeError(null);
+            if (deleting) return;
+            setConfirmDelete(false);
+            setDeleteError(null);
           }}
         />
       )}
@@ -428,21 +477,13 @@ function BackLink() {
 
 function EnabledBadge({ enabled }: { enabled: boolean }) {
   return (
-    <span
-      className={`enabled-badge enabled-${enabled ? "yes" : "no"}`}
-    >
-      {enabled ? "enabled" : "disabled"}
+    <span className={`badge ${enabled ? "badge-success" : "badge-muted"}`}>
+      {enabled ? "Enabled" : "Disabled"}
     </span>
   );
 }
 
-function SecretRefList({
-  secrets,
-  emptyText,
-}: {
-  secrets: AdminSecretRef[];
-  emptyText: string;
-}) {
+function SecretRefList({ secrets, emptyText }: { secrets: AdminSecretRef[]; emptyText: string }) {
   if (secrets.length === 0) {
     return <span className="cell-muted">{emptyText}</span>;
   }
@@ -457,6 +498,7 @@ function SecretRefList({
             {s.present ? "✓" : "✗"}
           </span>
           <span>{s.name}</span>
+          <span className="sr-only">{s.present ? " (set)" : " (missing)"}</span>
         </li>
       ))}
     </ul>
