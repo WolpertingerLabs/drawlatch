@@ -8,13 +8,18 @@
  *      with a one-time "private keys included" banner and the fingerprint to
  *      verify out-of-band. Drawlatch keeps no copy of the private key, so
  *      closing this view is the point of no return (re-issue to rotate). A
- *      backdrop click does nothing here, and Escape or × ask first; only
- *      "Done" closes it straight away.
+ *      backdrop click does nothing here; Escape, ×, and browser Back ask
+ *      first; reloading or closing the tab gets the browser's "Leave site?"
+ *      prompt. Only "Done" closes it straight away.
+ *
+ * The parent must keep this mounted whatever else its page does (offline,
+ * a failed refresh): unmounting it throws the bundle away.
  */
 import { useEffect, useRef, useState } from "react";
 import { Download, KeyRound, Loader2, ShieldCheck } from "lucide-react";
 import type { CallerBundleV1 } from "drawlatch-admin-types";
 import { api } from "../api";
+import { useDaemon } from "../contexts/DaemonContext";
 import Modal from "./Modal";
 import ConfirmDialog from "./ConfirmDialog";
 import "./IssueCredentialsModal.css";
@@ -78,8 +83,47 @@ export default function IssueCredentialsModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [bundle, setBundle] = useState<CallerBundleV1 | null>(null);
-  const [confirmClose, setConfirmClose] = useState(false);
+  // Why "Close without the file?" is up: Escape/× ("close") or browser
+  // Back ("back"), which also leaves the page once confirmed.
+  const [confirmClose, setConfirmClose] = useState<null | "close" | "back">(null);
+  const leavingRef = useRef(false);
   const doneRef = useRef<HTMLButtonElement>(null);
+  const { daemon } = useDaemon();
+  const offline = daemon === "down";
+
+  // While the bundle is on screen, leaving the page has to ask too.
+  // - Reload / close tab / typed URL: the browser's own beforeunload prompt.
+  // - Back: a guard entry (same URL) sits on top of the history, so Back
+  //   only pops it. We put it back and ask; confirming then goes back for
+  //   real. The router sees the same location and renders nothing new.
+  useEffect(() => {
+    if (!bundle) return;
+    const pushGuard = () =>
+      window.history.pushState(
+        { ...(window.history.state ?? {}), dlIssueGuard: true },
+        "",
+        window.location.href,
+      );
+    const onUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    const onPop = () => {
+      pushGuard();
+      setConfirmClose("back");
+    };
+    pushGuard();
+    window.addEventListener("beforeunload", onUnload);
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("beforeunload", onUnload);
+      window.removeEventListener("popstate", onPop);
+      // Drop our guard entry (and, after a confirmed Back, the page too).
+      if (window.history.state?.dlIssueGuard) {
+        window.history.go(leavingRef.current ? -2 : -1);
+      }
+    };
+  }, [bundle]);
 
   // The form (and the focused submit button) is gone once issued: put focus
   // on Done so the keyboard isn't left on <body>.
@@ -101,12 +145,12 @@ export default function IssueCredentialsModal({
 
   const requestClose = () => {
     if (busy) return;
-    if (bundle || dirty) setConfirmClose(true);
+    if (bundle || dirty) setConfirmClose("close");
     else onClose();
   };
 
   const handleIssue = async () => {
-    if (busy) return;
+    if (busy || offline) return;
     if (!endpoint.trim()) {
       setError("Endpoint URL is required.");
       return;
@@ -163,10 +207,17 @@ export default function IssueCredentialsModal({
     </>
   ) : (
     <>
-      {error && (
-        <div className="modal-error dl-issue-footer-error" role="alert">
-          {error}
+      {offline ? (
+        <div className="modal-error dl-issue-footer-error" role="status">
+          The Drawlatch daemon isn&apos;t reachable, so credentials can&apos;t be issued right
+          now. Your choices here are kept.
         </div>
+      ) : (
+        error && (
+          <div className="modal-error dl-issue-footer-error" role="alert">
+            {error}
+          </div>
+        )
       )}
       <button type="button" className="btn btn-secondary" disabled={busy} onClick={requestClose}>
         Cancel
@@ -175,7 +226,7 @@ export default function IssueCredentialsModal({
         type="submit"
         form="dl-issue-form"
         className="btn btn-primary"
-        disabled={busy}
+        disabled={busy || offline}
       >
         {busy && <Loader2 size={14} className="spinner" aria-hidden="true" />}
         {isRotation ? "Rotate and download" : "Issue and download"}
@@ -354,13 +405,14 @@ export default function IssueCredentialsModal({
               "The passphrase you typed will be lost."
             )
           }
-          confirmLabel={bundle ? "Close" : "Discard"}
+          confirmLabel={bundle ? (confirmClose === "back" ? "Close and go back" : "Close") : "Discard"}
           cancelLabel={bundle ? "Keep open" : "Keep editing"}
           onConfirm={() => {
-            setConfirmClose(false);
+            leavingRef.current = confirmClose === "back";
+            setConfirmClose(null);
             onClose();
           }}
-          onCancel={() => setConfirmClose(false)}
+          onCancel={() => setConfirmClose(null)}
         />
       )}
     </Modal>
