@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Route, Routes, useNavigate } from "react-router-dom";
 import DashboardLayout from "./components/DashboardLayout";
 import { DaemonProvider } from "./contexts/DaemonContext";
+import { ToastProvider } from "./components/Toast";
 import Overview from "./pages/Overview";
 import ConnectionsPage from "./pages/ConnectionsPage";
 import ConnectionDetail from "./pages/ConnectionDetail";
@@ -13,7 +14,7 @@ import SessionTable from "./pages/SessionTable";
 import SecretMatrix from "./pages/SecretMatrix";
 import VaultPage from "./pages/VaultPage";
 import ChangePassword from "./pages/ChangePassword";
-import ComingSoon from "./pages/ComingSoon";
+import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
 import { checkAuth, onAuthRequired } from "./auth";
 
@@ -102,6 +103,7 @@ export default function App() {
 
   return (
     <DaemonProvider>
+      <ToastProvider>
         <Routes>
           <Route element={<DashboardLayout onLogout={() => setAuthed(false)} />}>
             <Route index element={<Overview />} />
@@ -115,9 +117,10 @@ export default function App() {
             <Route path="vault" element={<VaultPage />} />
             <Route path="logs" element={<EventsView />} />
             <Route path="settings/password" element={<ChangePassword />} />
-            <Route path="*" element={<ComingSoon title="Not found" />} />
+            <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>
+      </ToastProvider>
     </DaemonProvider>
   );
 }
