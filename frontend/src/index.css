@@ -7,50 +7,89 @@
 }
 
 :root {
+  color-scheme: dark;
+
   /* Core palette */
   --bg: #0d1117;
   --surface: #161b22;
   --border: #30363d;
+  --border-strong: #3a3a42;
   --text: #e6edf3;
   --text-muted: #8b949e;
+  --text-faint: #5f5f68;
+  /* Body copy that sits between --text and --text-muted (dialog bodies,
+   * secondary buttons). Unused before the token contract, so repurposed. */
+  --text-secondary: #c5c5cd;
+  /* The one accent: brand, nav, tabs and every primary action. */
   --accent: #7c6aef;
   --accent-hover: #9484f0;
-  --user-bg: #1a2332;
-  --assistant-bg: #161b22;
+  /* Informational chips only (listener type badges and the like), never a
+   * button. */
+  --info: #5b9dff;
+  --info-bg: rgba(91, 157, 255, 0.12);
   --code-bg: #0d1117;
   --danger: #f85149;
-  --error: #f85149;
+  --danger-hover: #ff6259;
   --success: #3fb950;
   --warning: #d29922;
   --bg-secondary: #1c2128;
-  --text-secondary: #8b949e;
   --border-light: #21262d;
   --font-mono: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, "Courier New", monospace;
-  --radius: 12px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 
   /* Text on colored backgrounds */
   --text-on-accent: #ffffff;
   --text-on-danger: #ffffff;
 
+  /* Status colours for text on a tint (badges, inline messages) */
+  --warning-text: #e3b341;
+  --success-text: #3fb950;
+  --danger-text: #f85149;
+
   /* Semantic tint backgrounds */
   --accent-bg: rgba(124, 106, 239, 0.1);
-  --accent-light: rgba(124, 106, 239, 0.1);
   --danger-bg: rgba(248, 81, 73, 0.1);
   --danger-border: rgba(220, 53, 69, 0.4);
   --warning-bg: rgba(210, 153, 34, 0.15);
+  --warning-border: rgba(210, 153, 34, 0.35);
   --success-bg: rgba(63, 185, 80, 0.1);
+  --success-border: rgba(63, 185, 80, 0.35);
 
   /* Overlays & shadows */
-  --overlay-bg: rgba(0, 0, 0, 0.5);
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.15);
-  --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  --overlay-bg: rgba(1, 4, 9, 0.72);
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.55);
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.45);
 
   /* Status dots */
   --status-up: #3fb950;
   --status-down: #f85149;
   --status-unknown: #8b949e;
+
+  /* Scale */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius: 12px;
+  --radius-pill: 999px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-base: 14px;
+  --fs-lg: 16px;
+
+  /* Stacking. Everything that floats picks one of these. */
+  --z-sticky: 5;
+  --z-topbar: 20;
+  --z-dropdown: 40;
+  --z-drawer: 50;
+  --z-modal: 1000;
+  --z-modal-nested: 1100;
+  --z-toast: 1200;
 
   /* Layout */
   --sidebar-width: 240px;
