@@ -2160,10 +2160,13 @@ div.spinner:empty {
 }
 
 /* Phones: the stack sits at the top. At the bottom it covered the footer
- * buttons of full-screen and bottom-sheet modals for as long as it showed. */
+ * buttons of full-screen and bottom-sheet modals for as long as it showed.
+ * Toast.tsx sets --dl-toast-top to just below the top bar, or below the
+ * header of a modal that reaches up there, so it never covers a control;
+ * the fallback is the top bar's height. */
 @media (max-width: 768px) {
   .toast-region {
-    top: calc(8px + var(--safe-top));
+    top: var(--dl-toast-top, calc(var(--safe-top) + 64px));
     left: 12px;
     right: 12px;
     bottom: auto;

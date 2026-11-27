@@ -15,6 +15,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -71,6 +72,33 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const api = useMemo(() => ({ show, dismiss }), [show, dismiss]);
 
+  // Phones: the stack sits at the top, below whatever header band is in the
+  // way, so it never lands on a control (the top bar's menu button, a
+  // full-screen modal's close button). Re-placed when a modal mounts or
+  // unmounts (Modal portals into <body>) and on resize.
+  const regionRef = useRef<HTMLDivElement>(null);
+  const hasItems = items.length > 0;
+  useLayoutEffect(() => {
+    const region = regionRef.current;
+    if (!region || !hasItems) return;
+    const phone = window.matchMedia(PHONE_QUERY);
+    const place = () => {
+      if (!phone.matches) {
+        region.style.removeProperty("--dl-toast-top");
+        return;
+      }
+      region.style.setProperty("--dl-toast-top", `${toastTop(region.offsetHeight)}px`);
+    };
+    place();
+    const observer = new MutationObserver(place);
+    observer.observe(document.body, { childList: true });
+    window.addEventListener("resize", place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, [hasItems, items.length]);
+
   return (
     <ToastContext.Provider value={api}>
       {children}
@@ -78,7 +106,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           inserted together with its text is often not announced): errors
           are assertive, everything else polite. The toasts themselves carry
           no role, so nothing is announced twice. */}
-      <div className="toast-region" role="region" aria-label="Notifications">
+      <div ref={regionRef} className="toast-region" role="region" aria-label="Notifications">
         <div className="toast-stack" aria-live="assertive" aria-atomic="false">
           {items
             .filter((t) => t.kind === "error")
@@ -96,6 +124,24 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       </div>
     </ToastContext.Provider>
   );
+}
+
+const PHONE_QUERY = "(max-width: 768px)";
+const GAP = 8;
+
+/** Where the stack's top goes on a phone: under the top bar, or under the
+ *  header of the topmost modal if its panel reaches up into that space (a
+ *  full-screen modal, or a tall bottom sheet). */
+function toastTop(stackHeight: number): number {
+  const bar = document.querySelector<HTMLElement>(".mobile-topbar");
+  let top = (bar ? Math.max(bar.getBoundingClientRect().bottom, 0) : 0) + GAP;
+  const panels = document.querySelectorAll<HTMLElement>(".modal-overlay .modal-panel");
+  const panel = panels[panels.length - 1];
+  if (panel && panel.getBoundingClientRect().top < top + stackHeight) {
+    const header = panel.querySelector<HTMLElement>(".modal-header");
+    if (header) top = Math.max(top, header.getBoundingClientRect().bottom + GAP);
+  }
+  return Math.round(top);
 }
 
 const ICONS = { success: CheckCircle2, error: AlertTriangle, info: Info };
