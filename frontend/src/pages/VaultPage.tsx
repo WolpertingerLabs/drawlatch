@@ -129,7 +129,7 @@ export default function VaultPage() {
         </div>
         {tab === "items" && callers && callers.length > 0 && (
           <label className="dl-vault-caller-select">
-            <span className="dl-vault-caller-label">Caller</span>
+            <span className="field-label dl-vault-caller-label">Caller</span>
             <select
               className="input"
               value={caller?.alias ?? ""}
