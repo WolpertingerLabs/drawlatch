@@ -1,5 +1,8 @@
 # Drawlatch
 
+> [!IMPORTANT]
+> This repository is archived. Drawlatch has moved into [callboard](https://github.com/WolpertingerLabs/callboard), at [`packages/drawlatch`](https://github.com/WolpertingerLabs/callboard/tree/main/packages/drawlatch). Look there for the current code, and open issues and pull requests on the callboard repository.
+
 > **Alpha software:** expect breaking changes between updates.
 
 Drawlatch gives AI agents authenticated access to external APIs without giving them the credentials. A daemon holds your secrets and makes the API calls. Agents reach it through a local MCP server over an end-to-end encrypted, mutually authenticated channel, and can only call the URL patterns each connection allows.
