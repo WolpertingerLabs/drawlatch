@@ -180,6 +180,15 @@
   min-width: 200px;
 }
 
+/* With the sidebar beside it the table has ~790px at 900px wide. A 200px
+ * floor on the reason pushed it ~30px past that, and the pinned actions
+ * column then sat over the reason's last words. */
+@media (max-width: 1024px) {
+  .dl-vault-reason {
+    min-width: 140px;
+  }
+}
+
 .dl-vault-reason-label {
   color: var(--text-muted);
   font-size: 10.5px;

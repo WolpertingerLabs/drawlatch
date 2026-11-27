@@ -96,6 +96,8 @@
   .dl-vf-masked > textarea.is-hidden {
     color: transparent;
     text-shadow: 0 0 7px var(--text);
+    /* A transparent color takes the caret with it. */
+    caret-color: var(--text);
   }
 }
 
