@@ -1713,6 +1713,22 @@ a.btn:hover {
   min-height: 28px;
 }
 
+/* Phones: the sizes above are class selectors, so they beat the 44px
+ * `button` rule in the mobile block. Put the touch target back. */
+@media (max-width: 768px) {
+  .btn-sm:not(.dl-tap-compact) {
+    min-height: 44px;
+  }
+
+  .btn-icon:not(.dl-tap-compact),
+  .btn-icon.btn-sm:not(.dl-tap-compact) {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+}
+
 /* ── Spinner ────────────────────────────────────────────────────────── */
 
 /* On an icon (<Loader2 className="spinner"/>) it only spins; on an empty
