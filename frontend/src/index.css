@@ -902,28 +902,6 @@ button {
   border: 1px solid var(--danger-border);
 }
 
-.auth-submit {
-  width: 100%;
-  min-height: 40px;
-  background: var(--accent-solid);
-  color: var(--text-on-accent);
-  border-radius: 8px;
-  padding: 10px 14px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s ease, opacity 0.15s ease;
-}
-
-.auth-submit:hover:not(:disabled) {
-  background: var(--accent-solid-hover);
-}
-
-.auth-submit:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
 .auth-form-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1599,7 +1577,7 @@ button {
 /* ══════════════════════════════════════════════════════════════════════
  * Shared primitives. Pages build on these instead of their own copies:
  *   .btn + .btn-primary | -secondary | -danger | -danger-outline | -ghost,
- *     sizes .btn-sm, .btn-icon
+ *     sizes .btn-sm, .btn-icon, .btn-block
  *   .badge + .badge-success | -warning | -danger | -info | -accent | -muted
  *   .spinner, .input, .field-label
  *   .modal-* (components/Modal.tsx), .empty-state (EmptyState.tsx),
@@ -1714,6 +1692,14 @@ a.btn:hover {
   min-width: 28px;
   height: 28px;
   min-height: 28px;
+}
+
+/* Full width, a touch taller: the one action of a form card (sign in,
+ * change password). */
+.btn-block {
+  width: 100%;
+  min-height: 40px;
+  font-size: var(--fs-base);
 }
 
 /* Phones: the sizes above are class selectors, so they beat the 44px
