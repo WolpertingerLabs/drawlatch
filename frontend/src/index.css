@@ -47,6 +47,7 @@
   --bg-secondary: #1c2128;
   --border-light: #21262d;
   --font-mono: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, "Courier New", monospace;
+  --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 
   /* Text on colored backgrounds */
@@ -2139,12 +2140,26 @@ div.spinner:empty {
   }
 }
 
+/* Phones: the stack sits at the top. At the bottom it covered the footer
+ * buttons of full-screen and bottom-sheet modals for as long as it showed. */
 @media (max-width: 768px) {
   .toast-region {
+    top: calc(8px + var(--safe-top));
     left: 12px;
     right: 12px;
-    bottom: calc(12px + var(--safe-bottom));
+    bottom: auto;
     width: auto;
+  }
+
+  .toast {
+    animation-name: dl-toast-in-top;
+  }
+}
+
+@keyframes dl-toast-in-top {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
   }
 }
 
