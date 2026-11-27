@@ -334,12 +334,6 @@ button {
 
 /* ── Cards ──────────────────────────────────────────────────────────── */
 
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
-}
-
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -373,10 +367,6 @@ button {
 .card-sub {
   color: var(--text-muted);
   font-size: 12px;
-}
-
-.card.span-2 {
-  grid-column: span 2;
 }
 
 /* ── Banners ────────────────────────────────────────────────────────── */
@@ -416,63 +406,6 @@ button {
 
 .banner-action {
   flex-shrink: 0;
-}
-
-/* ── Ingestor breakdown ─────────────────────────────────────────────── */
-
-.ingestor-breakdown {
-  display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-top: 4px;
-}
-
-.ingestor-stat {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text);
-}
-
-.ingestor-stat .status-dot {
-  width: 6px;
-  height: 6px;
-}
-
-.ingestor-stat-connected .status-dot {
-  background: var(--status-up);
-}
-
-.ingestor-stat-error .status-dot {
-  background: var(--status-down);
-}
-
-.ingestor-stat-starting .status-dot {
-  background: var(--warning);
-}
-
-.ingestor-stat-stopped .status-dot {
-  background: var(--text-muted);
-}
-
-/* ── Placeholder ────────────────────────────────────────────────────── */
-
-.placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 80px 20px;
-  color: var(--text-muted);
-  text-align: center;
-  gap: 12px;
-}
-
-.placeholder-title {
-  font-size: 18px;
-  color: var(--text);
-  font-weight: 500;
 }
 
 /* ── Data tables ────────────────────────────────────────────────────── */
@@ -566,13 +499,8 @@ button {
   font-weight: 500;
 }
 
-/* One badge. The older page-specific names share the base so their pages
- * keep rendering until they move onto .badge + a modifier. */
-.badge,
-.stability-badge,
-.keys-dir-badge,
-.enabled-badge,
-.ingestor-state {
+/* One badge: .badge + a tone modifier. */
+.badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -588,14 +516,12 @@ button {
   vertical-align: middle;
 }
 
-.badge-success,
-.stability-stable {
+.badge-success {
   background: var(--success-bg);
   color: var(--success-text);
 }
 
-.badge-warning,
-.stability-beta {
+.badge-warning {
   background: var(--warning-bg);
   color: var(--warning-text);
 }
@@ -610,8 +536,7 @@ button {
   color: var(--info);
 }
 
-.badge-accent,
-.stability-dev {
+.badge-accent {
   background: var(--accent-bg);
   color: var(--accent-hover);
 }
@@ -757,36 +682,6 @@ button {
 
 /* ── Caller-specific badges & pills ─────────────────────────────────── */
 
-.keys-dir-ok {
-  background: var(--success-bg);
-  color: var(--success-text);
-}
-
-.keys-dir-missing {
-  background: var(--danger-bg);
-  color: var(--danger-text);
-}
-
-.enabled-yes {
-  background: var(--success-bg);
-  color: var(--success-text);
-}
-
-.enabled-no {
-  background: var(--bg-secondary);
-  color: var(--text-muted);
-  border-color: var(--border);
-}
-
-.tag-custom {
-  background: var(--accent-bg);
-  color: var(--accent);
-  border-color: transparent;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  font-weight: 600;
-}
-
 .badge-row {
   display: flex;
   flex-wrap: wrap;
@@ -832,28 +727,6 @@ button {
 
 /* ── Ingestor table ─────────────────────────────────────────────────── */
 
-.ingestor-state-connected {
-  background: var(--success-bg);
-  color: var(--success-text);
-}
-
-.ingestor-state-starting,
-.ingestor-state-reconnecting {
-  background: var(--warning-bg);
-  color: var(--warning-text);
-}
-
-.ingestor-state-stopped {
-  background: var(--bg-secondary);
-  color: var(--text-muted);
-  border-color: var(--border);
-}
-
-.ingestor-state-error {
-  background: var(--danger-bg);
-  color: var(--danger-text);
-}
-
 /* The header cell stays a table cell so its colSpan holds; the flex row is
  * the .ingestor-group-header-inner div inside it. (A flex <th> drops out of
  * the table layout and collapses into the first column.) */
@@ -868,11 +741,6 @@ button {
   font-weight: 500;
   font-size: 12px;
   color: var(--text);
-}
-
-/* Spacing for header contents that aren't wrapped in the inner div yet. */
-.ingestor-table .ingestor-group-header > th > * + * {
-  margin-left: 10px;
 }
 
 .ingestor-group-header-inner {
@@ -906,124 +774,6 @@ button {
   font-family: var(--font-mono);
   font-size: 12px;
   word-break: break-word;
-}
-
-/* ── Secret matrix ──────────────────────────────────────────────────── */
-
-.secret-matrix-controls {
-  display: flex;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.secret-matrix-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-muted);
-  cursor: pointer;
-  user-select: none;
-}
-
-.secret-matrix-toggle input[type="checkbox"] {
-  cursor: pointer;
-  accent-color: var(--accent);
-}
-
-.secret-matrix {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.secret-matrix-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.secret-matrix-section-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 4px;
-}
-
-.secret-matrix-section-label {
-  color: var(--text-muted);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  font-weight: 600;
-}
-
-.secret-matrix-section-meta {
-  color: var(--text-muted);
-  font-size: 11px;
-  margin-left: auto;
-}
-
-.secret-matrix-table {
-  table-layout: auto;
-}
-
-.secret-matrix-table thead th.secret-matrix-col {
-  text-align: center;
-  text-transform: none;
-  letter-spacing: normal;
-  font-size: 12px;
-  color: var(--text);
-  font-weight: 500;
-  padding: 10px 12px;
-  white-space: nowrap;
-}
-
-.secret-matrix-table thead th.secret-matrix-col-optional .mono {
-  color: var(--text-muted);
-}
-
-.secret-matrix-required-mark {
-  color: var(--accent);
-  font-weight: 700;
-  margin-left: 4px;
-}
-
-.secret-matrix-table tbody td.secret-matrix-cell {
-  text-align: center;
-  padding: 10px 12px;
-}
-
-.secret-matrix-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  font-family: var(--font-mono);
-  font-weight: 700;
-  font-size: 14px;
-  line-height: 1;
-}
-
-.secret-matrix-mark-required-present {
-  background: var(--success-bg);
-  color: var(--success);
-}
-
-.secret-matrix-mark-required-missing {
-  background: var(--danger-bg);
-  color: var(--danger);
-  border: 1px solid var(--danger-border);
-}
-
-.secret-matrix-mark-optional-present {
-  color: var(--success);
-}
-
-.secret-matrix-mark-optional-missing {
-  color: var(--text-muted);
 }
 
 /* ── Auth screens (Login + Change password) ─────────────────────────── */
@@ -1402,14 +1152,6 @@ button {
     font-size: 20px;
   }
 
-  .card-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .card.span-2 {
-    grid-column: span 1;
-  }
-
   .detail-section {
     padding: 16px;
   }
@@ -1618,70 +1360,6 @@ button {
 .mobile-card-error {
   border-top: 1px solid var(--border-light);
   padding-top: 8px;
-}
-
-/* ── Secret matrix mobile: sticky-left col + right-edge fade ────────── */
-
-.secret-matrix-scroll {
-  position: relative;
-}
-
-@media (max-width: 768px) {
-  .secret-matrix-wrap {
-    overflow-x: auto;
-    overflow-y: auto;
-    max-height: 70vh;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .secret-matrix-table thead th,
-  .secret-matrix-table tbody td {
-    background: var(--surface);
-  }
-
-  .secret-matrix-table thead th {
-    background: var(--bg-secondary);
-    position: sticky;
-    top: 0;
-    z-index: 1;
-  }
-
-  .secret-matrix-table th.secret-matrix-caller-col,
-  .secret-matrix-table td.secret-matrix-caller-col {
-    position: sticky;
-    left: 0;
-    z-index: 2;
-    box-shadow: 1px 0 0 var(--border-light);
-  }
-
-  .secret-matrix-table thead th.secret-matrix-caller-col {
-    z-index: 3;
-    background: var(--bg-secondary);
-  }
-
-  .secret-matrix-table tbody td.secret-matrix-cell {
-    min-width: 44px;
-    height: 44px;
-    padding: 6px 10px;
-  }
-
-  /* Right-edge fade: subtle cue that more columns are off-screen. */
-  .secret-matrix-scroll::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 24px;
-    background: linear-gradient(
-      to right,
-      transparent,
-      var(--bg) 80%
-    );
-    pointer-events: none;
-    border-top-right-radius: var(--radius);
-    border-bottom-right-radius: var(--radius);
-  }
 }
 
 /* ── Hover-only: keep interactions tappable on touch devices ────────── */
