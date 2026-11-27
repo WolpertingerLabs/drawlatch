@@ -75,14 +75,26 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   // Phones: the stack sits at the top, below whatever header band is in the
   // way, so it never lands on a control (the top bar's menu button, a
   // full-screen modal's close button). Re-placed when a modal mounts or
-  // unmounts (Modal portals into <body>) and on resize.
+  // unmounts (Modal portals into <body>), when the topmost modal's header
+  // changes size, and on resize.
   const regionRef = useRef<HTMLDivElement>(null);
   const hasItems = items.length > 0;
   useLayoutEffect(() => {
     const region = regionRef.current;
     if (!region || !hasItems) return;
     const phone = window.matchMedia(PHONE_QUERY);
+    // A modal header can grow after it mounts (a description rendering in),
+    // so the topmost one is watched for size changes too. Only re-targeted
+    // when the topmost header changes: observe() fires once on attach.
+    let watched: HTMLElement | null = null;
+    const headerSize = new ResizeObserver(() => place());
     const place = () => {
+      const header = topmostModalHeader();
+      if (header !== watched) {
+        if (watched) headerSize.unobserve(watched);
+        if (header) headerSize.observe(header);
+        watched = header;
+      }
       if (!phone.matches) {
         region.style.removeProperty("--dl-toast-top");
         return;
@@ -95,6 +107,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     window.addEventListener("resize", place);
     return () => {
       observer.disconnect();
+      headerSize.disconnect();
       window.removeEventListener("resize", place);
     };
   }, [hasItems, items.length]);
@@ -135,13 +148,21 @@ const GAP = 8;
 function toastTop(stackHeight: number): number {
   const bar = document.querySelector<HTMLElement>(".mobile-topbar");
   let top = (bar ? Math.max(bar.getBoundingClientRect().bottom, 0) : 0) + GAP;
-  const panels = document.querySelectorAll<HTMLElement>(".modal-overlay .modal-panel");
-  const panel = panels[panels.length - 1];
+  const panel = topmostModalPanel();
   if (panel && panel.getBoundingClientRect().top < top + stackHeight) {
     const header = panel.querySelector<HTMLElement>(".modal-header");
     if (header) top = Math.max(top, header.getBoundingClientRect().bottom + GAP);
   }
   return Math.round(top);
+}
+
+function topmostModalPanel(): HTMLElement | null {
+  const panels = document.querySelectorAll<HTMLElement>(".modal-overlay .modal-panel");
+  return panels[panels.length - 1] ?? null;
+}
+
+function topmostModalHeader(): HTMLElement | null {
+  return topmostModalPanel()?.querySelector<HTMLElement>(".modal-header") ?? null;
 }
 
 const ICONS = { success: CheckCircle2, error: AlertTriangle, info: Info };
