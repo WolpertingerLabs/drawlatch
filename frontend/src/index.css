@@ -1702,10 +1702,10 @@ a.btn:hover {
   font-size: var(--fs-base);
 }
 
-/* Phones: the sizes above are class selectors, so they beat the 44px
- * `button` rule in the mobile block. Put the touch target back. */
+/* Phones: .btn and the sizes above are class selectors, so they beat the
+ * 44px `button` rule in the mobile block. Put the touch target back. */
 @media (max-width: 768px) {
-  .btn-sm:not(.dl-tap-compact) {
+  .btn:not(.dl-tap-compact) {
     min-height: 44px;
   }
 
